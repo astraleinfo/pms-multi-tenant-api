@@ -1,0 +1,138 @@
+"""Who can sign in.
+
+Clinic staff and platform staff are two tables, not one with a nullable column:
+a platform account has no tenant and can never appear inside a clinic, and a
+clinic account can never be widened into a platform one.
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime
+
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+    func,
+)
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import UUID as PGUUID
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.db.base import Base, TenantScoped, TimestampMixin, uuid_pk
+from app.models.enums import AccountStatus, SubjectKind
+
+
+class User(Base, TenantScoped, TimestampMixin):
+    """Clinic staff. `email` is unique *within* a tenant — two clinics may both
+    have an `admin@` account and they are different people."""
+
+    __tablename__ = "users"
+    __extra_table_args__ = (
+        UniqueConstraint("tenant_id", "email", name="uq_users_tenant_email"),
+        CheckConstraint("failed_attempts >= 0", name="ck_users_attempts"),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    role: Mapped[str] = mapped_column(String(40), nullable=False)
+    email: Mapped[str] = mapped_column(String(200), nullable=False)
+    password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    initials: Mapped[str] = mapped_column(String(4), nullable=False, default="")
+    speciality: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    status: Mapped[AccountStatus] = mapped_column(
+        Enum(AccountStatus, name="account_status", values_callable=lambda e: [m.value for m in e]),
+        nullable=False,
+        default=AccountStatus.INVITED,
+    )
+    failed_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_sign_in: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    password_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    #: How this person has set the interface up for themselves — which is not
+    #: clinical data and not the clinic's configuration (§3.3), so it lives
+    #: here rather than on the tenant. Only keys the API knows are ever stored.
+    ui_preferences: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+
+
+class PlatformUser(Base, TimestampMixin):
+    __tablename__ = "platform_users"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    email: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    initials: Mapped[str] = mapped_column(String(4), nullable=False, default="")
+    title: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    status: Mapped[AccountStatus] = mapped_column(
+        Enum(AccountStatus, name="account_status", values_callable=lambda e: [m.value for m in e]),
+        nullable=False,
+        default=AccountStatus.ACTIVE,
+    )
+    failed_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_sign_in: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class RefreshToken(Base):
+    """Only the SHA-256 of the token is stored, so a database dump cannot be
+    replayed as a session. Rotation is enforced: presenting a token that has
+    already been exchanged revokes the whole chain (theft detection)."""
+
+    __tablename__ = "refresh_tokens"
+    __table_args__ = (
+        Index("ix_refresh_subject", "subject_kind", "subject_id"),
+        CheckConstraint(
+            "(subject_kind = 'user' and tenant_id is not null) "
+            "or (subject_kind = 'platform' and tenant_id is null)",
+            name="ck_refresh_subject_tenant",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    subject_kind: Mapped[SubjectKind] = mapped_column(
+        Enum(SubjectKind, name="subject_kind", values_callable=lambda e: [m.value for m in e]),
+        nullable=False,
+    )
+    subject_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    session_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False, index=True)
+    issued_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    replaced_by_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
+    ip: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    user_agent: Mapped[str] = mapped_column(String(300), nullable=False, default="")
+
+
+class LoginAttempt(Base):
+    """Recorded for every attempt, successful or not — the raw material for
+    lockout, alerting, and answering "who tried to get in"."""
+
+    __tablename__ = "login_attempts"
+    __table_args__ = (Index("ix_login_attempts_at", "at"),)
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("tenants.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    subject_kind: Mapped[str] = mapped_column(String(20), nullable=False, default="user")
+    email: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
+    succeeded: Mapped[bool] = mapped_column(nullable=False, default=False)
+    reason: Mapped[str] = mapped_column(String(60), nullable=False, default="")
+    ip: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    user_agent: Mapped[str] = mapped_column(String(300), nullable=False, default="")

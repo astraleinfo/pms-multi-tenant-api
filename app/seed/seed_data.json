@@ -1,0 +1,4094 @@
+{
+ "APPOINTMENTS": [
+  {
+   "id": "a1",
+   "tenant_id": "1",
+   "patient_id": "p2",
+   "doctor_id": "u1",
+   "date": "2026-08-19",
+   "time": "09:00",
+   "duration_min": 30,
+   "reason": "Crown fit — upper right first molar",
+   "status": "completed",
+   "created_via": "front_desk"
+  },
+  {
+   "id": "a2",
+   "tenant_id": "1",
+   "patient_id": "p3",
+   "doctor_id": "u1",
+   "date": "2026-08-19",
+   "time": "09:30",
+   "duration_min": 30,
+   "reason": "Scale and polish",
+   "status": "completed",
+   "created_via": "online"
+  },
+  {
+   "id": "a3",
+   "tenant_id": "1",
+   "patient_id": "p7",
+   "doctor_id": "u2",
+   "date": "2026-08-19",
+   "time": "10:00",
+   "duration_min": 45,
+   "reason": "Root canal — review",
+   "status": "checked_in",
+   "created_via": "phone"
+  },
+  {
+   "id": "a4",
+   "tenant_id": "1",
+   "patient_id": "p4",
+   "doctor_id": "u1",
+   "date": "2026-08-19",
+   "time": "10:30",
+   "duration_min": 20,
+   "reason": "Ortho adjustment",
+   "status": "checked_in",
+   "created_via": "front_desk"
+  },
+  {
+   "id": "a5",
+   "tenant_id": "1",
+   "patient_id": "p8",
+   "doctor_id": "u2",
+   "date": "2026-08-19",
+   "time": "11:00",
+   "duration_min": 30,
+   "reason": "Persistent gum bleeding",
+   "status": "checked_in",
+   "created_via": "phone"
+  },
+  {
+   "id": "a6",
+   "tenant_id": "1",
+   "patient_id": "p9",
+   "doctor_id": "u1",
+   "date": "2026-08-19",
+   "time": "11:30",
+   "duration_min": 30,
+   "reason": "Whitening consultation",
+   "status": "scheduled",
+   "created_via": "online"
+  },
+  {
+   "id": "a7",
+   "tenant_id": "1",
+   "patient_id": "p5",
+   "doctor_id": "u2",
+   "date": "2026-08-19",
+   "time": "14:00",
+   "duration_min": 45,
+   "reason": "Denture adjustment",
+   "status": "scheduled",
+   "created_via": "front_desk"
+  },
+  {
+   "id": "a8",
+   "tenant_id": "1",
+   "patient_id": "p11",
+   "doctor_id": "u1",
+   "date": "2026-08-19",
+   "time": "14:45",
+   "duration_min": 30,
+   "reason": "Filling — lower left",
+   "status": "scheduled",
+   "created_via": "online"
+  },
+  {
+   "id": "a9",
+   "tenant_id": "1",
+   "patient_id": "p1",
+   "doctor_id": "u1",
+   "date": "2026-08-19",
+   "time": "15:30",
+   "duration_min": 30,
+   "reason": "Six-month recall",
+   "status": "no_show",
+   "created_via": "online"
+  },
+  {
+   "id": "a10",
+   "tenant_id": "1",
+   "patient_id": "p12",
+   "doctor_id": "u1",
+   "date": "2026-08-20",
+   "time": "09:00",
+   "duration_min": 30,
+   "reason": "First visit — check-up",
+   "status": "scheduled",
+   "created_via": "phone"
+  },
+  {
+   "id": "a11",
+   "tenant_id": "1",
+   "patient_id": "p6",
+   "doctor_id": "u2",
+   "date": "2026-08-20",
+   "time": "10:15",
+   "duration_min": 45,
+   "reason": "Night guard impression",
+   "status": "scheduled",
+   "created_via": "front_desk"
+  },
+  {
+   "id": "a12",
+   "tenant_id": "1",
+   "patient_id": "p5",
+   "doctor_id": "u1",
+   "date": "2026-08-21",
+   "time": "11:00",
+   "duration_min": 30,
+   "reason": "Review — denture fit",
+   "status": "scheduled",
+   "created_via": "front_desk"
+  },
+  {
+   "id": "a13",
+   "tenant_id": "1",
+   "patient_id": "p1",
+   "doctor_id": "u1",
+   "date": "2026-08-12",
+   "time": "10:00",
+   "duration_min": 30,
+   "reason": "Sensitivity — upper left",
+   "status": "completed",
+   "created_via": "online"
+  },
+  {
+   "id": "a14",
+   "tenant_id": "1",
+   "patient_id": "p11",
+   "doctor_id": "u2",
+   "date": "2026-08-12",
+   "time": "15:00",
+   "duration_min": 30,
+   "reason": "Wisdom tooth assessment",
+   "status": "completed",
+   "created_via": "phone"
+  },
+  {
+   "id": "a15",
+   "tenant_id": "1",
+   "patient_id": "p5",
+   "doctor_id": "u2",
+   "date": "2026-07-30",
+   "time": "09:30",
+   "duration_min": 60,
+   "reason": "Denture fitting",
+   "status": "completed",
+   "created_via": "front_desk"
+  },
+  {
+   "id": "a20",
+   "tenant_id": "2",
+   "patient_id": "p20",
+   "doctor_id": "u10",
+   "date": "2026-08-19",
+   "time": "09:15",
+   "duration_min": 30,
+   "reason": "Cataract pre-op assessment",
+   "status": "completed",
+   "created_via": "front_desk"
+  },
+  {
+   "id": "a21",
+   "tenant_id": "2",
+   "patient_id": "p21",
+   "doctor_id": "u10",
+   "date": "2026-08-19",
+   "time": "10:00",
+   "duration_min": 20,
+   "reason": "Annual refraction",
+   "status": "checked_in",
+   "created_via": "online"
+  },
+  {
+   "id": "a22",
+   "tenant_id": "2",
+   "patient_id": "p23",
+   "doctor_id": "u11",
+   "date": "2026-08-19",
+   "time": "10:45",
+   "duration_min": 30,
+   "reason": "IOP check",
+   "status": "scheduled",
+   "created_via": "phone"
+  },
+  {
+   "id": "a23",
+   "tenant_id": "2",
+   "patient_id": "p24",
+   "doctor_id": "u10",
+   "date": "2026-08-19",
+   "time": "11:30",
+   "duration_min": 20,
+   "reason": "Myopia progression review",
+   "status": "checked_in",
+   "created_via": "online"
+  },
+  {
+   "id": "a24",
+   "tenant_id": "2",
+   "patient_id": "p25",
+   "doctor_id": "u11",
+   "date": "2026-08-20",
+   "time": "09:00",
+   "duration_min": 40,
+   "reason": "First visit — blurred vision",
+   "status": "scheduled",
+   "created_via": "phone"
+  },
+  {
+   "id": "a30",
+   "tenant_id": "3",
+   "patient_id": "p30",
+   "doctor_id": "u20",
+   "date": "2026-08-19",
+   "time": "09:30",
+   "duration_min": 30,
+   "reason": "Eczema flare",
+   "status": "completed",
+   "created_via": "online"
+  },
+  {
+   "id": "a31",
+   "tenant_id": "3",
+   "patient_id": "p31",
+   "doctor_id": "u20",
+   "date": "2026-08-19",
+   "time": "10:15",
+   "duration_min": 30,
+   "reason": "Phototherapy review",
+   "status": "checked_in",
+   "created_via": "front_desk"
+  },
+  {
+   "id": "a32",
+   "tenant_id": "3",
+   "patient_id": "p33",
+   "doctor_id": "u20",
+   "date": "2026-08-19",
+   "time": "11:00",
+   "duration_min": 20,
+   "reason": "Atopic dermatitis follow-up",
+   "status": "scheduled",
+   "created_via": "phone"
+  },
+  {
+   "id": "a33",
+   "tenant_id": "3",
+   "patient_id": "p34",
+   "doctor_id": "u20",
+   "date": "2026-08-21",
+   "time": "10:00",
+   "duration_min": 40,
+   "reason": "Mole mapping",
+   "status": "scheduled",
+   "created_via": "online"
+  }
+ ],
+ "ENCOUNTERS": [
+  {
+   "id": "e1",
+   "tenant_id": "1",
+   "patient_id": "p2",
+   "queue_entry_id": "q1",
+   "doctor_id": "u1",
+   "date": "2026-08-19",
+   "chief_complaint": "Temporary crown loose",
+   "notes": "Temporary removed, margins clean. Permanent zirconia crown cemented on 16. Occlusion checked and adjusted.",
+   "diagnosis": "Restored 16 — full coverage crown",
+   "follow_up_days": 180,
+   "status": "signed",
+   "clinical_ext": {
+    "bp": "128/82",
+    "pulse": 74,
+    "pain_scale": 2,
+    "oral_hygiene": "Good",
+    "perio_bleeding": false,
+    "tooth_chart": {
+     "16": "crown",
+     "26": "filling",
+     "36": "filling"
+    },
+    "procedures": [
+     "Crown cementation"
+    ]
+   }
+  },
+  {
+   "id": "e2",
+   "tenant_id": "1",
+   "patient_id": "p3",
+   "queue_entry_id": "q2",
+   "doctor_id": "u1",
+   "date": "2026-08-19",
+   "chief_complaint": "Routine cleaning",
+   "notes": "Supra- and subgingival scaling completed. Light staining on lower anteriors polished out. Aligner tray fit reviewed.",
+   "diagnosis": "Generalised mild gingivitis",
+   "follow_up_days": 180,
+   "status": "signed",
+   "clinical_ext": {
+    "bp": "118/76",
+    "pulse": 68,
+    "pain_scale": 0,
+    "oral_hygiene": "Fair",
+    "perio_bleeding": true,
+    "tooth_chart": {
+     "31": "watch",
+     "41": "watch"
+    },
+    "procedures": [
+     "Scaling",
+     "Polishing"
+    ]
+   }
+  },
+  {
+   "id": "e3",
+   "tenant_id": "1",
+   "patient_id": "p10",
+   "queue_entry_id": "q3",
+   "doctor_id": "u2",
+   "date": "2026-08-19",
+   "chief_complaint": "Chipped upper left central incisor after cycling fall",
+   "notes": "Enamel-only fracture on 21, no pulp exposure. Composite build-up placed and polished. Sensitivity advice given.",
+   "diagnosis": "Uncomplicated crown fracture, 21",
+   "follow_up_days": 30,
+   "status": "signed",
+   "clinical_ext": {
+    "bp": "132/84",
+    "pulse": 88,
+    "pain_scale": 4,
+    "oral_hygiene": "Good",
+    "perio_bleeding": false,
+    "tooth_chart": {
+     "21": "filling"
+    },
+    "procedures": [
+     "Composite build-up"
+    ]
+   }
+  },
+  {
+   "id": "e4",
+   "tenant_id": "1",
+   "patient_id": "p1",
+   "queue_entry_id": null,
+   "doctor_id": "u1",
+   "date": "2026-08-12",
+   "chief_complaint": "Cold sensitivity upper left quadrant",
+   "notes": "Exposed cervical dentine on 24 and 25. Desensitising varnish applied. Advised soft brush and non-abrasive paste.",
+   "diagnosis": "Dentine hypersensitivity",
+   "follow_up_days": 90,
+   "status": "signed",
+   "clinical_ext": {
+    "bp": "124/80",
+    "pulse": 72,
+    "pain_scale": 5,
+    "oral_hygiene": "Fair",
+    "perio_bleeding": false,
+    "tooth_chart": {
+     "24": "watch",
+     "25": "watch"
+    },
+    "procedures": [
+     "Fluoride varnish"
+    ]
+   }
+  },
+  {
+   "id": "e5",
+   "tenant_id": "1",
+   "patient_id": "p11",
+   "queue_entry_id": null,
+   "doctor_id": "u2",
+   "date": "2026-08-12",
+   "chief_complaint": "Ache behind lower right molars",
+   "notes": "Partially erupted 48 with pericoronitis. Irrigated, oral hygiene instruction given, antibiotics prescribed. OPG requested.",
+   "diagnosis": "Pericoronitis, 48",
+   "follow_up_days": 14,
+   "status": "signed",
+   "clinical_ext": {
+    "bp": "135/86",
+    "pulse": 80,
+    "pain_scale": 7,
+    "oral_hygiene": "Poor",
+    "perio_bleeding": true,
+    "tooth_chart": {
+     "48": "extract"
+    },
+    "procedures": [
+     "Irrigation"
+    ]
+   }
+  },
+  {
+   "id": "e6",
+   "tenant_id": "1",
+   "patient_id": "p5",
+   "queue_entry_id": null,
+   "doctor_id": "u2",
+   "date": "2026-07-30",
+   "chief_complaint": "New lower denture rubbing",
+   "notes": "Pressure point at left lingual flange relieved. Patient comfortable on re-seat. Review in three weeks.",
+   "diagnosis": "Denture-induced traumatic ulcer",
+   "follow_up_days": 21,
+   "status": "signed",
+   "clinical_ext": {
+    "bp": "142/88",
+    "pulse": 76,
+    "pain_scale": 3,
+    "oral_hygiene": "Fair",
+    "perio_bleeding": false,
+    "tooth_chart": {},
+    "procedures": [
+     "Denture adjustment"
+    ]
+   }
+  },
+  {
+   "id": "e20",
+   "tenant_id": "2",
+   "patient_id": "p20",
+   "queue_entry_id": "q20",
+   "doctor_id": "u10",
+   "date": "2026-08-19",
+   "chief_complaint": "Progressive blurring, right worse than left",
+   "notes": "Nuclear sclerotic cataract grade 3 right, grade 1 left. Biometry booked. Listed for right phacoemulsification.",
+   "diagnosis": "Age-related nuclear cataract, right eye",
+   "follow_up_days": 42,
+   "status": "signed",
+   "clinical_ext": {
+    "bp": "146/84",
+    "pulse": 71,
+    "iop_od": 16,
+    "iop_os": 15,
+    "fundus": "Discs healthy, no diabetic changes.",
+    "refraction": {
+     "od_sph": "-1.75",
+     "od_cyl": "-0.50",
+     "od_axis": "90",
+     "os_sph": "-1.25",
+     "os_cyl": "-0.25",
+     "os_axis": "85"
+    },
+    "va": {
+     "od": "6/24",
+     "os": "6/9"
+    }
+   }
+  },
+  {
+   "id": "e21",
+   "tenant_id": "2",
+   "patient_id": "p22",
+   "queue_entry_id": "q21",
+   "doctor_id": "u10",
+   "date": "2026-08-19",
+   "chief_complaint": "Red, gritty right eye for two days",
+   "notes": "Diffuse conjunctival injection, no corneal staining. Contact lens wear suspended for one week.",
+   "diagnosis": "Acute bacterial conjunctivitis, right eye",
+   "follow_up_days": 7,
+   "status": "signed",
+   "clinical_ext": {
+    "bp": "116/72",
+    "pulse": 66,
+    "iop_od": 14,
+    "iop_os": 14,
+    "fundus": "Not dilated this visit.",
+    "refraction": {
+     "od_sph": "-3.25",
+     "od_cyl": "-0.75",
+     "od_axis": "170",
+     "os_sph": "-3.00",
+     "os_cyl": "-0.50",
+     "os_axis": "175"
+    },
+    "va": {
+     "od": "6/9",
+     "os": "6/6"
+    }
+   }
+  },
+  {
+   "id": "e22",
+   "tenant_id": "2",
+   "patient_id": "p23",
+   "queue_entry_id": null,
+   "doctor_id": "u11",
+   "date": "2026-08-05",
+   "chief_complaint": "Glaucoma surveillance",
+   "notes": "Pressures stable on latanoprost. Fields unchanged from last year. Continue current therapy.",
+   "diagnosis": "Primary open-angle glaucoma — stable",
+   "follow_up_days": 120,
+   "status": "signed",
+   "clinical_ext": {
+    "bp": "138/86",
+    "pulse": 70,
+    "iop_od": 19,
+    "iop_os": 21,
+    "fundus": "Cup-to-disc 0.6 right, 0.7 left, stable.",
+    "refraction": {
+     "od_sph": "+1.50",
+     "od_cyl": "-0.25",
+     "od_axis": "10",
+     "os_sph": "+1.75",
+     "os_cyl": "-0.50",
+     "os_axis": "5"
+    },
+    "va": {
+     "od": "6/7.5",
+     "os": "6/9"
+    }
+   }
+  },
+  {
+   "id": "e30",
+   "tenant_id": "3",
+   "patient_id": "p30",
+   "queue_entry_id": "q30",
+   "doctor_id": "u20",
+   "date": "2026-08-19",
+   "chief_complaint": "Flare across both antecubital fossae",
+   "notes": "Excoriated, lichenified plaques bilaterally. Stepped up to a potent topical steroid for two weeks, then taper.",
+   "diagnosis": "Atopic dermatitis — moderate flare",
+   "follow_up_days": 28,
+   "status": "signed",
+   "clinical_ext": {
+    "bp": "112/70",
+    "pulse": 74,
+    "bsa": 8,
+    "itch_score": 7,
+    "phototherapy": false,
+    "lesion_sites": [
+     "Left arm",
+     "Right arm"
+    ]
+   }
+  },
+  {
+   "id": "e31",
+   "tenant_id": "3",
+   "patient_id": "p32",
+   "queue_entry_id": "q31",
+   "doctor_id": "u20",
+   "date": "2026-08-19",
+   "chief_complaint": "Itchy, scaling scalp",
+   "notes": "Well-demarcated scaly plaques along the hairline. Started ketoconazole shampoo and a scalp application.",
+   "diagnosis": "Seborrhoeic dermatitis of the scalp",
+   "follow_up_days": 42,
+   "status": "signed",
+   "clinical_ext": {
+    "bp": "126/78",
+    "pulse": 69,
+    "bsa": 3,
+    "itch_score": 5,
+    "phototherapy": false,
+    "lesion_sites": [
+     "Scalp"
+    ]
+   }
+  }
+ ],
+ "INVENTORY_BATCHES": [
+  {
+   "item_id": "i1",
+   "batch_no": "AMX-2409",
+   "expiry": "2027-04-30",
+   "qty": 240
+  },
+  {
+   "item_id": "i1",
+   "batch_no": "AMX-2502",
+   "expiry": "2026-09-30",
+   "qty": 60
+  },
+  {
+   "item_id": "i2",
+   "batch_no": "IBU-2411",
+   "expiry": "2028-01-31",
+   "qty": 480
+  },
+  {
+   "item_id": "i3",
+   "batch_no": "CHX-2506",
+   "expiry": "2026-10-15",
+   "qty": 14
+  },
+  {
+   "item_id": "i4",
+   "batch_no": "LIG-2503",
+   "expiry": "2027-06-30",
+   "qty": 310
+  },
+  {
+   "item_id": "i5",
+   "batch_no": "CMP-2412",
+   "expiry": "2027-02-28",
+   "qty": 9
+  },
+  {
+   "item_id": "i6",
+   "batch_no": "FLU-2501",
+   "expiry": "2027-08-31",
+   "qty": 22
+  },
+  {
+   "item_id": "i7",
+   "batch_no": "GLV-2508",
+   "expiry": "2029-05-31",
+   "qty": 41
+  },
+  {
+   "item_id": "i8",
+   "batch_no": "MET-2410",
+   "expiry": "2026-09-12",
+   "qty": 74
+  },
+  {
+   "item_id": "i9",
+   "batch_no": "PAR-2507",
+   "expiry": "2028-03-31",
+   "qty": 620
+  },
+  {
+   "item_id": "i10",
+   "batch_no": "GP30-2404",
+   "expiry": "2026-08-31",
+   "qty": 5
+  },
+  {
+   "item_id": "i20",
+   "batch_no": "IOL-2601",
+   "expiry": "2029-12-31",
+   "qty": 24
+  },
+  {
+   "item_id": "i21",
+   "batch_no": "TRO-2505",
+   "expiry": "2026-11-30",
+   "qty": 17
+  },
+  {
+   "item_id": "i22",
+   "batch_no": "TON-2602",
+   "expiry": "2028-08-31",
+   "qty": 88
+  }
+ ],
+ "INVENTORY_ITEMS": [
+  {
+   "id": "i1",
+   "tenant_id": "1",
+   "sku": "MED-AMX-500",
+   "name": "Amoxicillin capsules",
+   "form": "Capsule",
+   "strength": "500 mg",
+   "unit": "cap",
+   "category": "medicine",
+   "reorder_level": 120,
+   "unit_price": 6
+  },
+  {
+   "id": "i2",
+   "tenant_id": "1",
+   "sku": "MED-IBU-400",
+   "name": "Ibuprofen tablets",
+   "form": "Tablet",
+   "strength": "400 mg",
+   "unit": "tab",
+   "category": "medicine",
+   "reorder_level": 200,
+   "unit_price": 1.1
+  },
+  {
+   "id": "i3",
+   "tenant_id": "1",
+   "sku": "MED-CHX-200",
+   "name": "Chlorhexidine mouthwash",
+   "form": "Solution",
+   "strength": "0.2% · 300 ml",
+   "unit": "bottle",
+   "category": "medicine",
+   "reorder_level": 20,
+   "unit_price": 95
+  },
+  {
+   "id": "i4",
+   "tenant_id": "1",
+   "sku": "CON-LIG-CART",
+   "name": "Lignocaine cartridge",
+   "form": "Cartridge",
+   "strength": "2% with adrenaline",
+   "unit": "cart",
+   "category": "consumable",
+   "reorder_level": 100,
+   "unit_price": 28
+  },
+  {
+   "id": "i5",
+   "tenant_id": "1",
+   "sku": "CON-CMP-A2",
+   "name": "Composite resin A2",
+   "form": "Syringe",
+   "strength": "4 g",
+   "unit": "syringe",
+   "category": "consumable",
+   "reorder_level": 12,
+   "unit_price": 1200
+  },
+  {
+   "id": "i6",
+   "tenant_id": "1",
+   "sku": "MED-FLU-5000",
+   "name": "Duraphat fluoride toothpaste",
+   "form": "Paste",
+   "strength": "5000 ppm · 51 g",
+   "unit": "tube",
+   "category": "medicine",
+   "reorder_level": 15,
+   "unit_price": 380
+  },
+  {
+   "id": "i7",
+   "tenant_id": "1",
+   "sku": "CON-GLV-M",
+   "name": "Nitrile gloves, medium",
+   "form": "Box",
+   "strength": "100 ct",
+   "unit": "box",
+   "category": "consumable",
+   "reorder_level": 25,
+   "unit_price": 480
+  },
+  {
+   "id": "i8",
+   "tenant_id": "1",
+   "sku": "MED-MET-400",
+   "name": "Metronidazole tablets",
+   "form": "Tablet",
+   "strength": "400 mg",
+   "unit": "tab",
+   "category": "medicine",
+   "reorder_level": 90,
+   "unit_price": 1.6
+  },
+  {
+   "id": "i9",
+   "tenant_id": "1",
+   "sku": "MED-PAR-650",
+   "name": "Paracetamol tablets",
+   "form": "Tablet",
+   "strength": "650 mg",
+   "unit": "tab",
+   "category": "medicine",
+   "reorder_level": 240,
+   "unit_price": 1.2
+  },
+  {
+   "id": "i10",
+   "tenant_id": "1",
+   "sku": "CON-GP-30",
+   "name": "Gutta percha points, size 30",
+   "form": "Pack",
+   "strength": "120 ct",
+   "unit": "pack",
+   "category": "consumable",
+   "reorder_level": 8,
+   "unit_price": 290
+  },
+  {
+   "id": "i20",
+   "tenant_id": "2",
+   "sku": "LEN-IOL-MONO",
+   "name": "Monofocal IOL",
+   "form": "Implant",
+   "strength": "Aspheric",
+   "unit": "unit",
+   "category": "lens",
+   "reorder_level": 10,
+   "unit_price": 6500
+  },
+  {
+   "id": "i21",
+   "tenant_id": "2",
+   "sku": "MED-TRO-1",
+   "name": "Tropicamide drops",
+   "form": "Drops",
+   "strength": "1% · 5 ml",
+   "unit": "bottle",
+   "category": "medicine",
+   "reorder_level": 20,
+   "unit_price": 55
+  },
+  {
+   "id": "i22",
+   "tenant_id": "2",
+   "sku": "CON-TON-TIP",
+   "name": "Tonometer prisms",
+   "form": "Unit",
+   "strength": "Disposable",
+   "unit": "unit",
+   "category": "consumable",
+   "reorder_level": 60,
+   "unit_price": 210
+  }
+ ],
+ "INVENTORY_TX": [
+  {
+   "id": "t1",
+   "tenant_id": "1",
+   "item_id": "i1",
+   "type": "purchase",
+   "qty": 300,
+   "batch_no": "AMX-2409",
+   "at": "2026-06-02 09:12",
+   "ref_type": "purchase_order",
+   "ref_id": "PO-2261",
+   "actor_id": "u4",
+   "note": "Medisupply — quarterly order"
+  },
+  {
+   "id": "t2",
+   "tenant_id": "1",
+   "item_id": "i1",
+   "type": "purchase",
+   "qty": 60,
+   "batch_no": "AMX-2502",
+   "at": "2026-07-14 10:40",
+   "ref_type": "purchase_order",
+   "ref_id": "PO-2288",
+   "actor_id": "u4"
+  },
+  {
+   "id": "t3",
+   "tenant_id": "1",
+   "item_id": "i1",
+   "type": "dispense",
+   "qty": -15,
+   "batch_no": "AMX-2409",
+   "at": "2026-08-12 15:44",
+   "ref_type": "prescription",
+   "ref_id": "rx2",
+   "actor_id": "u4"
+  },
+  {
+   "id": "t4",
+   "tenant_id": "1",
+   "item_id": "i8",
+   "type": "purchase",
+   "qty": 200,
+   "batch_no": "MET-2410",
+   "at": "2026-06-02 09:12",
+   "ref_type": "purchase_order",
+   "ref_id": "PO-2261",
+   "actor_id": "u4"
+  },
+  {
+   "id": "t5",
+   "tenant_id": "1",
+   "item_id": "i8",
+   "type": "dispense",
+   "qty": -6,
+   "batch_no": "MET-2410",
+   "at": "2026-08-12 15:44",
+   "ref_type": "prescription",
+   "ref_id": "rx2",
+   "actor_id": "u4"
+  },
+  {
+   "id": "t6",
+   "tenant_id": "1",
+   "item_id": "i8",
+   "type": "expiry",
+   "qty": -120,
+   "batch_no": "MET-2410",
+   "at": "2026-08-01 08:00",
+   "ref_type": null,
+   "ref_id": null,
+   "actor_id": "u4",
+   "note": "Short-dated stock written off"
+  },
+  {
+   "id": "t7",
+   "tenant_id": "1",
+   "item_id": "i9",
+   "type": "purchase",
+   "qty": 640,
+   "batch_no": "PAR-2507",
+   "at": "2026-07-14 10:40",
+   "ref_type": "purchase_order",
+   "ref_id": "PO-2288",
+   "actor_id": "u4"
+  },
+  {
+   "id": "t8",
+   "tenant_id": "1",
+   "item_id": "i9",
+   "type": "dispense",
+   "qty": -12,
+   "batch_no": "PAR-2507",
+   "at": "2026-08-19 09:47",
+   "ref_type": "prescription",
+   "ref_id": "rx3",
+   "actor_id": "u4"
+  },
+  {
+   "id": "t9",
+   "tenant_id": "1",
+   "item_id": "i2",
+   "type": "purchase",
+   "qty": 500,
+   "batch_no": "IBU-2411",
+   "at": "2026-05-19 11:05",
+   "ref_type": "purchase_order",
+   "ref_id": "PO-2240",
+   "actor_id": "u4"
+  },
+  {
+   "id": "t10",
+   "tenant_id": "1",
+   "item_id": "i2",
+   "type": "dispense",
+   "qty": -20,
+   "batch_no": "IBU-2411",
+   "at": "2026-08-05 16:20",
+   "ref_type": "prescription",
+   "ref_id": "rx-archive-9",
+   "actor_id": "u4"
+  },
+  {
+   "id": "t11",
+   "tenant_id": "1",
+   "item_id": "i3",
+   "type": "purchase",
+   "qty": 24,
+   "batch_no": "CHX-2506",
+   "at": "2026-06-02 09:12",
+   "ref_type": "purchase_order",
+   "ref_id": "PO-2261",
+   "actor_id": "u4"
+  },
+  {
+   "id": "t12",
+   "tenant_id": "1",
+   "item_id": "i3",
+   "type": "dispense",
+   "qty": -10,
+   "batch_no": "CHX-2506",
+   "at": "2026-08-11 14:02",
+   "ref_type": "prescription",
+   "ref_id": "rx-archive-7",
+   "actor_id": "u4"
+  },
+  {
+   "id": "t13",
+   "tenant_id": "1",
+   "item_id": "i5",
+   "type": "purchase",
+   "qty": 12,
+   "batch_no": "CMP-2412",
+   "at": "2026-04-08 13:30",
+   "ref_type": "purchase_order",
+   "ref_id": "PO-2199",
+   "actor_id": "u6"
+  },
+  {
+   "id": "t14",
+   "tenant_id": "1",
+   "item_id": "i5",
+   "type": "adjustment",
+   "qty": -3,
+   "batch_no": "CMP-2412",
+   "at": "2026-08-19 10:05",
+   "ref_type": "manual",
+   "ref_id": null,
+   "actor_id": "u2",
+   "note": "Chairside use, tooth 21 build-up"
+  },
+  {
+   "id": "t15",
+   "tenant_id": "1",
+   "item_id": "i10",
+   "type": "purchase",
+   "qty": 10,
+   "batch_no": "GP30-2404",
+   "at": "2026-02-11 09:00",
+   "ref_type": "purchase_order",
+   "ref_id": "PO-2140",
+   "actor_id": "u6"
+  },
+  {
+   "id": "t16",
+   "tenant_id": "1",
+   "item_id": "i10",
+   "type": "adjustment",
+   "qty": -5,
+   "batch_no": "GP30-2404",
+   "at": "2026-07-22 15:12",
+   "ref_type": "manual",
+   "ref_id": null,
+   "actor_id": "u2",
+   "note": "Endodontic cases, July"
+  },
+  {
+   "id": "t17",
+   "tenant_id": "1",
+   "item_id": "i4",
+   "type": "purchase",
+   "qty": 320,
+   "batch_no": "LIG-2503",
+   "at": "2026-05-19 11:05",
+   "ref_type": "purchase_order",
+   "ref_id": "PO-2240",
+   "actor_id": "u4"
+  },
+  {
+   "id": "t18",
+   "tenant_id": "1",
+   "item_id": "i4",
+   "type": "adjustment",
+   "qty": -10,
+   "batch_no": "LIG-2503",
+   "at": "2026-08-18 17:40",
+   "ref_type": "manual",
+   "ref_id": null,
+   "actor_id": "u1",
+   "note": "Daily chairside consumption"
+  },
+  {
+   "id": "t19",
+   "tenant_id": "1",
+   "item_id": "i7",
+   "type": "purchase",
+   "qty": 48,
+   "batch_no": "GLV-2508",
+   "at": "2026-07-14 10:40",
+   "ref_type": "purchase_order",
+   "ref_id": "PO-2288",
+   "actor_id": "u4"
+  },
+  {
+   "id": "t20",
+   "tenant_id": "1",
+   "item_id": "i7",
+   "type": "adjustment",
+   "qty": -7,
+   "batch_no": "GLV-2508",
+   "at": "2026-08-17 08:15",
+   "ref_type": "manual",
+   "ref_id": null,
+   "actor_id": "u3",
+   "note": "Surgery restock"
+  },
+  {
+   "id": "t21",
+   "tenant_id": "1",
+   "item_id": "i6",
+   "type": "purchase",
+   "qty": 24,
+   "batch_no": "FLU-2501",
+   "at": "2026-06-02 09:12",
+   "ref_type": "purchase_order",
+   "ref_id": "PO-2261",
+   "actor_id": "u4"
+  },
+  {
+   "id": "t22",
+   "tenant_id": "1",
+   "item_id": "i6",
+   "type": "dispense",
+   "qty": -1,
+   "batch_no": "FLU-2501",
+   "at": "2026-08-12 10:35",
+   "ref_type": "prescription",
+   "ref_id": "rx4",
+   "actor_id": "u4"
+  },
+  {
+   "id": "t23",
+   "tenant_id": "1",
+   "item_id": "i6",
+   "type": "return",
+   "qty": -1,
+   "batch_no": "FLU-2501",
+   "at": "2026-08-14 12:00",
+   "ref_type": "manual",
+   "ref_id": null,
+   "actor_id": "u4",
+   "note": "Damaged tube returned to supplier"
+  },
+  {
+   "id": "t40",
+   "tenant_id": "2",
+   "item_id": "i20",
+   "type": "purchase",
+   "qty": 30,
+   "batch_no": "IOL-2601",
+   "at": "2026-06-20 09:00",
+   "ref_type": "purchase_order",
+   "ref_id": "PO-511",
+   "actor_id": "u13"
+  },
+  {
+   "id": "t41",
+   "tenant_id": "2",
+   "item_id": "i20",
+   "type": "adjustment",
+   "qty": -6,
+   "batch_no": "IOL-2601",
+   "at": "2026-08-10 14:20",
+   "ref_type": "manual",
+   "ref_id": null,
+   "actor_id": "u10",
+   "note": "Theatre list, week 32"
+  },
+  {
+   "id": "t42",
+   "tenant_id": "2",
+   "item_id": "i21",
+   "type": "purchase",
+   "qty": 24,
+   "batch_no": "TRO-2505",
+   "at": "2026-05-30 10:10",
+   "ref_type": "purchase_order",
+   "ref_id": "PO-498",
+   "actor_id": "u13"
+  },
+  {
+   "id": "t43",
+   "tenant_id": "2",
+   "item_id": "i21",
+   "type": "adjustment",
+   "qty": -7,
+   "batch_no": "TRO-2505",
+   "at": "2026-08-18 16:45",
+   "ref_type": "manual",
+   "ref_id": null,
+   "actor_id": "u12",
+   "note": "Clinic use"
+  },
+  {
+   "id": "t44",
+   "tenant_id": "2",
+   "item_id": "i22",
+   "type": "purchase",
+   "qty": 100,
+   "batch_no": "TON-2602",
+   "at": "2026-07-02 11:30",
+   "ref_type": "purchase_order",
+   "ref_id": "PO-520",
+   "actor_id": "u13"
+  },
+  {
+   "id": "t45",
+   "tenant_id": "2",
+   "item_id": "i22",
+   "type": "adjustment",
+   "qty": -12,
+   "batch_no": "TON-2602",
+   "at": "2026-08-19 09:20",
+   "ref_type": "manual",
+   "ref_id": null,
+   "actor_id": "u12",
+   "note": "Clinic use"
+  }
+ ],
+ "INVOICES": [
+  {
+   "id": "inv1",
+   "tenant_id": "1",
+   "patient_id": "p2",
+   "encounter_id": "e1",
+   "number": "NG-INV-2041",
+   "status": "paid",
+   "issued_at": "2026-08-19",
+   "due_at": "2026-09-02",
+   "line_items": [
+    {
+     "id": "li1",
+     "description": "Consultation — restorative",
+     "source": "consultation",
+     "qty": 1,
+     "unit_price": 500,
+     "tax_pct": 0
+    },
+    {
+     "id": "li2",
+     "description": "Zirconia crown, tooth 16",
+     "source": "procedure",
+     "qty": 1,
+     "unit_price": 12000,
+     "tax_pct": 0
+    },
+    {
+     "id": "li3",
+     "description": "Paracetamol 650 mg × 12",
+     "source": "pharmacy",
+     "qty": 12,
+     "unit_price": 2,
+     "tax_pct": 0
+    }
+   ],
+   "payments": [
+    {
+     "id": "pay1",
+     "invoice_id": "inv1",
+     "amount": 12524,
+     "method": "card",
+     "at": "2026-08-19 09:40",
+     "reference": "CARD-4417"
+    }
+   ]
+  },
+  {
+   "id": "inv2",
+   "tenant_id": "1",
+   "patient_id": "p10",
+   "encounter_id": "e3",
+   "number": "NG-INV-2042",
+   "status": "partially_paid",
+   "issued_at": "2026-08-19",
+   "due_at": "2026-09-02",
+   "line_items": [
+    {
+     "id": "li4",
+     "description": "Emergency consultation",
+     "source": "consultation",
+     "qty": 1,
+     "unit_price": 800,
+     "tax_pct": 0
+    },
+    {
+     "id": "li5",
+     "description": "Composite build-up, tooth 21",
+     "source": "procedure",
+     "qty": 1,
+     "unit_price": 2500,
+     "tax_pct": 0
+    },
+    {
+     "id": "li6",
+     "description": "Periapical radiograph",
+     "source": "lab",
+     "qty": 1,
+     "unit_price": 300,
+     "tax_pct": 0
+    }
+   ],
+   "payments": [
+    {
+     "id": "pay2",
+     "invoice_id": "inv2",
+     "amount": 1500,
+     "method": "cash",
+     "at": "2026-08-19 10:20"
+    }
+   ]
+  },
+  {
+   "id": "inv3",
+   "tenant_id": "1",
+   "patient_id": "p3",
+   "encounter_id": "e2",
+   "number": "NG-INV-2043",
+   "status": "issued",
+   "issued_at": "2026-08-19",
+   "due_at": "2026-09-02",
+   "line_items": [
+    {
+     "id": "li7",
+     "description": "Hygiene appointment — scale and polish",
+     "source": "procedure",
+     "qty": 1,
+     "unit_price": 1500,
+     "tax_pct": 0
+    }
+   ],
+   "payments": []
+  },
+  {
+   "id": "inv4",
+   "tenant_id": "1",
+   "patient_id": "p11",
+   "encounter_id": "e5",
+   "number": "NG-INV-2038",
+   "status": "paid",
+   "issued_at": "2026-08-12",
+   "due_at": "2026-08-26",
+   "line_items": [
+    {
+     "id": "li8",
+     "description": "Consultation — oral surgery",
+     "source": "consultation",
+     "qty": 1,
+     "unit_price": 700,
+     "tax_pct": 0
+    },
+    {
+     "id": "li9",
+     "description": "Orthopantomogram",
+     "source": "lab",
+     "qty": 1,
+     "unit_price": 800,
+     "tax_pct": 0
+    },
+    {
+     "id": "li10",
+     "description": "Amoxicillin 500 mg × 15",
+     "source": "pharmacy",
+     "qty": 15,
+     "unit_price": 9,
+     "tax_pct": 0
+    }
+   ],
+   "payments": [
+    {
+     "id": "pay3",
+     "invoice_id": "inv4",
+     "amount": 1635,
+     "method": "upi",
+     "at": "2026-08-12 16:02",
+     "reference": "UPI-99183"
+    }
+   ]
+  },
+  {
+   "id": "inv5",
+   "tenant_id": "1",
+   "patient_id": "p5",
+   "encounter_id": "e6",
+   "number": "NG-INV-2019",
+   "status": "paid",
+   "issued_at": "2026-07-30",
+   "due_at": "2026-08-13",
+   "line_items": [
+    {
+     "id": "li11",
+     "description": "Denture adjustment",
+     "source": "procedure",
+     "qty": 1,
+     "unit_price": 800,
+     "tax_pct": 0
+    }
+   ],
+   "payments": [
+    {
+     "id": "pay4",
+     "invoice_id": "inv5",
+     "amount": 800,
+     "method": "cash",
+     "at": "2026-07-30 10:35"
+    }
+   ]
+  },
+  {
+   "id": "inv6",
+   "tenant_id": "1",
+   "patient_id": "p1",
+   "encounter_id": "e4",
+   "number": "NG-INV-2036",
+   "status": "void",
+   "issued_at": "2026-08-12",
+   "due_at": "2026-08-26",
+   "line_items": [
+    {
+     "id": "li12",
+     "description": "Consultation — general",
+     "source": "consultation",
+     "qty": 1,
+     "unit_price": 500,
+     "tax_pct": 0
+    }
+   ],
+   "payments": []
+  },
+  {
+   "id": "inv7",
+   "tenant_id": "1",
+   "patient_id": "p8",
+   "encounter_id": null,
+   "number": "NG-INV-2044",
+   "status": "draft",
+   "issued_at": "2026-08-19",
+   "due_at": "2026-09-02",
+   "line_items": [
+    {
+     "id": "li13",
+     "description": "Consultation — periodontal",
+     "source": "consultation",
+     "qty": 1,
+     "unit_price": 600,
+     "tax_pct": 0
+    }
+   ],
+   "payments": []
+  },
+  {
+   "id": "inv20",
+   "tenant_id": "2",
+   "patient_id": "p20",
+   "encounter_id": "e20",
+   "number": "CV-INV-0812",
+   "status": "issued",
+   "issued_at": "2026-08-19",
+   "due_at": "2026-09-02",
+   "line_items": [
+    {
+     "id": "li20",
+     "description": "Cataract pre-operative assessment",
+     "source": "consultation",
+     "qty": 1,
+     "unit_price": 1200,
+     "tax_pct": 0
+    },
+    {
+     "id": "li21",
+     "description": "Biometry",
+     "source": "procedure",
+     "qty": 1,
+     "unit_price": 1500,
+     "tax_pct": 0
+    }
+   ],
+   "payments": []
+  },
+  {
+   "id": "inv21",
+   "tenant_id": "2",
+   "patient_id": "p22",
+   "encounter_id": "e21",
+   "number": "CV-INV-0813",
+   "status": "paid",
+   "issued_at": "2026-08-19",
+   "due_at": "2026-09-02",
+   "line_items": [
+    {
+     "id": "li22",
+     "description": "Urgent eye consultation",
+     "source": "consultation",
+     "qty": 1,
+     "unit_price": 700,
+     "tax_pct": 0
+    }
+   ],
+   "payments": [
+    {
+     "id": "pay20",
+     "invoice_id": "inv21",
+     "amount": 700,
+     "method": "card",
+     "at": "2026-08-19 10:22",
+     "reference": "CARD-2210"
+    }
+   ]
+  },
+  {
+   "id": "inv22",
+   "tenant_id": "2",
+   "patient_id": "p23",
+   "encounter_id": "e22",
+   "number": "CV-INV-0790",
+   "status": "partially_paid",
+   "issued_at": "2026-08-05",
+   "due_at": "2026-08-19",
+   "line_items": [
+    {
+     "id": "li23",
+     "description": "Glaucoma surveillance visit",
+     "source": "consultation",
+     "qty": 1,
+     "unit_price": 900,
+     "tax_pct": 0
+    },
+    {
+     "id": "li24",
+     "description": "Visual field test",
+     "source": "procedure",
+     "qty": 1,
+     "unit_price": 1200,
+     "tax_pct": 0
+    }
+   ],
+   "payments": [
+    {
+     "id": "pay21",
+     "invoice_id": "inv22",
+     "amount": 1000,
+     "method": "insurance",
+     "at": "2026-08-09 09:00",
+     "reference": "AXA-CLM-7781"
+    }
+   ]
+  }
+ ],
+ "LAB_ORDERS": [
+  {
+   "id": "l1",
+   "tenant_id": "1",
+   "encounter_id": "e5",
+   "patient_id": "p11",
+   "ordered_by": "u2",
+   "test_code": "OPG",
+   "test_name": "Orthopantomogram",
+   "panel": "Imaging",
+   "status": "verified",
+   "ordered_at": "2026-08-12 15:30",
+   "resulted_at": "2026-08-12 16:40",
+   "verified_at": "2026-08-12 17:05",
+   "verified_by": "u5",
+   "note": "Assess 48 angulation before extraction.",
+   "results": [
+    {
+     "analyte": "48 angulation",
+     "value": "Mesioangular",
+     "unit": "",
+     "reference": "—",
+     "flag": "normal"
+    },
+    {
+     "analyte": "Proximity to IAN",
+     "value": "Close",
+     "unit": "",
+     "reference": "—",
+     "flag": "high"
+    },
+    {
+     "analyte": "Bone level",
+     "value": "Within normal limits",
+     "unit": "",
+     "reference": "—",
+     "flag": "normal"
+    }
+   ]
+  },
+  {
+   "id": "l2",
+   "tenant_id": "1",
+   "encounter_id": "e1",
+   "patient_id": "p2",
+   "ordered_by": "u1",
+   "test_code": "FBC",
+   "test_name": "Full blood count",
+   "panel": "Haematology",
+   "status": "resulted",
+   "ordered_at": "2026-08-19 09:33",
+   "resulted_at": "2026-08-19 11:02",
+   "note": "Pre-surgical baseline.",
+   "results": [
+    {
+     "analyte": "Haemoglobin",
+     "value": "13.9",
+     "unit": "g/dL",
+     "reference": "13.0–17.0",
+     "flag": "normal"
+    },
+    {
+     "analyte": "White cell count",
+     "value": "11.4",
+     "unit": "10⁹/L",
+     "reference": "4.0–11.0",
+     "flag": "high"
+    },
+    {
+     "analyte": "Platelets",
+     "value": "268",
+     "unit": "10⁹/L",
+     "reference": "150–400",
+     "flag": "normal"
+    }
+   ]
+  },
+  {
+   "id": "l3",
+   "tenant_id": "1",
+   "encounter_id": "e3",
+   "patient_id": "p10",
+   "ordered_by": "u2",
+   "test_code": "PA-21",
+   "test_name": "Periapical radiograph, tooth 21",
+   "panel": "Imaging",
+   "status": "pending",
+   "ordered_at": "2026-08-19 10:06",
+   "note": "Rule out root fracture.",
+   "results": []
+  },
+  {
+   "id": "l4",
+   "tenant_id": "1",
+   "encounter_id": "e2",
+   "patient_id": "p3",
+   "ordered_by": "u1",
+   "test_code": "HBA1C",
+   "test_name": "Glycated haemoglobin",
+   "panel": "Biochemistry",
+   "status": "ordered",
+   "ordered_at": "2026-08-19 10:01",
+   "note": "Recurrent gingivitis — screen for glucose intolerance.",
+   "results": []
+  },
+  {
+   "id": "l5",
+   "tenant_id": "1",
+   "encounter_id": "e4",
+   "patient_id": "p1",
+   "ordered_by": "u1",
+   "test_code": "BW",
+   "test_name": "Bitewing radiographs",
+   "panel": "Imaging",
+   "status": "verified",
+   "ordered_at": "2026-08-12 10:15",
+   "resulted_at": "2026-08-12 10:52",
+   "verified_at": "2026-08-12 11:10",
+   "verified_by": "u5",
+   "results": [
+    {
+     "analyte": "Interproximal caries",
+     "value": "None detected",
+     "unit": "",
+     "reference": "—",
+     "flag": "normal"
+    },
+    {
+     "analyte": "Cervical burnout",
+     "value": "24, 25",
+     "unit": "",
+     "reference": "—",
+     "flag": "low"
+    }
+   ]
+  },
+  {
+   "id": "l30",
+   "tenant_id": "3",
+   "encounter_id": "e30",
+   "patient_id": "p30",
+   "ordered_by": "u20",
+   "test_code": "PATCH",
+   "test_name": "Patch test — standard series",
+   "panel": "Allergy",
+   "status": "pending",
+   "ordered_at": "2026-08-19 09:52",
+   "note": "Read at 48 and 96 hours.",
+   "results": []
+  },
+  {
+   "id": "l31",
+   "tenant_id": "3",
+   "encounter_id": "e31",
+   "patient_id": "p32",
+   "ordered_by": "u20",
+   "test_code": "MYC",
+   "test_name": "Skin scraping — mycology",
+   "panel": "Microbiology",
+   "status": "resulted",
+   "ordered_at": "2026-08-19 10:20",
+   "resulted_at": "2026-08-19 12:15",
+   "results": [
+    {
+     "analyte": "Direct microscopy",
+     "value": "No fungal elements",
+     "unit": "",
+     "reference": "Negative",
+     "flag": "normal"
+    },
+    {
+     "analyte": "Culture (7 days)",
+     "value": "Pending",
+     "unit": "",
+     "reference": "No growth",
+     "flag": "normal"
+    }
+   ]
+  }
+ ],
+ "PATIENTS": [
+  {
+   "id": "p1",
+   "tenant_id": "1",
+   "mrn": "NG-1042",
+   "full_name": "Rosalind Achebe",
+   "dob": "1986-03-14",
+   "sex": "female",
+   "phone": "+44 7700 900142",
+   "email": "r.achebe@mail.com",
+   "address": "18 Cavendish Row, Manchester M20",
+   "blood_group": "O+",
+   "allergies": "Penicillin",
+   "registered_at": "2023-06-12",
+   "last_visit": "2026-08-12",
+   "tags": [
+    "Recall due"
+   ],
+   "clinical_ext": {
+    "last_cleaning": "2026-02-03",
+    "bruxism": true,
+    "ortho_history": "Braces — completed",
+    "insurance_number": "BUPA-88213",
+    "referred_by": "Dr. Lang, GP"
+   }
+  },
+  {
+   "id": "p2",
+   "tenant_id": "1",
+   "mrn": "NG-1103",
+   "full_name": "Daniel Osei",
+   "dob": "1974-11-02",
+   "sex": "male",
+   "phone": "+44 7700 900203",
+   "email": "d.osei@mail.com",
+   "address": "4 Bramhall Lane, Stockport SK3",
+   "blood_group": "A+",
+   "allergies": "None recorded",
+   "registered_at": "2023-09-01",
+   "last_visit": "2026-08-19",
+   "clinical_ext": {
+    "last_cleaning": "2025-11-19",
+    "bruxism": false,
+    "ortho_history": "None",
+    "insurance_number": "AXA-40118"
+   }
+  },
+  {
+   "id": "p3",
+   "tenant_id": "1",
+   "mrn": "NG-1188",
+   "full_name": "Meera Sundaram",
+   "dob": "1998-07-26",
+   "sex": "female",
+   "phone": "+44 7700 900318",
+   "blood_group": "B+",
+   "allergies": "Latex",
+   "registered_at": "2024-02-20",
+   "last_visit": "2026-08-19",
+   "tags": [
+    "Anxious patient"
+   ],
+   "clinical_ext": {
+    "last_cleaning": "2026-05-04",
+    "bruxism": true,
+    "ortho_history": "Aligners"
+   }
+  },
+  {
+   "id": "p4",
+   "tenant_id": "1",
+   "mrn": "NG-1204",
+   "full_name": "Callum Whitaker",
+   "dob": "2015-01-09",
+   "sex": "male",
+   "phone": "+44 7700 900411",
+   "blood_group": "O-",
+   "allergies": "None recorded",
+   "registered_at": "2024-05-06",
+   "last_visit": "2026-08-19",
+   "tags": [
+    "Paediatric"
+   ],
+   "clinical_ext": {
+    "last_cleaning": "2026-06-18",
+    "bruxism": false,
+    "ortho_history": "Braces — in treatment",
+    "referred_by": "School screening"
+   }
+  },
+  {
+   "id": "p5",
+   "tenant_id": "1",
+   "mrn": "NG-1237",
+   "full_name": "Beatrice Lund",
+   "dob": "1959-04-30",
+   "sex": "female",
+   "phone": "+44 7700 900527",
+   "email": "b.lund@mail.com",
+   "blood_group": "AB+",
+   "allergies": "Aspirin",
+   "registered_at": "2024-08-14",
+   "last_visit": "2026-07-30",
+   "clinical_ext": {
+    "last_cleaning": "2026-01-22",
+    "bruxism": false,
+    "ortho_history": "Retainer only",
+    "insurance_number": "VIT-99034"
+   }
+  },
+  {
+   "id": "p6",
+   "tenant_id": "1",
+   "mrn": "NG-1290",
+   "full_name": "Jonah Fitzgerald",
+   "dob": "1991-12-18",
+   "sex": "male",
+   "phone": "+44 7700 900630",
+   "blood_group": "A-",
+   "allergies": "None recorded",
+   "registered_at": "2025-01-30",
+   "last_visit": "2026-08-19",
+   "clinical_ext": {
+    "last_cleaning": "2026-03-11",
+    "bruxism": true,
+    "ortho_history": "None"
+   }
+  },
+  {
+   "id": "p7",
+   "tenant_id": "1",
+   "mrn": "NG-1315",
+   "full_name": "Ayesha Karim",
+   "dob": "2001-09-05",
+   "sex": "female",
+   "phone": "+44 7700 900744",
+   "email": "a.karim@mail.com",
+   "blood_group": "B-",
+   "allergies": "Ibuprofen",
+   "registered_at": "2025-03-18",
+   "last_visit": "2026-08-19",
+   "clinical_ext": {
+    "last_cleaning": "2026-04-09",
+    "bruxism": false,
+    "ortho_history": "Aligners",
+    "insurance_number": "BUPA-71100"
+   }
+  },
+  {
+   "id": "p8",
+   "tenant_id": "1",
+   "mrn": "NG-1360",
+   "full_name": "Victor Adeyemi",
+   "dob": "1968-02-23",
+   "sex": "male",
+   "phone": "+44 7700 900851",
+   "blood_group": "O+",
+   "allergies": "Codeine",
+   "registered_at": "2025-06-02",
+   "last_visit": "2026-08-19",
+   "tags": [
+    "Diabetic"
+   ],
+   "clinical_ext": {
+    "last_cleaning": "2025-12-09",
+    "bruxism": false,
+    "ortho_history": "None"
+   }
+  },
+  {
+   "id": "p9",
+   "tenant_id": "1",
+   "mrn": "NG-1402",
+   "full_name": "Freya Ngata",
+   "dob": "1994-06-11",
+   "sex": "female",
+   "phone": "+44 7700 900966",
+   "blood_group": "A+",
+   "allergies": "None recorded",
+   "registered_at": "2025-09-22",
+   "last_visit": "2026-08-19",
+   "clinical_ext": {
+    "last_cleaning": "2026-07-01",
+    "bruxism": false,
+    "ortho_history": "None"
+   }
+  },
+  {
+   "id": "p10",
+   "tenant_id": "1",
+   "mrn": "NG-1455",
+   "full_name": "Samuel Rée",
+   "dob": "1982-10-08",
+   "sex": "male",
+   "phone": "+44 7700 901071",
+   "email": "s.ree@mail.com",
+   "blood_group": "AB-",
+   "allergies": "None recorded",
+   "registered_at": "2026-01-14",
+   "last_visit": "2026-08-19",
+   "clinical_ext": {
+    "last_cleaning": "2026-01-14",
+    "bruxism": true,
+    "ortho_history": "None",
+    "referred_by": "Walk-in"
+   }
+  },
+  {
+   "id": "p11",
+   "tenant_id": "1",
+   "mrn": "NG-1478",
+   "full_name": "Priyanka Bose",
+   "dob": "1979-05-19",
+   "sex": "female",
+   "phone": "+44 7700 901188",
+   "blood_group": "B+",
+   "allergies": "Sulfa drugs",
+   "registered_at": "2026-04-03",
+   "last_visit": "2026-08-12",
+   "clinical_ext": {
+    "last_cleaning": "2026-04-03",
+    "bruxism": false,
+    "ortho_history": "None",
+    "insurance_number": "AVIVA-33217"
+   }
+  },
+  {
+   "id": "p12",
+   "tenant_id": "1",
+   "mrn": "NG-1501",
+   "full_name": "Otto Lindgren",
+   "dob": "2019-08-27",
+   "sex": "male",
+   "phone": "+44 7700 901294",
+   "blood_group": "O+",
+   "allergies": "None recorded",
+   "registered_at": "2026-07-11",
+   "last_visit": null,
+   "tags": [
+    "Paediatric",
+    "First visit"
+   ],
+   "clinical_ext": {
+    "bruxism": false,
+    "ortho_history": "None"
+   }
+  },
+  {
+   "id": "p20",
+   "tenant_id": "2",
+   "mrn": "CV-2011",
+   "full_name": "Harriet Doyle",
+   "dob": "1952-01-17",
+   "sex": "female",
+   "phone": "+44 7700 902011",
+   "blood_group": "A+",
+   "allergies": "None recorded",
+   "registered_at": "2024-02-02",
+   "last_visit": "2026-08-19",
+   "tags": [
+    "Cataract list"
+   ],
+   "clinical_ext": {
+    "spectacle_since": 42,
+    "contact_lens": false,
+    "family_glaucoma": true,
+    "employer": "Retired"
+   }
+  },
+  {
+   "id": "p21",
+   "tenant_id": "2",
+   "mrn": "CV-2033",
+   "full_name": "Idris Malik",
+   "dob": "1988-09-23",
+   "sex": "male",
+   "phone": "+44 7700 902033",
+   "email": "i.malik@mail.com",
+   "blood_group": "O+",
+   "allergies": "None recorded",
+   "registered_at": "2024-05-19",
+   "last_visit": "2026-08-19",
+   "clinical_ext": {
+    "spectacle_since": 12,
+    "contact_lens": true,
+    "family_glaucoma": false,
+    "employer": "Northern Rail — VDU scheme"
+   }
+  },
+  {
+   "id": "p22",
+   "tenant_id": "2",
+   "mrn": "CV-2064",
+   "full_name": "Wen Li",
+   "dob": "1996-03-08",
+   "sex": "female",
+   "phone": "+44 7700 902064",
+   "blood_group": "B+",
+   "allergies": "Chloramphenicol",
+   "registered_at": "2025-01-11",
+   "last_visit": "2026-08-19",
+   "clinical_ext": {
+    "spectacle_since": 19,
+    "contact_lens": true,
+    "family_glaucoma": false
+   }
+  },
+  {
+   "id": "p23",
+   "tenant_id": "2",
+   "mrn": "CV-2090",
+   "full_name": "Gordon Pryce",
+   "dob": "1961-07-14",
+   "sex": "male",
+   "phone": "+44 7700 902090",
+   "blood_group": "A-",
+   "allergies": "None recorded",
+   "registered_at": "2025-04-27",
+   "last_visit": "2026-08-05",
+   "tags": [
+    "Glaucoma watch"
+   ],
+   "clinical_ext": {
+    "spectacle_since": 38,
+    "contact_lens": false,
+    "family_glaucoma": true
+   }
+  },
+  {
+   "id": "p24",
+   "tenant_id": "2",
+   "mrn": "CV-2118",
+   "full_name": "Aoife Brennan",
+   "dob": "2005-11-30",
+   "sex": "female",
+   "phone": "+44 7700 902118",
+   "blood_group": "O-",
+   "allergies": "None recorded",
+   "registered_at": "2025-10-02",
+   "last_visit": "2026-08-19",
+   "clinical_ext": {
+    "spectacle_since": 8,
+    "contact_lens": false,
+    "family_glaucoma": false
+   }
+  },
+  {
+   "id": "p25",
+   "tenant_id": "2",
+   "mrn": "CV-2140",
+   "full_name": "Terence Ofori",
+   "dob": "1977-04-21",
+   "sex": "male",
+   "phone": "+44 7700 902140",
+   "blood_group": "AB+",
+   "allergies": "None recorded",
+   "registered_at": "2026-03-16",
+   "last_visit": null,
+   "tags": [
+    "First visit"
+   ],
+   "clinical_ext": {
+    "contact_lens": false,
+    "family_glaucoma": false
+   }
+  },
+  {
+   "id": "p30",
+   "tenant_id": "3",
+   "mrn": "RW-3007",
+   "full_name": "Nell Carraway",
+   "dob": "1993-02-05",
+   "sex": "female",
+   "phone": "+44 7700 903007",
+   "blood_group": "A+",
+   "allergies": "None recorded",
+   "registered_at": "2026-07-29",
+   "last_visit": "2026-08-19",
+   "clinical_ext": {
+    "fitzpatrick": "II",
+    "atopy": [
+     "Eczema",
+     "Asthma"
+    ],
+    "sun_exposure": "Moderate"
+   }
+  },
+  {
+   "id": "p31",
+   "tenant_id": "3",
+   "mrn": "RW-3014",
+   "full_name": "Bashir Hadid",
+   "dob": "1985-06-30",
+   "sex": "male",
+   "phone": "+44 7700 903014",
+   "blood_group": "O+",
+   "allergies": "Neomycin",
+   "registered_at": "2026-07-30",
+   "last_visit": "2026-08-19",
+   "tags": [
+    "Phototherapy"
+   ],
+   "clinical_ext": {
+    "fitzpatrick": "IV",
+    "atopy": [
+     "Allergic rhinitis"
+    ],
+    "sun_exposure": "High"
+   }
+  },
+  {
+   "id": "p32",
+   "tenant_id": "3",
+   "mrn": "RW-3021",
+   "full_name": "Marguerite Oyelaran",
+   "dob": "1966-12-12",
+   "sex": "female",
+   "phone": "+44 7700 903021",
+   "blood_group": "B+",
+   "allergies": "None recorded",
+   "registered_at": "2026-08-03",
+   "last_visit": "2026-08-19",
+   "clinical_ext": {
+    "fitzpatrick": "V",
+    "atopy": [],
+    "sun_exposure": "Minimal"
+   }
+  },
+  {
+   "id": "p33",
+   "tenant_id": "3",
+   "mrn": "RW-3028",
+   "full_name": "Elias Wender",
+   "dob": "2008-05-16",
+   "sex": "male",
+   "phone": "+44 7700 903028",
+   "blood_group": "A-",
+   "allergies": "None recorded",
+   "registered_at": "2026-08-08",
+   "last_visit": "2026-08-19",
+   "tags": [
+    "Paediatric"
+   ],
+   "clinical_ext": {
+    "fitzpatrick": "I",
+    "atopy": [
+     "Eczema"
+    ],
+    "sun_exposure": "Minimal"
+   }
+  },
+  {
+   "id": "p34",
+   "tenant_id": "3",
+   "mrn": "RW-3035",
+   "full_name": "Junko Watanabe",
+   "dob": "1990-10-03",
+   "sex": "female",
+   "phone": "+44 7700 903035",
+   "blood_group": "O-",
+   "allergies": "None recorded",
+   "registered_at": "2026-08-14",
+   "last_visit": null,
+   "tags": [
+    "First visit"
+   ],
+   "clinical_ext": {
+    "fitzpatrick": "III",
+    "atopy": [],
+    "sun_exposure": "Moderate"
+   }
+  }
+ ],
+ "PLATFORM_USERS": [
+  {
+   "id": "s1",
+   "name": "Ines Okonkwo",
+   "email": "ines@astrale.health",
+   "password": "ines-2026",
+   "initials": "IO",
+   "title": "Platform operations"
+  },
+  {
+   "id": "s2",
+   "name": "Rafael Ortiz",
+   "email": "rafael@astrale.health",
+   "password": "rafael-2026",
+   "initials": "RO",
+   "title": "Customer success"
+  }
+ ],
+ "PRESCRIPTIONS": [
+  {
+   "id": "rx1",
+   "tenant_id": "1",
+   "encounter_id": "e3",
+   "patient_id": "p10",
+   "doctor_id": "u2",
+   "created_at": "2026-08-19 10:08",
+   "status": "pending",
+   "items": [
+    {
+     "id": "rxi1",
+     "prescription_id": "rx1",
+     "item_id": "i2",
+     "medicine": "Ibuprofen",
+     "strength": "400 mg",
+     "dosage": "1 tablet",
+     "frequency": "Three times daily",
+     "duration": "3 days",
+     "instructions": "After food",
+     "qty": 9,
+     "dispensed_qty": 0,
+     "status": "pending"
+    },
+    {
+     "id": "rxi2",
+     "prescription_id": "rx1",
+     "item_id": "i3",
+     "medicine": "Chlorhexidine mouthwash",
+     "strength": "0.2%",
+     "dosage": "10 ml rinse",
+     "frequency": "Twice daily",
+     "duration": "7 days",
+     "instructions": "Do not swallow",
+     "qty": 1,
+     "dispensed_qty": 0,
+     "status": "pending"
+    }
+   ]
+  },
+  {
+   "id": "rx2",
+   "tenant_id": "1",
+   "encounter_id": "e5",
+   "patient_id": "p11",
+   "doctor_id": "u2",
+   "created_at": "2026-08-12 15:26",
+   "status": "partially_dispensed",
+   "items": [
+    {
+     "id": "rxi3",
+     "prescription_id": "rx2",
+     "item_id": "i1",
+     "medicine": "Amoxicillin",
+     "strength": "500 mg",
+     "dosage": "1 capsule",
+     "frequency": "Three times daily",
+     "duration": "5 days",
+     "instructions": "Complete the course",
+     "qty": 15,
+     "dispensed_qty": 15,
+     "status": "dispensed"
+    },
+    {
+     "id": "rxi4",
+     "prescription_id": "rx2",
+     "item_id": "i8",
+     "medicine": "Metronidazole",
+     "strength": "400 mg",
+     "dosage": "1 tablet",
+     "frequency": "Three times daily",
+     "duration": "5 days",
+     "instructions": "Avoid alcohol",
+     "qty": 15,
+     "dispensed_qty": 6,
+     "status": "partially_dispensed"
+    }
+   ]
+  },
+  {
+   "id": "rx3",
+   "tenant_id": "1",
+   "encounter_id": "e1",
+   "patient_id": "p2",
+   "doctor_id": "u1",
+   "created_at": "2026-08-19 09:31",
+   "status": "dispensed",
+   "items": [
+    {
+     "id": "rxi5",
+     "prescription_id": "rx3",
+     "item_id": "i9",
+     "medicine": "Paracetamol",
+     "strength": "650 mg",
+     "dosage": "1 tablet",
+     "frequency": "As needed, max 4 daily",
+     "duration": "3 days",
+     "qty": 12,
+     "dispensed_qty": 12,
+     "status": "dispensed"
+    }
+   ]
+  },
+  {
+   "id": "rx4",
+   "tenant_id": "1",
+   "encounter_id": "e4",
+   "patient_id": "p1",
+   "doctor_id": "u1",
+   "created_at": "2026-08-12 10:22",
+   "status": "dispensed",
+   "items": [
+    {
+     "id": "rxi6",
+     "prescription_id": "rx4",
+     "item_id": "i6",
+     "medicine": "Duraphat fluoride toothpaste",
+     "strength": "5000 ppm",
+     "dosage": "Pea-sized",
+     "frequency": "Once at night",
+     "duration": "3 months",
+     "instructions": "Do not rinse after brushing",
+     "qty": 1,
+     "dispensed_qty": 1,
+     "status": "dispensed"
+    }
+   ]
+  },
+  {
+   "id": "rx5",
+   "tenant_id": "1",
+   "encounter_id": "e2",
+   "patient_id": "p3",
+   "doctor_id": "u1",
+   "created_at": "2026-08-19 09:58",
+   "status": "pending",
+   "items": [
+    {
+     "id": "rxi7",
+     "prescription_id": "rx5",
+     "item_id": "i3",
+     "medicine": "Chlorhexidine mouthwash",
+     "strength": "0.2%",
+     "dosage": "10 ml rinse",
+     "frequency": "Twice daily",
+     "duration": "14 days",
+     "qty": 1,
+     "dispensed_qty": 0,
+     "status": "pending"
+    }
+   ]
+  },
+  {
+   "id": "rx20",
+   "tenant_id": "2",
+   "encounter_id": "e21",
+   "patient_id": "p22",
+   "doctor_id": "u10",
+   "created_at": "2026-08-19 10:11",
+   "status": "pending",
+   "items": [
+    {
+     "id": "rxi20",
+     "prescription_id": "rx20",
+     "item_id": null,
+     "medicine": "Fusidic acid eye drops",
+     "strength": "1%",
+     "dosage": "1 drop right eye",
+     "frequency": "Twice daily",
+     "duration": "7 days",
+     "qty": 1,
+     "dispensed_qty": 0,
+     "status": "pending"
+    }
+   ]
+  },
+  {
+   "id": "rx21",
+   "tenant_id": "2",
+   "encounter_id": "e22",
+   "patient_id": "p23",
+   "doctor_id": "u11",
+   "created_at": "2026-08-05 11:40",
+   "status": "pending",
+   "items": [
+    {
+     "id": "rxi21",
+     "prescription_id": "rx21",
+     "item_id": null,
+     "medicine": "Latanoprost eye drops",
+     "strength": "50 µg/ml",
+     "dosage": "1 drop each eye",
+     "frequency": "At night",
+     "duration": "3 months",
+     "qty": 3,
+     "dispensed_qty": 0,
+     "status": "pending"
+    }
+   ]
+  },
+  {
+   "id": "rx30",
+   "tenant_id": "3",
+   "encounter_id": "e30",
+   "patient_id": "p30",
+   "doctor_id": "u20",
+   "created_at": "2026-08-19 09:55",
+   "status": "pending",
+   "items": [
+    {
+     "id": "rxi30",
+     "prescription_id": "rx30",
+     "item_id": null,
+     "medicine": "Mometasone furoate ointment",
+     "strength": "0.1%",
+     "dosage": "Thin layer",
+     "frequency": "Once daily",
+     "duration": "14 days",
+     "instructions": "Affected areas only",
+     "qty": 1,
+     "dispensed_qty": 0,
+     "status": "pending"
+    },
+    {
+     "id": "rxi31",
+     "prescription_id": "rx30",
+     "item_id": null,
+     "medicine": "Emollient cream",
+     "strength": "500 g",
+     "dosage": "Liberally",
+     "frequency": "Three times daily",
+     "duration": "Ongoing",
+     "qty": 2,
+     "dispensed_qty": 0,
+     "status": "pending"
+    }
+   ]
+  },
+  {
+   "id": "rx31",
+   "tenant_id": "3",
+   "encounter_id": "e31",
+   "patient_id": "p32",
+   "doctor_id": "u20",
+   "created_at": "2026-08-19 10:24",
+   "status": "dispensed",
+   "items": [
+    {
+     "id": "rxi32",
+     "prescription_id": "rx31",
+     "item_id": null,
+     "medicine": "Ketoconazole shampoo",
+     "strength": "2%",
+     "dosage": "Apply, leave 5 min",
+     "frequency": "Twice weekly",
+     "duration": "4 weeks",
+     "qty": 1,
+     "dispensed_qty": 1,
+     "status": "dispensed"
+    }
+   ]
+  }
+ ],
+ "QUEUE": [
+  {
+   "id": "q1",
+   "tenant_id": "1",
+   "patient_id": "p2",
+   "appointment_id": "a1",
+   "doctor_id": "u1",
+   "token_no": 1,
+   "status": "completed",
+   "checked_in_at": "08:52",
+   "called_at": "09:01",
+   "started_at": "09:03",
+   "completed_at": "09:34",
+   "priority": "routine",
+   "reason": "Crown fit — upper right first molar"
+  },
+  {
+   "id": "q2",
+   "tenant_id": "1",
+   "patient_id": "p3",
+   "appointment_id": "a2",
+   "doctor_id": "u1",
+   "token_no": 2,
+   "status": "completed",
+   "checked_in_at": "09:18",
+   "called_at": "09:36",
+   "started_at": "09:38",
+   "completed_at": "10:02",
+   "priority": "routine",
+   "reason": "Scale and polish"
+  },
+  {
+   "id": "q3",
+   "tenant_id": "1",
+   "patient_id": "p10",
+   "appointment_id": null,
+   "doctor_id": "u2",
+   "token_no": 3,
+   "status": "completed",
+   "checked_in_at": "09:25",
+   "called_at": "09:44",
+   "started_at": "09:47",
+   "completed_at": "10:10",
+   "priority": "urgent",
+   "reason": "Walk-in — chipped incisor"
+  },
+  {
+   "id": "q4",
+   "tenant_id": "1",
+   "patient_id": "p7",
+   "appointment_id": "a3",
+   "doctor_id": "u2",
+   "token_no": 4,
+   "status": "in_consultation",
+   "checked_in_at": "09:51",
+   "called_at": "10:12",
+   "started_at": "10:15",
+   "priority": "routine",
+   "reason": "Root canal — review"
+  },
+  {
+   "id": "q5",
+   "tenant_id": "1",
+   "patient_id": "p4",
+   "appointment_id": "a4",
+   "doctor_id": "u1",
+   "token_no": 5,
+   "status": "called",
+   "checked_in_at": "10:14",
+   "called_at": "10:38",
+   "priority": "routine",
+   "reason": "Ortho adjustment"
+  },
+  {
+   "id": "q6",
+   "tenant_id": "1",
+   "patient_id": "p8",
+   "appointment_id": "a5",
+   "doctor_id": "u2",
+   "token_no": 6,
+   "status": "waiting",
+   "checked_in_at": "10:41",
+   "priority": "urgent",
+   "reason": "Persistent gum bleeding"
+  },
+  {
+   "id": "q7",
+   "tenant_id": "1",
+   "patient_id": "p6",
+   "appointment_id": null,
+   "doctor_id": "u1",
+   "token_no": 7,
+   "status": "waiting",
+   "checked_in_at": "10:55",
+   "priority": "routine",
+   "reason": "Walk-in — jaw ache on waking"
+  },
+  {
+   "id": "q8",
+   "tenant_id": "1",
+   "patient_id": "p9",
+   "appointment_id": null,
+   "doctor_id": "u1",
+   "token_no": 8,
+   "status": "waiting",
+   "checked_in_at": "11:06",
+   "priority": "routine",
+   "reason": "Walk-in — whitening enquiry"
+  },
+  {
+   "id": "q9",
+   "tenant_id": "1",
+   "patient_id": "p1",
+   "appointment_id": "a9",
+   "doctor_id": "u1",
+   "token_no": 9,
+   "status": "no_show",
+   "checked_in_at": "—",
+   "priority": "routine",
+   "reason": "Six-month recall"
+  },
+  {
+   "id": "q20",
+   "tenant_id": "2",
+   "patient_id": "p20",
+   "appointment_id": "a20",
+   "doctor_id": "u10",
+   "token_no": 1,
+   "status": "completed",
+   "checked_in_at": "09:02",
+   "called_at": "09:16",
+   "started_at": "09:18",
+   "completed_at": "09:49",
+   "priority": "routine",
+   "reason": "Cataract pre-op assessment"
+  },
+  {
+   "id": "q21",
+   "tenant_id": "2",
+   "patient_id": "p22",
+   "appointment_id": null,
+   "doctor_id": "u10",
+   "token_no": 2,
+   "status": "completed",
+   "checked_in_at": "09:40",
+   "called_at": "09:55",
+   "started_at": "09:57",
+   "completed_at": "10:14",
+   "priority": "routine",
+   "reason": "Walk-in — red eye"
+  },
+  {
+   "id": "q22",
+   "tenant_id": "2",
+   "patient_id": "p21",
+   "appointment_id": "a21",
+   "doctor_id": "u10",
+   "token_no": 3,
+   "status": "in_consultation",
+   "checked_in_at": "09:54",
+   "called_at": "10:16",
+   "started_at": "10:19",
+   "priority": "routine",
+   "reason": "Annual refraction"
+  },
+  {
+   "id": "q23",
+   "tenant_id": "2",
+   "patient_id": "p24",
+   "appointment_id": "a23",
+   "doctor_id": "u10",
+   "token_no": 4,
+   "status": "waiting",
+   "checked_in_at": "11:21",
+   "priority": "routine",
+   "reason": "Myopia progression review"
+  },
+  {
+   "id": "q30",
+   "tenant_id": "3",
+   "patient_id": "p30",
+   "appointment_id": "a30",
+   "doctor_id": "u20",
+   "token_no": 1,
+   "status": "completed",
+   "checked_in_at": "09:21",
+   "called_at": "09:33",
+   "started_at": "09:35",
+   "completed_at": "10:01",
+   "priority": "routine",
+   "reason": "Eczema flare"
+  },
+  {
+   "id": "q31",
+   "tenant_id": "3",
+   "patient_id": "p32",
+   "appointment_id": null,
+   "doctor_id": "u20",
+   "token_no": 2,
+   "status": "completed",
+   "checked_in_at": "09:48",
+   "called_at": "10:04",
+   "started_at": "10:06",
+   "completed_at": "10:27",
+   "priority": "routine",
+   "reason": "Walk-in — scalp itch"
+  },
+  {
+   "id": "q32",
+   "tenant_id": "3",
+   "patient_id": "p31",
+   "appointment_id": "a31",
+   "doctor_id": "u20",
+   "token_no": 3,
+   "status": "called",
+   "checked_in_at": "10:09",
+   "called_at": "10:31",
+   "priority": "routine",
+   "reason": "Phototherapy review"
+  },
+  {
+   "id": "q33",
+   "tenant_id": "3",
+   "patient_id": "p33",
+   "appointment_id": "a32",
+   "doctor_id": "u20",
+   "token_no": 4,
+   "status": "waiting",
+   "checked_in_at": "10:52",
+   "priority": "routine",
+   "reason": "Atopic dermatitis follow-up"
+  }
+ ],
+ "TENANTS": [
+  {
+   "id": "1",
+   "name": "Northgate Dental Studio",
+   "slug": "northgate",
+   "clinical_type": "dental",
+   "status": "active",
+   "city": "Manchester",
+   "plan": "Practice",
+   "since": "2023-04-02"
+  },
+  {
+   "id": "2",
+   "name": "Clearview Eye Centre",
+   "slug": "clearview",
+   "clinical_type": "ophthalmology",
+   "status": "active",
+   "city": "Leeds",
+   "plan": "Practice",
+   "since": "2024-01-15"
+  },
+  {
+   "id": "3",
+   "name": "Rowan Skin & Laser",
+   "slug": "rowan",
+   "clinical_type": "dermatology",
+   "status": "trial",
+   "city": "Bristol",
+   "plan": "Trial",
+   "since": "2026-07-28"
+  }
+ ],
+ "TENANT_CONFIGS": [
+  {
+   "tenant_id": "1",
+   "contact_phone": "+44 161 496 0110",
+   "contact_email": "hello@northgate.clinic",
+   "address": "22 Northgate Parade, Manchester M4 2BS",
+   "mrn_prefix": "NG",
+   "day_start": "08:30",
+   "day_end": "18:00",
+   "slot_minutes": 30,
+   "default_duration": 30,
+   "token_prefix": "N",
+   "urgent_first": true,
+   "invoice_prefix": "NG-INV",
+   "tax_pct": 0,
+   "payment_terms_days": 14,
+   "currency": "INR"
+  },
+  {
+   "tenant_id": "2",
+   "contact_phone": "+44 113 202 8840",
+   "contact_email": "reception@clearview.eye",
+   "address": "5 Park Row, Leeds LS1 5HD",
+   "mrn_prefix": "CV",
+   "day_start": "09:00",
+   "day_end": "17:30",
+   "slot_minutes": 20,
+   "default_duration": 20,
+   "token_prefix": "C",
+   "urgent_first": true,
+   "invoice_prefix": "CV-INV",
+   "tax_pct": 0,
+   "payment_terms_days": 14,
+   "currency": "INR"
+  },
+  {
+   "tenant_id": "3",
+   "contact_phone": "+44 117 340 2255",
+   "contact_email": "hello@rowanskin.co",
+   "address": "9 Rowan Lane, Bristol BS1 4TR",
+   "mrn_prefix": "RW",
+   "day_start": "09:00",
+   "day_end": "17:00",
+   "slot_minutes": 30,
+   "default_duration": 30,
+   "token_prefix": "R",
+   "urgent_first": false,
+   "invoice_prefix": "RW-INV",
+   "tax_pct": 0,
+   "payment_terms_days": 7,
+   "currency": "INR"
+  }
+ ],
+ "TENANT_FEATURES": [
+  {
+   "tenant_id": "1",
+   "feature_key": "patient",
+   "status": "active",
+   "activated_at": "2023-04-02"
+  },
+  {
+   "tenant_id": "1",
+   "feature_key": "appointment",
+   "status": "active",
+   "activated_at": "2023-04-02"
+  },
+  {
+   "tenant_id": "1",
+   "feature_key": "queue",
+   "status": "active",
+   "activated_at": "2023-04-02"
+  },
+  {
+   "tenant_id": "1",
+   "feature_key": "consultation",
+   "status": "active",
+   "activated_at": "2023-04-02"
+  },
+  {
+   "tenant_id": "1",
+   "feature_key": "prescription",
+   "status": "active",
+   "activated_at": "2023-04-02"
+  },
+  {
+   "tenant_id": "1",
+   "feature_key": "pharmacy",
+   "status": "active",
+   "activated_at": "2023-05-11"
+  },
+  {
+   "tenant_id": "1",
+   "feature_key": "lab",
+   "status": "active",
+   "activated_at": "2024-09-03"
+  },
+  {
+   "tenant_id": "1",
+   "feature_key": "inventory",
+   "status": "active",
+   "activated_at": "2023-05-11"
+  },
+  {
+   "tenant_id": "1",
+   "feature_key": "billing",
+   "status": "active",
+   "activated_at": "2023-04-02"
+  },
+  {
+   "tenant_id": "1",
+   "feature_key": "advanced_reports",
+   "status": "inactive",
+   "activated_at": null
+  },
+  {
+   "tenant_id": "2",
+   "feature_key": "patient",
+   "status": "active",
+   "activated_at": "2024-01-15"
+  },
+  {
+   "tenant_id": "2",
+   "feature_key": "appointment",
+   "status": "active",
+   "activated_at": "2024-01-15"
+  },
+  {
+   "tenant_id": "2",
+   "feature_key": "queue",
+   "status": "active",
+   "activated_at": "2024-01-15"
+  },
+  {
+   "tenant_id": "2",
+   "feature_key": "consultation",
+   "status": "active",
+   "activated_at": "2024-01-15"
+  },
+  {
+   "tenant_id": "2",
+   "feature_key": "prescription",
+   "status": "active",
+   "activated_at": "2024-01-15"
+  },
+  {
+   "tenant_id": "2",
+   "feature_key": "billing",
+   "status": "active",
+   "activated_at": "2024-01-15"
+  },
+  {
+   "tenant_id": "2",
+   "feature_key": "inventory",
+   "status": "active",
+   "activated_at": "2024-06-20"
+  },
+  {
+   "tenant_id": "2",
+   "feature_key": "advanced_reports",
+   "status": "active",
+   "activated_at": "2025-02-10"
+  },
+  {
+   "tenant_id": "2",
+   "feature_key": "pharmacy",
+   "status": "inactive",
+   "activated_at": null
+  },
+  {
+   "tenant_id": "2",
+   "feature_key": "lab",
+   "status": "inactive",
+   "activated_at": null
+  },
+  {
+   "tenant_id": "3",
+   "feature_key": "patient",
+   "status": "active",
+   "activated_at": "2026-07-28"
+  },
+  {
+   "tenant_id": "3",
+   "feature_key": "appointment",
+   "status": "active",
+   "activated_at": "2026-07-28"
+  },
+  {
+   "tenant_id": "3",
+   "feature_key": "queue",
+   "status": "active",
+   "activated_at": "2026-07-28"
+  },
+  {
+   "tenant_id": "3",
+   "feature_key": "consultation",
+   "status": "active",
+   "activated_at": "2026-07-28"
+  },
+  {
+   "tenant_id": "3",
+   "feature_key": "prescription",
+   "status": "active",
+   "activated_at": "2026-07-28"
+  },
+  {
+   "tenant_id": "3",
+   "feature_key": "lab",
+   "status": "active",
+   "activated_at": "2026-08-04"
+  },
+  {
+   "tenant_id": "3",
+   "feature_key": "pharmacy",
+   "status": "inactive",
+   "activated_at": null
+  },
+  {
+   "tenant_id": "3",
+   "feature_key": "billing",
+   "status": "inactive",
+   "activated_at": null
+  },
+  {
+   "tenant_id": "3",
+   "feature_key": "inventory",
+   "status": "inactive",
+   "activated_at": null
+  },
+  {
+   "tenant_id": "3",
+   "feature_key": "advanced_reports",
+   "status": "inactive",
+   "activated_at": null
+  }
+ ],
+ "USERS": [
+  {
+   "id": "u1",
+   "tenant_id": "1",
+   "name": "Aparna Iyer",
+   "role": "doctor",
+   "email": "a.iyer@northgate.clinic",
+   "password": "aiyer-2026",
+   "initials": "AI",
+   "speciality": "Restorative dentistry",
+   "status": "active",
+   "failed_attempts": 0,
+   "last_sign_in": "2026-08-19"
+  },
+  {
+   "id": "u2",
+   "tenant_id": "1",
+   "name": "Felix Munro",
+   "role": "doctor",
+   "email": "f.munro@northgate.clinic",
+   "password": "fmunro-2026",
+   "initials": "FM",
+   "speciality": "Endodontics",
+   "status": "active",
+   "failed_attempts": 0,
+   "last_sign_in": "2026-08-19"
+  },
+  {
+   "id": "u3",
+   "tenant_id": "1",
+   "name": "Priya Raman",
+   "role": "receptionist",
+   "email": "front@northgate.clinic",
+   "password": "front-2026",
+   "initials": "PR",
+   "status": "active",
+   "failed_attempts": 0,
+   "last_sign_in": "2026-08-19"
+  },
+  {
+   "id": "u4",
+   "tenant_id": "1",
+   "name": "Tomas Beck",
+   "role": "pharmacist",
+   "email": "pharmacy@northgate.clinic",
+   "password": "pharmacy-2026",
+   "initials": "TB",
+   "status": "active",
+   "failed_attempts": 0,
+   "last_sign_in": "2026-08-19"
+  },
+  {
+   "id": "u5",
+   "tenant_id": "1",
+   "name": "Grace Okafor",
+   "role": "lab_tech",
+   "email": "lab@northgate.clinic",
+   "password": "lab-2026",
+   "initials": "GO",
+   "status": "active",
+   "failed_attempts": 0,
+   "last_sign_in": "2026-08-19"
+  },
+  {
+   "id": "u6",
+   "tenant_id": "1",
+   "name": "Hema Nair",
+   "role": "tenant_admin",
+   "email": "admin@northgate.clinic",
+   "password": "admin-2026",
+   "initials": "HN",
+   "status": "active",
+   "failed_attempts": 0,
+   "last_sign_in": "2026-08-19"
+  },
+  {
+   "id": "u7",
+   "tenant_id": "1",
+   "name": "Owen Blake",
+   "role": "receptionist",
+   "email": "owen@northgate.clinic",
+   "password": "owen-2026",
+   "initials": "OB",
+   "status": "invited",
+   "failed_attempts": 0,
+   "last_sign_in": null
+  },
+  {
+   "id": "u10",
+   "tenant_id": "2",
+   "name": "Nadia Rahman",
+   "role": "doctor",
+   "email": "n.rahman@clearview.eye",
+   "password": "nrahman-2026",
+   "initials": "NR",
+   "speciality": "Cataract & refractive",
+   "status": "active",
+   "failed_attempts": 0,
+   "last_sign_in": "2026-08-19"
+  },
+  {
+   "id": "u11",
+   "tenant_id": "2",
+   "name": "Colin Whitfield",
+   "role": "doctor",
+   "email": "c.whitfield@clearview.eye",
+   "password": "cwhitfield-2026",
+   "initials": "CW",
+   "speciality": "Glaucoma",
+   "status": "active",
+   "failed_attempts": 0,
+   "last_sign_in": "2026-08-19"
+  },
+  {
+   "id": "u12",
+   "tenant_id": "2",
+   "name": "Sara Lindqvist",
+   "role": "receptionist",
+   "email": "front@clearview.eye",
+   "password": "front-2026",
+   "initials": "SL",
+   "status": "active",
+   "failed_attempts": 0,
+   "last_sign_in": "2026-08-19"
+  },
+  {
+   "id": "u13",
+   "tenant_id": "2",
+   "name": "Marcus Dell",
+   "role": "tenant_admin",
+   "email": "admin@clearview.eye",
+   "password": "admin-2026",
+   "initials": "MD",
+   "status": "active",
+   "failed_attempts": 0,
+   "last_sign_in": "2026-08-19"
+  },
+  {
+   "id": "u20",
+   "tenant_id": "3",
+   "name": "Ivo Castellan",
+   "role": "doctor",
+   "email": "i.castellan@rowanskin.co",
+   "password": "icastellan-2026",
+   "initials": "IC",
+   "speciality": "Medical dermatology",
+   "status": "active",
+   "failed_attempts": 0,
+   "last_sign_in": "2026-08-19"
+  },
+  {
+   "id": "u21",
+   "tenant_id": "3",
+   "name": "Bea Thornton",
+   "role": "receptionist",
+   "email": "front@rowanskin.co",
+   "password": "front-2026",
+   "initials": "BT",
+   "status": "active",
+   "failed_attempts": 0,
+   "last_sign_in": "2026-08-19"
+  },
+  {
+   "id": "u22",
+   "tenant_id": "3",
+   "name": "Delphine Rowan",
+   "role": "tenant_admin",
+   "email": "owner@rowanskin.co",
+   "password": "owner-2026",
+   "initials": "DR",
+   "status": "active",
+   "failed_attempts": 0,
+   "last_sign_in": "2026-08-19"
+  }
+ ],
+ "CAT_CLINICAL_TYPES": [
+  {
+   "key": "dental",
+   "label": "Dental",
+   "examLabel": "Tooth chart & oral exam",
+   "blurb": "Charting by FDI tooth number, periodontal scoring, and procedure planning.",
+   "complaintExample": "Cold sensitivity, upper left quadrant"
+  },
+  {
+   "key": "ophthalmology",
+   "label": "Ophthalmology",
+   "examLabel": "Refraction & anterior segment",
+   "blurb": "Visual acuity, refraction per eye, intraocular pressure and fundus notes.",
+   "complaintExample": "Progressive blurring, right worse than left"
+  },
+  {
+   "key": "dermatology",
+   "label": "Dermatology",
+   "examLabel": "Lesion map & skin assessment",
+   "blurb": "Body-site lesion mapping, Fitzpatrick typing, and phototherapy tracking.",
+   "complaintExample": "Itchy flare across both elbows"
+  }
+ ],
+ "CAT_FEATURES": [
+  {
+   "key": "patient",
+   "name": "Patients",
+   "is_core": true,
+   "summary": "Registration, search and the patient record.",
+   "price_monthly": 0,
+   "unlocks": [
+    "Patients"
+   ]
+  },
+  {
+   "key": "appointment",
+   "name": "Appointments",
+   "is_core": true,
+   "summary": "Doctor calendars, booking and conflict checks.",
+   "price_monthly": 0,
+   "unlocks": [
+    "Appointments"
+   ]
+  },
+  {
+   "key": "queue",
+   "name": "Queue",
+   "is_core": true,
+   "summary": "Token issue, check-in and the waiting-room board.",
+   "price_monthly": 0,
+   "unlocks": [
+    "Queue",
+    "Waiting room display"
+   ]
+  },
+  {
+   "key": "consultation",
+   "name": "Consultation",
+   "is_core": true,
+   "summary": "Encounters with fields that follow your clinical type.",
+   "price_monthly": 0,
+   "unlocks": [
+    "Consultation"
+   ]
+  },
+  {
+   "key": "prescription",
+   "name": "Prescriptions",
+   "is_core": true,
+   "summary": "Write and print prescriptions. Works with or without a pharmacy.",
+   "price_monthly": 0,
+   "unlocks": [
+    "Prescriptions"
+   ]
+  },
+  {
+   "key": "pharmacy",
+   "name": "Pharmacy",
+   "is_core": false,
+   "summary": "Dispense against prescriptions and draw stock from the ledger.",
+   "price_monthly": 2499,
+   "unlocks": [
+    "Pharmacy"
+   ]
+  },
+  {
+   "key": "lab",
+   "name": "Lab",
+   "is_core": false,
+   "summary": "Order tests, enter results, and hold them behind verification.",
+   "price_monthly": 1999,
+   "unlocks": [
+    "Lab"
+   ]
+  },
+  {
+   "key": "inventory",
+   "name": "Inventory",
+   "is_core": false,
+   "summary": "One ledger for every stock movement, with expiry watch.",
+   "price_monthly": 1499,
+   "unlocks": [
+    "Inventory"
+   ]
+  },
+  {
+   "key": "billing",
+   "name": "Billing",
+   "is_core": false,
+   "summary": "Invoices composed from the visit, with part payments.",
+   "price_monthly": 2999,
+   "unlocks": [
+    "Billing"
+   ]
+  },
+  {
+   "key": "advanced_reports",
+   "name": "Advanced reports",
+   "is_core": false,
+   "summary": "Cohort breakdowns, revenue mix and clinical-type analytics.",
+   "price_monthly": 1799,
+   "unlocks": [
+    "Extra dashboard panels"
+   ]
+  }
+ ],
+ "CAT_FEATURE_BY_KEY": {
+  "patient": {
+   "key": "patient",
+   "name": "Patients",
+   "is_core": true,
+   "summary": "Registration, search and the patient record.",
+   "price_monthly": 0,
+   "unlocks": [
+    "Patients"
+   ]
+  },
+  "appointment": {
+   "key": "appointment",
+   "name": "Appointments",
+   "is_core": true,
+   "summary": "Doctor calendars, booking and conflict checks.",
+   "price_monthly": 0,
+   "unlocks": [
+    "Appointments"
+   ]
+  },
+  "queue": {
+   "key": "queue",
+   "name": "Queue",
+   "is_core": true,
+   "summary": "Token issue, check-in and the waiting-room board.",
+   "price_monthly": 0,
+   "unlocks": [
+    "Queue",
+    "Waiting room display"
+   ]
+  },
+  "consultation": {
+   "key": "consultation",
+   "name": "Consultation",
+   "is_core": true,
+   "summary": "Encounters with fields that follow your clinical type.",
+   "price_monthly": 0,
+   "unlocks": [
+    "Consultation"
+   ]
+  },
+  "prescription": {
+   "key": "prescription",
+   "name": "Prescriptions",
+   "is_core": true,
+   "summary": "Write and print prescriptions. Works with or without a pharmacy.",
+   "price_monthly": 0,
+   "unlocks": [
+    "Prescriptions"
+   ]
+  },
+  "pharmacy": {
+   "key": "pharmacy",
+   "name": "Pharmacy",
+   "is_core": false,
+   "summary": "Dispense against prescriptions and draw stock from the ledger.",
+   "price_monthly": 2499,
+   "unlocks": [
+    "Pharmacy"
+   ]
+  },
+  "lab": {
+   "key": "lab",
+   "name": "Lab",
+   "is_core": false,
+   "summary": "Order tests, enter results, and hold them behind verification.",
+   "price_monthly": 1999,
+   "unlocks": [
+    "Lab"
+   ]
+  },
+  "inventory": {
+   "key": "inventory",
+   "name": "Inventory",
+   "is_core": false,
+   "summary": "One ledger for every stock movement, with expiry watch.",
+   "price_monthly": 1499,
+   "unlocks": [
+    "Inventory"
+   ]
+  },
+  "billing": {
+   "key": "billing",
+   "name": "Billing",
+   "is_core": false,
+   "summary": "Invoices composed from the visit, with part payments.",
+   "price_monthly": 2999,
+   "unlocks": [
+    "Billing"
+   ]
+  },
+  "advanced_reports": {
+   "key": "advanced_reports",
+   "name": "Advanced reports",
+   "is_core": false,
+   "summary": "Cohort breakdowns, revenue mix and clinical-type analytics.",
+   "price_monthly": 1799,
+   "unlocks": [
+    "Extra dashboard panels"
+   ]
+  }
+ },
+ "CAT_FIELD_DEFINITIONS": [
+  {
+   "id": "fd-1",
+   "scope": "common",
+   "clinical_type": null,
+   "tenant_id": null,
+   "entity": "patient",
+   "field_key": "full_name",
+   "label": "Full name",
+   "type": "text",
+   "required": true,
+   "order": 10,
+   "span": 2,
+   "group": "Identity"
+  },
+  {
+   "id": "fd-2",
+   "scope": "common",
+   "clinical_type": null,
+   "tenant_id": null,
+   "entity": "patient",
+   "field_key": "dob",
+   "label": "Date of birth",
+   "type": "date",
+   "required": true,
+   "order": 20,
+   "span": 1,
+   "group": "Identity"
+  },
+  {
+   "id": "fd-3",
+   "scope": "common",
+   "clinical_type": null,
+   "tenant_id": null,
+   "entity": "patient",
+   "field_key": "sex",
+   "label": "Sex",
+   "type": "select",
+   "required": true,
+   "order": 30,
+   "options": [
+    "female",
+    "male",
+    "other"
+   ],
+   "span": 1,
+   "group": "Identity"
+  },
+  {
+   "id": "fd-4",
+   "scope": "common",
+   "clinical_type": null,
+   "tenant_id": null,
+   "entity": "patient",
+   "field_key": "phone",
+   "label": "Mobile number",
+   "type": "phone",
+   "required": true,
+   "order": 40,
+   "span": 1,
+   "group": "Contact"
+  },
+  {
+   "id": "fd-5",
+   "scope": "common",
+   "clinical_type": null,
+   "tenant_id": null,
+   "entity": "patient",
+   "field_key": "email",
+   "label": "Email",
+   "type": "email",
+   "required": false,
+   "order": 50,
+   "span": 1,
+   "group": "Contact"
+  },
+  {
+   "id": "fd-6",
+   "scope": "common",
+   "clinical_type": null,
+   "tenant_id": null,
+   "entity": "patient",
+   "field_key": "address",
+   "label": "Address",
+   "type": "textarea",
+   "required": false,
+   "order": 60,
+   "span": 2,
+   "group": "Contact"
+  },
+  {
+   "id": "fd-7",
+   "scope": "common",
+   "clinical_type": null,
+   "tenant_id": null,
+   "entity": "patient",
+   "field_key": "blood_group",
+   "label": "Blood group",
+   "type": "select",
+   "required": false,
+   "order": 70,
+   "options": [
+    "A+",
+    "A-",
+    "B+",
+    "B-",
+    "AB+",
+    "AB-",
+    "O+",
+    "O-"
+   ],
+   "span": 1,
+   "group": "Clinical background"
+  },
+  {
+   "id": "fd-8",
+   "scope": "common",
+   "clinical_type": null,
+   "tenant_id": null,
+   "entity": "patient",
+   "field_key": "allergies",
+   "label": "Known allergies",
+   "type": "text",
+   "required": false,
+   "order": 80,
+   "span": 1,
+   "help": "Comma separated. Shown on every prescription.",
+   "group": "Clinical background"
+  },
+  {
+   "id": "fd-20",
+   "scope": "clinical_type",
+   "clinical_type": "dental",
+   "tenant_id": null,
+   "entity": "patient",
+   "field_key": "last_cleaning",
+   "label": "Last scaling / cleaning",
+   "type": "date",
+   "required": false,
+   "order": 110,
+   "span": 1,
+   "group": "Dental history"
+  },
+  {
+   "id": "fd-21",
+   "scope": "clinical_type",
+   "clinical_type": "dental",
+   "tenant_id": null,
+   "entity": "patient",
+   "field_key": "bruxism",
+   "label": "Grinds or clenches",
+   "type": "boolean",
+   "required": false,
+   "order": 120,
+   "span": 1,
+   "group": "Dental history"
+  },
+  {
+   "id": "fd-22",
+   "scope": "clinical_type",
+   "clinical_type": "dental",
+   "tenant_id": null,
+   "entity": "patient",
+   "field_key": "ortho_history",
+   "label": "Orthodontic history",
+   "type": "select",
+   "required": false,
+   "order": 130,
+   "options": [
+    "None",
+    "Braces — completed",
+    "Braces — in treatment",
+    "Aligners",
+    "Retainer only"
+   ],
+   "span": 2,
+   "group": "Dental history"
+  },
+  {
+   "id": "fd-30",
+   "scope": "clinical_type",
+   "clinical_type": "ophthalmology",
+   "tenant_id": null,
+   "entity": "patient",
+   "field_key": "spectacle_since",
+   "label": "Wearing correction since",
+   "type": "number",
+   "required": false,
+   "order": 110,
+   "span": 1,
+   "help": "Age in years when correction started.",
+   "group": "Vision history"
+  },
+  {
+   "id": "fd-31",
+   "scope": "clinical_type",
+   "clinical_type": "ophthalmology",
+   "tenant_id": null,
+   "entity": "patient",
+   "field_key": "contact_lens",
+   "label": "Contact lens wearer",
+   "type": "boolean",
+   "required": false,
+   "order": 120,
+   "span": 1,
+   "group": "Vision history"
+  },
+  {
+   "id": "fd-32",
+   "scope": "clinical_type",
+   "clinical_type": "ophthalmology",
+   "tenant_id": null,
+   "entity": "patient",
+   "field_key": "family_glaucoma",
+   "label": "Family history of glaucoma",
+   "type": "boolean",
+   "required": false,
+   "order": 130,
+   "span": 2,
+   "group": "Vision history"
+  },
+  {
+   "id": "fd-40",
+   "scope": "clinical_type",
+   "clinical_type": "dermatology",
+   "tenant_id": null,
+   "entity": "patient",
+   "field_key": "fitzpatrick",
+   "label": "Fitzpatrick skin type",
+   "type": "select",
+   "required": false,
+   "order": 110,
+   "options": [
+    "I",
+    "II",
+    "III",
+    "IV",
+    "V",
+    "VI"
+   ],
+   "span": 1,
+   "group": "Skin profile"
+  },
+  {
+   "id": "fd-41",
+   "scope": "clinical_type",
+   "clinical_type": "dermatology",
+   "tenant_id": null,
+   "entity": "patient",
+   "field_key": "atopy",
+   "label": "Atopic history",
+   "type": "multiselect",
+   "required": false,
+   "order": 120,
+   "options": [
+    "Eczema",
+    "Asthma",
+    "Allergic rhinitis",
+    "Urticaria"
+   ],
+   "span": 1,
+   "group": "Skin profile"
+  },
+  {
+   "id": "fd-42",
+   "scope": "clinical_type",
+   "clinical_type": "dermatology",
+   "tenant_id": null,
+   "entity": "patient",
+   "field_key": "sun_exposure",
+   "label": "Occupational sun exposure",
+   "type": "select",
+   "required": false,
+   "order": 130,
+   "options": [
+    "Minimal",
+    "Moderate",
+    "High"
+   ],
+   "span": 2,
+   "group": "Skin profile"
+  },
+  {
+   "id": "fd-50",
+   "scope": "tenant",
+   "clinical_type": null,
+   "tenant_id": "1",
+   "entity": "patient",
+   "field_key": "insurance_number",
+   "label": "Insurance number",
+   "type": "text",
+   "required": false,
+   "order": 200,
+   "span": 1,
+   "help": "Added by your clinic.",
+   "group": "Billing details"
+  },
+  {
+   "id": "fd-51",
+   "scope": "tenant",
+   "clinical_type": null,
+   "tenant_id": "1",
+   "entity": "patient",
+   "field_key": "referred_by",
+   "label": "Referred by",
+   "type": "text",
+   "required": false,
+   "order": 210,
+   "span": 1,
+   "group": "Billing details"
+  },
+  {
+   "id": "fd-52",
+   "scope": "tenant",
+   "clinical_type": null,
+   "tenant_id": "2",
+   "entity": "patient",
+   "field_key": "employer",
+   "label": "Employer / screening scheme",
+   "type": "text",
+   "required": false,
+   "order": 200,
+   "span": 2,
+   "group": "Billing details"
+  },
+  {
+   "id": "fd-60",
+   "scope": "common",
+   "clinical_type": null,
+   "tenant_id": null,
+   "entity": "encounter",
+   "field_key": "chief_complaint",
+   "label": "Chief complaint",
+   "type": "text",
+   "required": true,
+   "order": 10,
+   "span": 2,
+   "group": "Visit"
+  },
+  {
+   "id": "fd-61",
+   "scope": "common",
+   "clinical_type": null,
+   "tenant_id": null,
+   "entity": "encounter",
+   "field_key": "bp",
+   "label": "Blood pressure",
+   "type": "text",
+   "required": false,
+   "order": 20,
+   "span": 1,
+   "group": "Vitals"
+  },
+  {
+   "id": "fd-62",
+   "scope": "common",
+   "clinical_type": null,
+   "tenant_id": null,
+   "entity": "encounter",
+   "field_key": "pulse",
+   "label": "Pulse (bpm)",
+   "type": "number",
+   "required": false,
+   "order": 30,
+   "span": 1,
+   "group": "Vitals"
+  },
+  {
+   "id": "fd-70",
+   "scope": "clinical_type",
+   "clinical_type": "dental",
+   "tenant_id": null,
+   "entity": "encounter",
+   "field_key": "pain_scale",
+   "label": "Pain score (0–10)",
+   "type": "number",
+   "required": false,
+   "order": 40,
+   "span": 1,
+   "group": "Oral exam"
+  },
+  {
+   "id": "fd-71",
+   "scope": "clinical_type",
+   "clinical_type": "dental",
+   "tenant_id": null,
+   "entity": "encounter",
+   "field_key": "oral_hygiene",
+   "label": "Oral hygiene",
+   "type": "select",
+   "required": false,
+   "order": 50,
+   "options": [
+    "Good",
+    "Fair",
+    "Poor"
+   ],
+   "span": 1,
+   "group": "Oral exam"
+  },
+  {
+   "id": "fd-72",
+   "scope": "clinical_type",
+   "clinical_type": "dental",
+   "tenant_id": null,
+   "entity": "encounter",
+   "field_key": "perio_bleeding",
+   "label": "Bleeding on probing",
+   "type": "boolean",
+   "required": false,
+   "order": 60,
+   "span": 2,
+   "group": "Oral exam"
+  },
+  {
+   "id": "fd-80",
+   "scope": "clinical_type",
+   "clinical_type": "ophthalmology",
+   "tenant_id": null,
+   "entity": "encounter",
+   "field_key": "iop_od",
+   "label": "IOP right (mmHg)",
+   "type": "number",
+   "required": false,
+   "order": 40,
+   "span": 1,
+   "group": "Anterior segment"
+  },
+  {
+   "id": "fd-81",
+   "scope": "clinical_type",
+   "clinical_type": "ophthalmology",
+   "tenant_id": null,
+   "entity": "encounter",
+   "field_key": "iop_os",
+   "label": "IOP left (mmHg)",
+   "type": "number",
+   "required": false,
+   "order": 50,
+   "span": 1,
+   "group": "Anterior segment"
+  },
+  {
+   "id": "fd-82",
+   "scope": "clinical_type",
+   "clinical_type": "ophthalmology",
+   "tenant_id": null,
+   "entity": "encounter",
+   "field_key": "fundus",
+   "label": "Fundus notes",
+   "type": "textarea",
+   "required": false,
+   "order": 60,
+   "span": 2,
+   "group": "Posterior segment"
+  },
+  {
+   "id": "fd-90",
+   "scope": "clinical_type",
+   "clinical_type": "dermatology",
+   "tenant_id": null,
+   "entity": "encounter",
+   "field_key": "bsa",
+   "label": "Body surface area affected (%)",
+   "type": "number",
+   "required": false,
+   "order": 40,
+   "span": 1,
+   "group": "Assessment"
+  },
+  {
+   "id": "fd-91",
+   "scope": "clinical_type",
+   "clinical_type": "dermatology",
+   "tenant_id": null,
+   "entity": "encounter",
+   "field_key": "itch_score",
+   "label": "Itch score (0–10)",
+   "type": "number",
+   "required": false,
+   "order": 50,
+   "span": 1,
+   "group": "Assessment"
+  },
+  {
+   "id": "fd-92",
+   "scope": "clinical_type",
+   "clinical_type": "dermatology",
+   "tenant_id": null,
+   "entity": "encounter",
+   "field_key": "phototherapy",
+   "label": "On phototherapy",
+   "type": "boolean",
+   "required": false,
+   "order": 60,
+   "span": 2,
+   "group": "Assessment"
+  }
+ ],
+ "CAT_LAB_CATALOG": [
+  {
+   "code": "FBC",
+   "name": "Full blood count",
+   "panel": "Haematology"
+  },
+  {
+   "code": "HBA1C",
+   "name": "Glycated haemoglobin",
+   "panel": "Biochemistry"
+  },
+  {
+   "code": "CRP",
+   "name": "C-reactive protein",
+   "panel": "Biochemistry"
+  },
+  {
+   "code": "CULT",
+   "name": "Swab — culture and sensitivity",
+   "panel": "Microbiology"
+  },
+  {
+   "code": "OPG",
+   "name": "Orthopantomogram",
+   "panel": "Imaging",
+   "clinical_types": [
+    "dental"
+   ]
+  },
+  {
+   "code": "PA",
+   "name": "Periapical radiograph",
+   "panel": "Imaging",
+   "clinical_types": [
+    "dental"
+   ]
+  },
+  {
+   "code": "BW",
+   "name": "Bitewing radiographs",
+   "panel": "Imaging",
+   "clinical_types": [
+    "dental"
+   ]
+  },
+  {
+   "code": "CBCT",
+   "name": "Cone beam CT",
+   "panel": "Imaging",
+   "clinical_types": [
+    "dental"
+   ]
+  },
+  {
+   "code": "OCT",
+   "name": "Optical coherence tomography",
+   "panel": "Imaging",
+   "clinical_types": [
+    "ophthalmology"
+   ]
+  },
+  {
+   "code": "VF",
+   "name": "Visual field test",
+   "panel": "Functional",
+   "clinical_types": [
+    "ophthalmology"
+   ]
+  },
+  {
+   "code": "BIO",
+   "name": "Biometry",
+   "panel": "Functional",
+   "clinical_types": [
+    "ophthalmology"
+   ]
+  },
+  {
+   "code": "CORNEA",
+   "name": "Corneal topography",
+   "panel": "Imaging",
+   "clinical_types": [
+    "ophthalmology"
+   ]
+  },
+  {
+   "code": "PATCH",
+   "name": "Patch test — standard series",
+   "panel": "Allergy",
+   "clinical_types": [
+    "dermatology"
+   ]
+  },
+  {
+   "code": "MYC",
+   "name": "Skin scraping — mycology",
+   "panel": "Microbiology",
+   "clinical_types": [
+    "dermatology"
+   ]
+  },
+  {
+   "code": "BIOP",
+   "name": "Punch biopsy — histology",
+   "panel": "Histopathology",
+   "clinical_types": [
+    "dermatology"
+   ]
+  },
+  {
+   "code": "DERM",
+   "name": "Dermoscopy series",
+   "panel": "Imaging",
+   "clinical_types": [
+    "dermatology"
+   ]
+  }
+ ],
+ "CAT_MEDICINE_SUGGESTIONS": [
+  {
+   "medicine": "Amoxicillin",
+   "strength": "500 mg",
+   "dosage": "1 capsule",
+   "frequency": "Three times daily",
+   "duration": "5 days"
+  },
+  {
+   "medicine": "Metronidazole",
+   "strength": "400 mg",
+   "dosage": "1 tablet",
+   "frequency": "Three times daily",
+   "duration": "5 days"
+  },
+  {
+   "medicine": "Ibuprofen",
+   "strength": "400 mg",
+   "dosage": "1 tablet",
+   "frequency": "Three times daily",
+   "duration": "3 days"
+  },
+  {
+   "medicine": "Paracetamol",
+   "strength": "650 mg",
+   "dosage": "1 tablet",
+   "frequency": "As needed, max 4 daily",
+   "duration": "3 days"
+  },
+  {
+   "medicine": "Chlorhexidine mouthwash",
+   "strength": "0.2%",
+   "dosage": "10 ml rinse",
+   "frequency": "Twice daily",
+   "duration": "7 days",
+   "clinical_types": [
+    "dental"
+   ]
+  },
+  {
+   "medicine": "Duraphat fluoride toothpaste",
+   "strength": "5000 ppm",
+   "dosage": "Pea-sized",
+   "frequency": "Once at night",
+   "duration": "3 months",
+   "clinical_types": [
+    "dental"
+   ]
+  },
+  {
+   "medicine": "Fusidic acid eye drops",
+   "strength": "1%",
+   "dosage": "1 drop",
+   "frequency": "Twice daily",
+   "duration": "7 days",
+   "clinical_types": [
+    "ophthalmology"
+   ]
+  },
+  {
+   "medicine": "Latanoprost eye drops",
+   "strength": "50 µg/ml",
+   "dosage": "1 drop each eye",
+   "frequency": "At night",
+   "duration": "3 months",
+   "clinical_types": [
+    "ophthalmology"
+   ]
+  },
+  {
+   "medicine": "Carbomer gel",
+   "strength": "0.2%",
+   "dosage": "1 drop",
+   "frequency": "Four times daily",
+   "duration": "1 month",
+   "clinical_types": [
+    "ophthalmology"
+   ]
+  },
+  {
+   "medicine": "Mometasone furoate ointment",
+   "strength": "0.1%",
+   "dosage": "Thin layer",
+   "frequency": "Once daily",
+   "duration": "14 days",
+   "clinical_types": [
+    "dermatology"
+   ]
+  },
+  {
+   "medicine": "Emollient cream",
+   "strength": "500 g",
+   "dosage": "Liberally",
+   "frequency": "Three times daily",
+   "duration": "Ongoing",
+   "clinical_types": [
+    "dermatology"
+   ]
+  },
+  {
+   "medicine": "Ketoconazole shampoo",
+   "strength": "2%",
+   "dosage": "Apply, leave 5 min",
+   "frequency": "Twice weekly",
+   "duration": "4 weeks",
+   "clinical_types": [
+    "dermatology"
+   ]
+  }
+ ],
+ "CAT_TODAY": "2026-08-19"
+}

@@ -1,0 +1,176 @@
+"""Test fixtures.
+
+The suite runs against a real PostgreSQL database with the real migrations
+applied, because the thing most worth testing here — row-level security — does
+not exist in SQLite. The database is migrated and seeded once per session, and
+each test signs in as a real user over HTTP.
+"""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+# Point the whole application at the test database before anything imports it.
+TEST_DB = os.environ.get(
+    "TEST_DATABASE_URL", "postgresql+asyncpg://pms_app:app-password-change-me@localhost:55432/pms_test"
+)
+TEST_MIGRATION_DB = os.environ.get(
+    "TEST_MIGRATION_DATABASE_URL",
+    "postgresql+asyncpg://pms_owner:owner-password-change-me@localhost:55432/pms_test",
+)
+os.environ.update(
+    {
+        "ENVIRONMENT": "development",
+        "DATABASE_URL": TEST_DB,
+        "MIGRATION_DATABASE_URL": TEST_MIGRATION_DB,
+        "JWT_SECRET": "test-secret-not-used-anywhere-real-000000",
+        "APP_DOMAIN": "localhost",
+        "COOKIE_SECURE": "false",
+        "ALLOW_TENANT_HEADER": "false",
+        "LOGIN_RATE_LIMIT": "1000/minute",
+        "API_RATE_LIMIT": "100000/minute",
+    }
+)
+
+import pytest  # noqa: E402
+from httpx import ASGITransport, AsyncClient  # noqa: E402
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # noqa: E402
+
+from app.core.config import settings  # noqa: E402
+from app.db import guard  # noqa: E402,F401
+from app.main import app  # noqa: E402
+from app.seed.loader import rid, seed_all  # noqa: E402
+
+NORTHGATE = "northgate.localhost"
+CLEARVIEW = "clearview.localhost"
+ROWAN = "rowan.localhost"
+CONSOLE = "localhost"
+
+ACCOUNTS = {
+    "northgate_admin": (NORTHGATE, "admin@northgate.clinic", "admin-2026"),
+    "northgate_doctor": (NORTHGATE, "a.iyer@northgate.clinic", "aiyer-2026"),
+    "clearview_admin": (CLEARVIEW, "admin@clearview.eye", "admin-2026"),
+    "rowan_admin": (ROWAN, "owner@rowanskin.co", "owner-2026"),
+}
+PLATFORM = ("ines@astrale.health", "ines-2026")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def migrated_database() -> None:
+    env = {**os.environ, "MIGRATION_DATABASE_URL": TEST_MIGRATION_DB}
+    subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        cwd=ROOT, env=env, check=True, capture_output=True,
+    )
+
+
+@pytest.fixture(scope="session")
+async def seeded(migrated_database) -> None:
+    engine = create_async_engine(settings.migration_database_url)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as session:
+        async with session.begin():
+            await seed_all(session, reset=True)
+    await engine.dispose()
+
+
+@pytest.fixture
+async def client(seeded) -> AsyncClient:
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://localhost") as c:
+        yield c
+
+
+class Signed:
+    """A signed-in client, pinned to one clinic's address."""
+
+    def __init__(self, client: AsyncClient, host: str, token: str, body: dict) -> None:
+        self._client = client
+        self.host = host
+        self.token = token
+        self.user = body.get("user") or {}
+        self.platform_user = body.get("platform_user") or {}
+        self.tenant_id = body.get("tenant_id")
+
+    def _headers(self, extra: dict | None = None) -> dict:
+        headers = {"Host": self.host, "Authorization": f"Bearer {self.token}"}
+        headers.update(extra or {})
+        return headers
+
+    async def get(self, url: str, **kw):
+        return await self._client.get(url, headers=self._headers(kw.pop("headers", None)), **kw)
+
+    async def post(self, url: str, **kw):
+        return await self._client.post(url, headers=self._headers(kw.pop("headers", None)), **kw)
+
+    async def patch(self, url: str, **kw):
+        return await self._client.patch(url, headers=self._headers(kw.pop("headers", None)), **kw)
+
+    async def delete(self, url: str, **kw):
+        return await self._client.delete(url, headers=self._headers(kw.pop("headers", None)), **kw)
+
+
+async def patients_of(signed: Signed, **params) -> list[dict]:
+    """The register is paged, so a test that wants rows asks for a page."""
+    response = await signed.get("/v1/patients", params=params or None)
+    assert response.status_code == 200, response.text
+    return response.json()["items"]
+
+
+async def sign_in(client: AsyncClient, key: str) -> Signed:
+    host, email, password = ACCOUNTS[key]
+    response = await client.post(
+        "/v1/auth/login", headers={"Host": host}, json={"email": email, "password": password}
+    )
+    assert response.status_code == 200, response.text
+    return Signed(client, host, response.json()["access_token"], response.json())
+
+
+@pytest.fixture
+async def northgate(client) -> Signed:
+    return await sign_in(client, "northgate_admin")
+
+
+@pytest.fixture
+async def northgate_doctor(client) -> Signed:
+    return await sign_in(client, "northgate_doctor")
+
+
+@pytest.fixture
+async def clearview(client) -> Signed:
+    return await sign_in(client, "clearview_admin")
+
+
+@pytest.fixture
+async def rowan(client) -> Signed:
+    return await sign_in(client, "rowan_admin")
+
+
+@pytest.fixture
+async def console(client) -> Signed:
+    email, password = PLATFORM
+    response = await client.post(
+        "/v1/platform/auth/login", headers={"Host": CONSOLE}, json={"email": email, "password": password}
+    )
+    assert response.status_code == 200, response.text
+    return Signed(client, CONSOLE, response.json()["access_token"], response.json())
+
+
+@pytest.fixture(autouse=True)
+def reset_rate_limiter():
+    from app.core.rate_limit import limiter
+
+    limiter.reset()
+    yield
+    limiter.reset()
+
+
+__all__ = [
+    "rid", "sign_in", "patients_of", "Signed", "NORTHGATE", "CLEARVIEW", "ROWAN", "CONSOLE",
+]
