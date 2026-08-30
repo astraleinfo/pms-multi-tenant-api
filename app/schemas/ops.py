@@ -14,7 +14,7 @@ from app.models.enums import (
     LineItemSource,
     PaymentMethod,
 )
-from app.schemas.common import ApiModel, InputModel, iso_date, money, stamp
+from app.schemas.common import ApiModel, IdStr, InputModel, iso_date, money, stamp
 
 
 class InventoryItemOut(ApiModel):
@@ -73,7 +73,7 @@ class InventoryTxOut(ApiModel):
 
 
 class StockMovementIn(InputModel):
-    item_id: str
+    item_id: IdStr
     type: InventoryTxType
     qty: int = Field(ge=-100_000, le=100_000)
     batch_no: str = Field(min_length=1, max_length=60)
@@ -179,8 +179,8 @@ class InvoiceLineItemIn(InputModel):
 
 
 class InvoiceIn(InputModel):
-    patient_id: str
-    encounter_id: str | None = None
+    patient_id: IdStr
+    encounter_id: IdStr | None = None
     line_items: list[InvoiceLineItemIn] = Field(min_length=1, max_length=100)
     issue: bool = False
 

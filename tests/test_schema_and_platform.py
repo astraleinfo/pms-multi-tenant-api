@@ -232,17 +232,26 @@ def test_every_tenant_owned_table_has_a_policy():
 
     This fails the moment someone adds a tenant table and forgets the migration.
     """
-    import importlib.util
+    import ast
     from pathlib import Path
 
     from app.db.base import tenant_scoped_tables
 
-    path = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "0002_row_level_security.py"
-    spec = importlib.util.spec_from_file_location("rls_migration", path)
-    migration = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(migration)
+    # A table can be secured by whichever migration introduced it, so the whole
+    # history counts — not just the one that first turned RLS on. Read with ast
+    # rather than importing, so this never depends on a migration's imports.
+    versions = Path(__file__).resolve().parents[1] / "alembic" / "versions"
+    secured: set[str] = set()
+    for path in versions.glob("*.py"):
+        for node in ast.parse(path.read_text(encoding="utf-8")).body:
+            if not isinstance(node, ast.Assign):
+                continue
+            names = {t.id for t in node.targets if isinstance(t, ast.Name)}
+            if "OWNED_TABLES" in names:
+                secured.update(ast.literal_eval(node.value))
 
-    assert sorted(migration.OWNED_TABLES) == tenant_scoped_tables()
+    missing = sorted(set(tenant_scoped_tables()) - secured)
+    assert not missing, f"tenant-owned tables with no RLS policy in any migration: {missing}"
 
 
 async def test_the_orm_guard_refuses_an_unbound_query():

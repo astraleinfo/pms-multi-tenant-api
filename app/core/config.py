@@ -51,6 +51,24 @@ class Settings(BaseSettings):
     login_rate_limit: str = "10/minute"
     api_rate_limit: str = "600/minute"
 
+    # ----------------------------------------------------------------- outbox
+    # Where queued patient messages wait for the worker. The database row is
+    # the source of truth; Redis only carries the wake-up, so losing Redis
+    # delays delivery but never loses a message.
+    redis_url: str = "redis://localhost:6380/0"
+    outbox_stream: str = "pms:outbox"
+    # A send is retried this many times before the message is parked as failed.
+    message_max_attempts: int = 5
+    message_retry_base_seconds: int = 30
+    # How often the worker sweeps the table for due and stranded messages.
+    worker_poll_seconds: int = 10
+    # Appointment reminders go out this many hours before the slot.
+    reminder_lead_hours: int = 24
+    # Encrypts provider credentials at rest. Defaults to a key derived from
+    # JWT_SECRET so development works out of the box; set your own to rotate
+    # without invalidating sessions.
+    secrets_key: str = ""
+
     @field_validator("app_domain")
     @classmethod
     def _strip_domain(cls, v: str) -> str:

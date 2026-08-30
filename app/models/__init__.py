@@ -10,6 +10,7 @@ from app.models.clinical import (  # noqa: F401
     QueueEntry,
 )
 from app.models.identity import LoginAttempt, PlatformUser, RefreshToken, User  # noqa: F401
+from app.models.messaging import Message, MessagingConfig  # noqa: F401
 from app.models.ops import (  # noqa: F401
     InventoryBatch,
     InventoryItem,
@@ -33,7 +34,8 @@ from app.models.tenancy import (  # noqa: F401
 __all__ = [
     "Appointment", "AuditEvent", "ClinicalType", "Encounter", "Feature", "FieldDefinition",
     "InventoryBatch", "InventoryItem", "InventoryTransaction", "Invoice", "InvoiceLineItem",
-    "LabOrder", "LabTest", "LoginAttempt", "MedicineSuggestion", "Patient", "Payment",
+    "LabOrder", "LabTest", "LoginAttempt", "MedicineSuggestion", "Message", "MessagingConfig",
+    "Patient", "Payment",
     "PlatformUser", "Prescription", "PrescriptionItem", "QueueEntry", "RefreshToken", "Tenant",
     "TenantConfig", "TenantFeature", "User",
 ]

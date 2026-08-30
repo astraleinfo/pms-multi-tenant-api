@@ -18,6 +18,21 @@ services:
       timeout: 3s
       retries: 20
 
+  # The message outbox. Published on 6380 so it does not collide with a Redis
+  # already running on the host for something else.
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6380:6379"
+    volumes:
+      - pms-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
   api:
     build: .
     depends_on:
@@ -33,6 +48,7 @@ services:
       # The web app runs on *.localhost:3000 and reaches the API through a
       # proxy that rewrites Host, so the slug arrives in a header instead.
       ALLOW_TENANT_HEADER: "true"
+      REDIS_URL: redis://redis:6379/0
     ports:
       - "8000:8000"
     command: >
@@ -44,3 +60,4 @@ services:
 
 volumes:
   pms-data:
+  pms-redis:

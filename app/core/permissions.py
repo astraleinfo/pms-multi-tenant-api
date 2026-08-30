@@ -53,6 +53,11 @@ class Permission(str, Enum):
 
     ANALYTICS_READ = "analytics:read"
 
+    # Patient messaging. Reading history and sending are separate so a role can
+    # see what went out without being able to send anything new.
+    MESSAGE_READ = "message:read"
+    MESSAGE_SEND = "message:send"
+
 
 _CLINICAL_READ = {
     Permission.PATIENT_READ,
@@ -79,6 +84,8 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.USER_READ,
             Permission.TENANT_CONFIG_READ,
             Permission.ANALYTICS_READ,
+            Permission.MESSAGE_READ,
+            Permission.MESSAGE_SEND,
         }
     ),
     Role.DOCTOR: frozenset(
@@ -97,6 +104,8 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.USER_READ,
             Permission.TENANT_CONFIG_READ,
             Permission.ANALYTICS_READ,
+            Permission.MESSAGE_READ,
+            Permission.MESSAGE_SEND,
         }
     ),
     Role.PHARMACIST: frozenset(
