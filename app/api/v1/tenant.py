@@ -13,7 +13,7 @@ from app.core.security import hash_password
 from app.models.enums import AccountStatus, FieldEntity, FieldScope
 from app.models.identity import User
 from app.models.tenancy import Feature, FieldDefinition
-from app.schemas.identity import UserCreateIn, UserOut, UserStatusIn
+from app.schemas.identity import PasswordSetIn, UserCreateIn, UserOut, UserStatusIn
 from app.schemas.tenancy import (
     FeatureOut,
     FeaturePurchaseIn,
@@ -297,6 +297,59 @@ async def set_user_status(
     await audit.record(
         ctx.session, action=f"user.{payload.status.value}", tenant_id=ctx.tenant_id, actor_kind="user",
         actor_id=ctx.actor_id, actor_label=ctx.principal.label, entity="user", entity_id=str(user.id),
+    )
+    return UserOut.of(user, ctx.tz)
+
+
+@router.post("/users/{user_id}/password", response_model=UserOut)
+async def set_user_password(
+    user_id: str,
+    payload: PasswordSetIn,
+    ctx: TenantContext = Depends(require_permission(Permission.USER_MANAGE)),
+) -> UserOut:
+    """Give someone a password they did not choose.
+
+    This is what completes an invitation. An invited row has no hash at all and
+    the sign-in refuses it by name, so the first password an account is given is
+    also what makes that account active.
+
+    It is deliberately not an unlock. A locked account stays locked — releasing
+    it is `PATCH /users/{id}/status`, and letting a password reset quietly
+    reinstate someone an admin had shut out would make locking meaningless.
+    """
+    user = (
+        await ctx.session.execute(
+            select(User).where(
+                User.id == parse_uuid(user_id, what="account"), User.tenant_id == ctx.tenant_id
+            )
+        )
+    ).scalar_one_or_none()
+    if user is None:
+        raise NotFound("No such account.")
+
+    accepting_invitation = user.status == AccountStatus.INVITED
+    own = user.id == ctx.actor_id
+
+    user.password_hash = hash_password(payload.password)
+    # The counter counted failures against a password that no longer exists.
+    user.failed_attempts = 0
+    if accepting_invitation:
+        user.status = AccountStatus.ACTIVE
+
+    # A new password ends every session opened with the old one. The browser
+    # making this request is spared when an admin is setting their own, or they
+    # would sign themselves out in the act of doing it.
+    await auth_service.revoke_all_for_subject(
+        ctx.session,
+        subject_id=user.id,
+        except_session_id=ctx.principal.session_id if own else None,
+    )
+
+    await ctx.session.flush()
+    await audit.record(
+        ctx.session, action="user.password_set", tenant_id=ctx.tenant_id, actor_kind="user",
+        actor_id=ctx.actor_id, actor_label=ctx.principal.label, entity="user", entity_id=str(user.id),
+        meta={"self": own, "accepted_invitation": accepting_invitation},
     )
     return UserOut.of(user, ctx.tz)
 

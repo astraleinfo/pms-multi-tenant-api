@@ -378,10 +378,19 @@ async def revoke_session(session: AsyncSession, *, session_id: uuid.UUID) -> Non
     )
 
 
-async def revoke_all_for_subject(session: AsyncSession, *, subject_id: uuid.UUID) -> None:
-    """Used when an account is locked or its password changes."""
-    await session.execute(
-        update(RefreshToken)
-        .where(RefreshToken.subject_id == subject_id, RefreshToken.revoked_at.is_(None))
-        .values(revoked_at=_now())
-    )
+async def revoke_all_for_subject(
+    session: AsyncSession,
+    *,
+    subject_id: uuid.UUID,
+    except_session_id: uuid.UUID | None = None,
+) -> None:
+    """Used when an account is locked or its password changes.
+
+    `except_session_id` spares one sign-in. An admin setting their own password
+    would otherwise revoke the very browser they are doing it in — every other
+    session they hold still goes, which is the part that matters.
+    """
+    conditions = [RefreshToken.subject_id == subject_id, RefreshToken.revoked_at.is_(None)]
+    if except_session_id is not None:
+        conditions.append(RefreshToken.session_id != except_session_id)
+    await session.execute(update(RefreshToken).where(*conditions).values(revoked_at=_now()))

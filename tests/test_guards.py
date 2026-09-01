@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from tests.conftest import ROWAN, patients_of, sign_in
+from tests.conftest import NORTHGATE, ROWAN, patients_of, sign_in
 
 
 async def test_a_module_that_was_never_bought_is_refused(rowan):
@@ -135,6 +135,155 @@ async def test_locking_someone_ends_their_sessions(client, northgate):
     assert after.status_code == 401
 
     await northgate.patch(f"/v1/users/{user_id}/status", json={"status": "active"})
+
+
+async def test_setting_the_first_password_completes_an_invitation(client, northgate):
+    """An invited row has no hash at all, so the first password is also what
+    makes the account real. Without this the invitation is a dead end."""
+    created = await northgate.post(
+        "/v1/users",
+        json={"name": "Marguerite Vane", "email": "m.vane@northgate.clinic", "role": "receptionist"},
+    )
+    assert created.status_code == 201, created.text
+    invited = created.json()
+    assert invited["status"] == "invited"
+
+    credentials = {"email": "m.vane@northgate.clinic", "password": "her-first-password"}
+    refused = await client.post("/v1/auth/login", headers={"Host": NORTHGATE}, json=credentials)
+    assert refused.status_code == 401
+    assert "invitation" in refused.json()["error"]["message"].lower()
+
+    activated = await northgate.post(
+        f"/v1/users/{invited['id']}/password", json={"password": "her-first-password"}
+    )
+    assert activated.status_code == 200, activated.text
+    assert activated.json()["status"] == "active"
+
+    assert (
+        await client.post("/v1/auth/login", headers={"Host": NORTHGATE}, json=credentials)
+    ).status_code == 200
+
+
+async def test_a_new_password_ends_the_sessions_the_old_one_opened(client, northgate):
+    """Otherwise a reset after a suspected theft leaves the thief signed in."""
+    created = await northgate.post(
+        "/v1/users",
+        json={
+            "name": "Duncan Reeve", "email": "d.reeve@northgate.clinic",
+            "role": "receptionist", "password": "the-first-password",
+        },
+    )
+    assert created.status_code == 201, created.text
+    user_id = created.json()["id"]
+
+    theirs = await client.post(
+        "/v1/auth/login",
+        headers={"Host": NORTHGATE},
+        json={"email": "d.reeve@northgate.clinic", "password": "the-first-password"},
+    )
+    assert theirs.status_code == 200
+    held = client.cookies.get("pms_refresh")
+
+    reset = await northgate.post(
+        f"/v1/users/{user_id}/password", json={"password": "the-second-password"}
+    )
+    assert reset.status_code == 200
+
+    client.cookies.set("pms_refresh", held, domain="localhost", path="/")
+    stale = await client.post("/v1/auth/refresh", headers={"Host": NORTHGATE})
+    assert stale.status_code == 401
+
+    assert (
+        await client.post(
+            "/v1/auth/login",
+            headers={"Host": NORTHGATE},
+            json={"email": "d.reeve@northgate.clinic", "password": "the-second-password"},
+        )
+    ).status_code == 200
+
+
+async def test_an_admin_setting_their_own_password_stays_signed_in(client, northgate):
+    """The one sign-in spared is the browser doing the resetting — otherwise an
+    admin would sign themselves out in the act of rotating their own password."""
+    created = await northgate.post(
+        "/v1/users",
+        json={
+            "name": "Harriet Blaine", "email": "h.blaine@northgate.clinic",
+            "role": "tenant_admin", "password": "the-first-password",
+        },
+    )
+    assert created.status_code == 201, created.text
+    user_id = created.json()["id"]
+
+    signed_in = await client.post(
+        "/v1/auth/login",
+        headers={"Host": NORTHGATE},
+        json={"email": "h.blaine@northgate.clinic", "password": "the-first-password"},
+    )
+    assert signed_in.status_code == 200
+    held = client.cookies.get("pms_refresh")
+
+    rotated = await client.post(
+        f"/v1/users/{user_id}/password",
+        headers={"Host": NORTHGATE, "Authorization": f"Bearer {signed_in.json()['access_token']}"},
+        json={"password": "the-second-password"},
+    )
+    assert rotated.status_code == 200
+
+    client.cookies.set("pms_refresh", held, domain="localhost", path="/")
+    assert (await client.post("/v1/auth/refresh", headers={"Host": NORTHGATE})).status_code == 200
+
+
+async def test_a_password_reset_is_not_an_unlock(client, northgate):
+    """Locking is an administrative decision; a reset must not undo it."""
+    created = await northgate.post(
+        "/v1/users",
+        json={
+            "name": "Sylvia Doran", "email": "s.doran@northgate.clinic",
+            "role": "receptionist", "password": "the-first-password",
+        },
+    )
+    user_id = created.json()["id"]
+    await northgate.patch(f"/v1/users/{user_id}/status", json={"status": "locked"})
+
+    reset = await northgate.post(
+        f"/v1/users/{user_id}/password", json={"password": "the-second-password"}
+    )
+    assert reset.status_code == 200
+    assert reset.json()["status"] == "locked"
+
+    still_out = await client.post(
+        "/v1/auth/login",
+        headers={"Host": NORTHGATE},
+        json={"email": "s.doran@northgate.clinic", "password": "the-second-password"},
+    )
+    assert still_out.status_code == 423
+
+
+async def test_a_short_password_is_refused(northgate):
+    users = (await northgate.get("/v1/users")).json()
+    someone = next(u for u in users if u["role"] == "receptionist")
+    response = await northgate.post(f"/v1/users/{someone['id']}/password", json={"password": "short"})
+    assert response.status_code == 422
+
+
+async def test_only_a_role_that_manages_accounts_may_set_a_password(northgate, northgate_doctor):
+    users = (await northgate.get("/v1/users")).json()
+    someone = next(u for u in users if u["role"] == "receptionist")
+    response = await northgate_doctor.post(
+        f"/v1/users/{someone['id']}/password", json={"password": "not-yours-to-set"}
+    )
+    assert response.status_code == 403
+
+
+async def test_another_clinics_admin_cannot_reach_the_account(northgate, clearview):
+    """Someone else's row is not found, never forbidden — a 403 would confirm it."""
+    users = (await northgate.get("/v1/users")).json()
+    someone = next(u for u in users if u["role"] == "receptionist")
+    response = await clearview.post(
+        f"/v1/users/{someone['id']}/password", json={"password": "another-clinics-try"}
+    )
+    assert response.status_code == 404
 
 
 async def test_a_suspended_clinic_stops_answering(console, client, rowan):

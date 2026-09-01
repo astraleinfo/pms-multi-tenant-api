@@ -75,6 +75,8 @@ tenant in the topbar becomes a link to the other clinic's subdomain, which it al
 | `platformSnapshot` | `GET /v1/platform/snapshot` |
 | `getTenant` | `GET /v1/public/tenant` (sign-in screen), `GET /v1/tenant` (inside) |
 | `listUsers` / `listDoctors` | `GET /v1/users`, `GET /v1/users/doctors` |
+| `createUser` | `POST /v1/users` — omit `password` to create an `invited` account |
+| `setUserPassword` | `POST /v1/users/{id}/password` — an admin setting a colleague's; the first one accepts an invitation, and none of them unlock a locked account |
 | `setUserStatus` | `PATCH /v1/users/{id}/status` |
 | `savePreferences` | `PATCH /v1/auth/me/preferences` — the signed-in person's own interface state |
 | `listFeatures` | `GET /v1/tenant/features` |

@@ -112,6 +112,17 @@ class UserCreateIn(InputModel):
     password: str | None = Field(default=None, min_length=12, max_length=200)
 
 
+class PasswordSetIn(InputModel):
+    """What a practice admin sends to give a colleague a password.
+
+    There is no current password here, and that is the point of the route: the
+    admin does not know it and must not need to. Proving your own password
+    before changing it is a different act, and not this one.
+    """
+
+    password: str = Field(min_length=12, max_length=200)
+
+
 class PasswordChangeIn(InputModel):
     current_password: str = Field(min_length=1, max_length=200)
     new_password: str = Field(min_length=12, max_length=200)
