@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from tests.conftest import CLEARVIEW, CONSOLE, NORTHGATE
 
 
@@ -131,10 +133,17 @@ async def test_a_clinic_token_is_useless_on_the_console(northgate, client):
     assert response.status_code == 401
 
 
-async def test_the_console_only_signs_in_on_the_apex(client):
+@pytest.mark.parametrize("host", [NORTHGATE, "localhost", "www.localhost"])
+async def test_the_console_only_signs_in_on_its_own_address(client, host):
+    """`admin.localhost` and nowhere else.
+
+    Not a clinic subdomain, and not the apex either — the apex is the product's
+    public face, and a console living there would mean the marketing site and
+    the super-admin sign-in share a door.
+    """
     response = await client.post(
         "/v1/platform/auth/login",
-        headers={"Host": NORTHGATE},
+        headers={"Host": host},
         json={"email": "ines@astrale.health", "password": "ines-2026"},
     )
     assert response.status_code == 404

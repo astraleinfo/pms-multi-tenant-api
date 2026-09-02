@@ -200,7 +200,9 @@ class TenantCreateIn(InputModel):
     clinical_type: str = Field(max_length=40)
     admin_name: str = Field(min_length=2, max_length=160)
     admin_email: EmailStr
-    admin_password: str = Field(min_length=12, max_length=200)
+    #: No password. The console cannot choose one, and neither can this
+    #: payload: the account is created without a hash and the person named
+    #: here is emailed a link to set their own.
 
     @field_validator("slug")
     @classmethod
@@ -214,10 +216,80 @@ class TenantCreateIn(InputModel):
 class TenantCreatedOut(ApiModel):
     tenant: TenantOut
     admin_user_id: str
+    admin_email: str
+    #: Whether the invitation actually left the building. False means the
+    #: clinic exists but nobody can get into it yet, and the console should say
+    #: so rather than reporting a clean success.
+    invitation_sent: bool = True
+    #: The link itself, and only when the mail transport is `console` — that is
+    #: development, where there is no inbox to check. Never populated once a
+    #: real transport is configured.
+    invitation_url: str | None = None
+
+
+class TenantPatchIn(InputModel):
+    """What the console may change about a clinic after it exists.
+
+    `slug` is absent deliberately. It is the clinic's address and it is baked
+    into every live session token; renaming it would sign everyone out and
+    break every bookmark. Status has its own route, because suspending a clinic
+    is not an edit — it takes the subdomain offline.
+    """
+
+    name: str | None = Field(default=None, min_length=2, max_length=160)
+    city: str | None = Field(default=None, max_length=120)
+    plan: str | None = Field(default=None, max_length=60)
+    timezone: str | None = Field(default=None, max_length=60)
+    clinical_type: str | None = Field(default=None, max_length=40)
+
+    @field_validator("timezone")
+    @classmethod
+    def _timezone(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        if zone(v).key != v:
+            raise ValueError("That is not a timezone this server knows.")
+        return v
 
 
 class TenantStatusIn(InputModel):
     status: TenantStatus
+
+
+class SlugCheckOut(ApiModel):
+    """Answered while someone types a subdomain into the create form.
+
+    Advisory only — it reserves nothing. The unique index is what actually
+    settles two consoles reaching for the same name at the same moment.
+    """
+
+    slug: str
+    available: bool
+    problem: str | None = None
+    #: The address the clinic would answer on, so the form can show it.
+    url: str
+
+
+class TenantFeatureSetIn(InputModel):
+    """The platform's own hand on a module switch."""
+
+    status: TenantFeatureStatus
+
+
+class ImpersonationOut(ApiModel):
+    """A support session, opened from the console.
+
+    An access token and nothing else: no refresh token and no cookie, so it
+    expires and has to be opened again rather than quietly persisting.
+    """
+
+    access_token: str
+    token_type: str = "Bearer"  # noqa: S105 - a scheme name, not a secret
+    expires_in: int
+    tenant: TenantOut
+    #: Where to take the browser. The clinic's own address, because that is the
+    #: only host the token will be accepted on.
+    url: str
 
 
 class FeaturePurchaseIn(InputModel):

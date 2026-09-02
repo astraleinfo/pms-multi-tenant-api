@@ -34,6 +34,7 @@ os.environ.update(
         "COOKIE_SECURE": "false",
         "ALLOW_TENANT_HEADER": "false",
         "LOGIN_RATE_LIMIT": "1000/minute",
+        "PASSWORD_RESET_RATE_LIMIT": "1000/minute",
         "API_RATE_LIMIT": "100000/minute",
     }
 )
@@ -50,7 +51,10 @@ from app.seed.loader import rid, seed_all  # noqa: E402
 NORTHGATE = "northgate.localhost"
 CLEARVIEW = "clearview.localhost"
 ROWAN = "rowan.localhost"
-CONSOLE = "localhost"
+#: The super-admin console has its own address. The apex is the product's
+#: public face and answers for neither a clinic nor the console.
+CONSOLE = "admin.localhost"
+APEX = "localhost"
 
 ACCOUNTS = {
     "northgate_admin": (NORTHGATE, "admin@northgate.clinic", "admin-2026"),
@@ -112,6 +116,9 @@ class Signed:
     async def patch(self, url: str, **kw):
         return await self._client.patch(url, headers=self._headers(kw.pop("headers", None)), **kw)
 
+    async def put(self, url: str, **kw):
+        return await self._client.put(url, headers=self._headers(kw.pop("headers", None)), **kw)
+
     async def delete(self, url: str, **kw):
         return await self._client.delete(url, headers=self._headers(kw.pop("headers", None)), **kw)
 
@@ -162,6 +169,53 @@ async def console(client) -> Signed:
     return Signed(client, CONSOLE, response.json()["access_token"], response.json())
 
 
+async def audit_lines(tenant_id: str, *, action: str | None = None) -> list[dict]:
+    """Read the trail directly.
+
+    There is no route that returns it — the audit table is written by the
+    application and read by whoever operates it — so a test that wants to know
+    what was recorded asks the database, with the clinic bound exactly as a
+    request would bind it.
+    """
+    import uuid as _uuid
+
+    from sqlalchemy import select
+
+    from app.db.session import tenant_session
+    from app.models.tenancy import AuditEvent
+
+    statement = select(AuditEvent).where(AuditEvent.tenant_id == _uuid.UUID(tenant_id))
+    if action:
+        statement = statement.where(AuditEvent.action == action)
+
+    async with tenant_session(_uuid.UUID(tenant_id)) as session:
+        rows = (await session.execute(statement.order_by(AuditEvent.at.desc()))).scalars().all()
+        return [
+            {
+                "action": r.action,
+                "actor_kind": r.actor_kind,
+                "actor_label": r.actor_label,
+                "entity": r.entity,
+                "entity_id": r.entity_id,
+                "outcome": r.outcome,
+                "meta": r.meta,
+            }
+            for r in rows
+        ]
+
+
+def token_from(url: str) -> str:
+    """The `token` query parameter of an invitation or reset link.
+
+    Under the `console` mail transport the API hands the console the URL it
+    would have emailed, which is how a test reads an inbox it does not have.
+    """
+    from urllib.parse import parse_qs, urlparse
+
+    assert url, "no link was issued"
+    return parse_qs(urlparse(url).query)["token"][0]
+
+
 @pytest.fixture(autouse=True)
 def reset_rate_limiter():
     from app.core.rate_limit import limiter
@@ -173,4 +227,5 @@ def reset_rate_limiter():
 
 __all__ = [
     "rid", "sign_in", "patients_of", "Signed", "NORTHGATE", "CLEARVIEW", "ROWAN", "CONSOLE",
+    "APEX", "token_from", "audit_lines",
 ]

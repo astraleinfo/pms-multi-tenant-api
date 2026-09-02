@@ -78,7 +78,7 @@ async def create_encounter(
         ctx.session, ctx.tenant, payload, doctor_id=ctx.actor_id, today=ctx.today
     )
     await audit.record(
-        ctx.session, action="encounter.create", tenant_id=ctx.tenant_id, actor_kind="user",
+        ctx.session, action="encounter.create", tenant_id=ctx.tenant_id, actor_kind=ctx.actor_kind,
         actor_id=ctx.actor_id, actor_label=ctx.principal.label, entity="encounter",
         entity_id=str(encounter.id), meta={"signed": payload.sign},
     )
@@ -115,7 +115,7 @@ async def update_encounter(
         ctx.session, ctx.tenant, parse_uuid(encounter_id, what="consultation"), payload
     )
     await audit.record(
-        ctx.session, action="encounter.update", tenant_id=ctx.tenant_id, actor_kind="user",
+        ctx.session, action="encounter.update", tenant_id=ctx.tenant_id, actor_kind=ctx.actor_kind,
         actor_id=ctx.actor_id, actor_label=ctx.principal.label, entity="encounter",
         entity_id=str(encounter.id),
     )
@@ -151,7 +151,7 @@ async def create_prescription(
         doctor_id=ctx.actor_id,
     )
     await audit.record(
-        ctx.session, action="prescription.create", tenant_id=ctx.tenant_id, actor_kind="user",
+        ctx.session, action="prescription.create", tenant_id=ctx.tenant_id, actor_kind=ctx.actor_kind,
         actor_id=ctx.actor_id, actor_label=ctx.principal.label, entity="prescription",
         entity_id=str(prescription.id),
     )
@@ -175,7 +175,7 @@ async def order_labs(
         ordered_by=ctx.actor_id,
     )
     await audit.record(
-        ctx.session, action="lab.order", tenant_id=ctx.tenant_id, actor_kind="user",
+        ctx.session, action="lab.order", tenant_id=ctx.tenant_id, actor_kind=ctx.actor_kind,
         actor_id=ctx.actor_id, actor_label=ctx.principal.label, entity="encounter",
         entity_id=encounter_id, meta={"tests": [o.test_code for o in orders]},
     )

@@ -29,6 +29,18 @@ class AccountStatus(StrEnum):
     LOCKED = "locked"
 
 
+class AuthTokenPurpose(StrEnum):
+    """Why a one-time link exists.
+
+    An invitation is the first password an account ever has; a reset replaces
+    one that already exists. They are told apart because the wording, the
+    lifetime, and what a spent one leaves behind all differ.
+    """
+
+    INVITE = "invite"
+    RESET = "reset"
+
+
 class FieldScope(StrEnum):
     COMMON = "common"
     CLINICAL_TYPE = "clinical_type"
