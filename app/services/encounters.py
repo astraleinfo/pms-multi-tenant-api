@@ -262,6 +262,20 @@ async def get_prescription(
     return row
 
 
+async def get_prescription_for_encounter(
+    session: AsyncSession, tenant_id: uuid.UUID, encounter_id: uuid.UUID
+) -> Prescription | None:
+    """The prescription written from this consultation, if any — for the
+    printable record, which omits the section entirely when there is none."""
+    return (
+        await session.execute(
+            select(Prescription).where(
+                Prescription.encounter_id == encounter_id, Prescription.tenant_id == tenant_id
+            )
+        )
+    ).scalar_one_or_none()
+
+
 async def create_prescription(
     session: AsyncSession,
     tenant_id: uuid.UUID,

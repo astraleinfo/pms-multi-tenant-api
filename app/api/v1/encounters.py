@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from typing import Literal
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, Response, status
 
 from app.api.deps import TenantContext, parse_uuid, require_feature, require_permission
 from app.core.events import broker
 from app.core.permissions import Permission
 from app.models.enums import DispenseStatus, FieldEntity
+from app.models.identity import User
 from app.schemas.clinical import (
     EncounterIn,
     EncounterOut,
@@ -26,6 +27,7 @@ from app.services import audit
 from app.services import encounters as encounter_service
 from app.services import lab as lab_service
 from app.services import tenants as tenant_service
+from app.services.pdf import build_consultation_pdf
 
 router = APIRouter(prefix="/encounters", tags=["consultation"])
 
@@ -127,6 +129,32 @@ async def update_encounter(
             {"entry_id": str(encounter.queue_entry_id), "status": "completed"},
         )
     return EncounterOut.of(encounter)
+
+
+@router.get("/{encounter_id}/consultation-pdf")
+async def consultation_pdf(
+    encounter_id: str,
+    ctx: TenantContext = Depends(require_permission(Permission.ENCOUNTER_READ)),
+) -> Response:
+    """The printable consultation record — the encounter, its prescription (if
+    any) and the patient, rendered as a PDF. `inline` so it opens in a tab
+    rather than forcing a download, which is what a print button wants."""
+    eid = parse_uuid(encounter_id, what="consultation")
+    encounter = await encounter_service.get_encounter(ctx.session, ctx.tenant_id, eid)
+    prescription = await encounter_service.get_prescription_for_encounter(ctx.session, ctx.tenant_id, eid)
+    doctor = await ctx.session.get(User, encounter.doctor_id)
+    pdf_bytes = build_consultation_pdf(
+        encounter,
+        prescription,
+        encounter.patient,
+        tenant_name=ctx.tenant.name,
+        doctor_name=doctor.name if doctor else "",
+    )
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="consultation-{encounter_id}.pdf"'},
+    )
 
 
 # --- prescriptions (core, §3.8) ---------------------------------------------
