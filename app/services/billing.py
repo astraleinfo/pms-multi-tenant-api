@@ -16,10 +16,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import Conflict, NotFound
 from app.models.clinical import Encounter, LabOrder, Patient, Prescription
-from app.models.enums import INVOICE_TRANSITIONS, InvoiceStatus, LineItemSource
+from app.models.enums import (
+    DEPARTMENT_OF_SOURCE,
+    INVOICE_TRANSITIONS,
+    BillingDepartment,
+    InvoiceStatus,
+    LineItemSource,
+    ServiceKind,
+)
 from app.models.ops import InventoryItem, Invoice, InvoiceLineItem, Payment
 from app.schemas.ops import InvoiceIn, PaymentIn
 from app.services import paging
+from app.services import pricing as pricing_service
 from app.services import tenants as tenant_service
 
 CENTS = Decimal("0.01")
@@ -99,11 +107,26 @@ def _invoice_sorts() -> dict[str, tuple]:
 UNPAID_STATUSES = (InvoiceStatus.ISSUED, InvoiceStatus.PARTIALLY_PAID)
 
 
+def department_for(lines) -> BillingDepartment:
+    """Which counter an invoice belongs to, from what is on it.
+
+    Lab and pharmacy bill separately (§3.12), so an invoice made only of lab
+    lines is the lab's. A mixed one is the clinic's — somebody at the front
+    desk composed it deliberately, and splitting it behind their back would
+    lose the invoice they meant to raise.
+    """
+    departments = {DEPARTMENT_OF_SOURCE[LineItemSource(line.source)] for line in lines}
+    if len(departments) == 1:
+        return departments.pop()
+    return BillingDepartment.CLINIC
+
+
 async def list_invoices(
     session: AsyncSession,
     tenant_id: uuid.UUID,
     *,
     status: InvoiceStatus | None = None,
+    department: BillingDepartment | None = None,
     patient_id: uuid.UUID | None = None,
     unpaid_only: bool = False,
     search: str | None = None,
@@ -115,11 +138,14 @@ async def list_invoices(
     """One page of the ledger, how many invoices matched, and the tab counts.
 
     The counts are taken before the status filter, so the tabs keep describing
-    the whole ledger while one of them is on screen.
+    the whole ledger while one of them is on screen. A department narrows both
+    — the lab's tabs are about the lab's invoices, not the clinic's.
     """
     stmt = select(Invoice).where(Invoice.tenant_id == tenant_id)
     if patient_id is not None:
         stmt = stmt.where(Invoice.patient_id == patient_id)
+    if department is not None:
+        stmt = stmt.where(Invoice.department == department)
     if search:
         like = f"%{search.strip()}%"
         stmt = stmt.join(Invoice.patient).where(
@@ -132,6 +158,10 @@ async def list_invoices(
 
     counts = await paging.counts_by(session, stmt, "status")
     counts["unpaid"] = sum(counts.get(str(s), 0) for s in UNPAID_STATUSES)
+    # Prefixed, so a department count can never collide with a status count in
+    # the one dictionary the tabs read.
+    for value, n in (await paging.counts_by(session, stmt, "department")).items():
+        counts[f"department:{value}"] = n
 
     if status is not None:
         stmt = stmt.where(Invoice.status == status)
@@ -194,6 +224,7 @@ async def create_invoice(
         encounter_id=encounter_id,
         number=number,
         status=InvoiceStatus.ISSUED if payload.issue else InvoiceStatus.DRAFT,
+        department=payload.department or department_for(payload.line_items),
         issued_at=today,
         due_at=today + timedelta(days=config.payment_terms_days),
     )
@@ -211,6 +242,10 @@ async def create_invoice(
                 qty=line.qty,
                 unit_price=_money(line.unit_price),
                 tax_pct=_money(line.tax_pct),
+                # What this line settles, where it settles something already
+                # recorded. Without it the charge stays outstanding and would
+                # be offered again at the next visit to the desk.
+                ref_id=uuid.UUID(line.ref_id) if line.ref_id else None,
             )
         )
 
@@ -288,7 +323,14 @@ async def suggest_lines(
     session: AsyncSession, tenant_id: uuid.UUID, *, encounter_id: uuid.UUID
 ) -> list[dict]:
     """§3.12 — what this visit would bill for: the consultation itself, then
-    anything the lab and the pharmacy did for it."""
+    anything the lab and the pharmacy did for it.
+
+    Every figure comes from something the clinic set: the tariff a practice
+    admin keeps for consultations and scans, and the selling price on the stock
+    line for anything dispensed. Where nothing has been set the line still
+    appears, priced at zero and saying so — which is the honest answer to "what
+    do you charge for this?" before anyone has said.
+    """
     encounter = (
         await session.execute(
             select(Encounter).where(Encounter.id == encounter_id, Encounter.tenant_id == tenant_id)
@@ -298,16 +340,43 @@ async def suggest_lines(
         raise NotFound("No such consultation.")
 
     config = await tenant_service.get_config(session, tenant_id)
-    tax = float(config.tax_pct)
-    lines: list[dict] = [
-        {
-            "description": "Consultation",
-            "source": LineItemSource.CONSULTATION.value,
-            "qty": 1,
-            "unit_price": 45.0,
-            "tax_pct": tax,
+    default_tax = float(config.tax_pct)
+    lines: list[dict] = []
+
+    def _line(
+        description: str,
+        source: LineItemSource,
+        qty: int,
+        unit_price: float,
+        tax_pct: float,
+        priced: bool,
+    ) -> dict:
+        return {
+            "description": description,
+            "source": source.value,
+            "department": DEPARTMENT_OF_SOURCE[source].value,
+            "qty": qty,
+            "unit_price": unit_price,
+            "tax_pct": tax_pct,
+            "priced": priced,
         }
-    ]
+
+    consultation = await pricing_service.price_for(
+        session,
+        tenant_id,
+        kind=ServiceKind.CONSULTATION,
+        code=pricing_service.CONSULTATION_CODE,
+    )
+    lines.append(
+        _line(
+            "Consultation",
+            LineItemSource.CONSULTATION,
+            1,
+            float(consultation.price) if consultation else 0.0,
+            float(consultation.tax_pct) if consultation else default_tax,
+            consultation is not None,
+        )
+    )
 
     orders = (
         await session.execute(
@@ -315,14 +384,20 @@ async def suggest_lines(
         )
     ).scalars()
     for order in orders:
+        # Each scan carries its own amount: the tariff is keyed by test code,
+        # so an ultrasound and a blood count are not the same money.
+        tariff = await pricing_service.price_for(
+            session, tenant_id, kind=ServiceKind.LAB, code=order.test_code
+        )
         lines.append(
-            {
-                "description": f"Lab — {order.test_name}",
-                "source": LineItemSource.LAB.value,
-                "qty": 1,
-                "unit_price": 30.0,
-                "tax_pct": tax,
-            }
+            _line(
+                f"Lab — {order.test_name}",
+                LineItemSource.LAB,
+                1,
+                float(tariff.price) if tariff else 0.0,
+                float(tariff.tax_pct) if tariff else default_tax,
+                tariff is not None,
+            )
         )
 
     prescriptions = (
@@ -337,18 +412,21 @@ async def suggest_lines(
             if item.dispensed_qty <= 0:
                 continue
             unit_price = 0.0
+            priced = False
             if item.item_id:
                 stock = await session.get(InventoryItem, item.item_id)
                 if stock is not None and stock.tenant_id == tenant_id:
                     unit_price = float(stock.unit_price)
+                    priced = True
             lines.append(
-                {
-                    "description": f"{item.medicine} {item.strength}".strip(),
-                    "source": LineItemSource.PHARMACY.value,
-                    "qty": item.dispensed_qty,
-                    "unit_price": unit_price,
-                    "tax_pct": tax,
-                }
+                _line(
+                    f"{item.medicine} {item.strength}".strip(),
+                    LineItemSource.PHARMACY,
+                    item.dispensed_qty,
+                    unit_price,
+                    default_tax,
+                    priced,
+                )
             )
 
     return lines

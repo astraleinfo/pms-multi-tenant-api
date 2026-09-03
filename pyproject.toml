@@ -15,15 +15,31 @@ dependencies = [
     "argon2-cffi>=23.1",
     "pyjwt>=2.8",
     "reportlab>=4.0",
+    # multipart form parsing, for the files a lab order collects
+    "python-multipart>=0.0.9",
+    # Fernet, for the provider credentials a clinic stores against its own row
+    "cryptography>=42.0",
+    # the outbound HTTP client the SMS provider talks over. A runtime import,
+    # not a test one — the tests happen to use it too, which is what hid the
+    # `cryptography` gap: a dev-only httpx made this list look complete.
+    "httpx>=0.27",
+    # `zoneinfo` reads the operating system's tz database. Linux and macOS ship
+    # one; Windows does not, so every clinic timezone lookup raises there unless
+    # this is installed. Free on the platforms that do not need it.
+    "tzdata>=2024.1; platform_system == 'Windows'",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.2",
     "pytest-asyncio>=0.23",
-    "httpx>=0.27",
     "ruff>=0.5",
 ]
+# The outbox nudge, and only the nudge. `app/services/messaging/outbox.py`
+# imports this inside the call and swallows its absence on purpose — without it
+# a queued message waits for the sweep instead of going out immediately, which
+# is why it is an extra rather than a dependency.
+redis = ["redis>=5.0"]
 
 [build-system]
 requires = ["setuptools>=68"]

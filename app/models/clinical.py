@@ -19,6 +19,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -26,7 +27,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, deferred, mapped_column, relationship
 
 from app.db.base import Base, TenantScoped, TimestampMixin, uuid_pk
 from app.models.enums import (
@@ -276,3 +277,38 @@ class LabOrder(Base, TenantScoped, TimestampMixin):
     patient: Mapped[Patient] = relationship("Patient", lazy="selectin", foreign_keys=[patient_id])
 
     __mapper_args__ = {"confirm_deleted_rows": False}
+
+
+class LabAttachment(Base, TenantScoped, TimestampMixin):
+    """A file that belongs to a lab order — a scan, a machine printout, a
+    signed report.
+
+    The bytes live in the database rather than on a disk the API happens to be
+    sitting on: a patient's report is tenant-owned data, and keeping it in the
+    same table space means row-level security covers it exactly as it covers
+    the order it hangs off. `data` is deferred, so listing an order's
+    attachments never drags the files across the wire.
+    """
+
+    __tablename__ = "lab_attachments"
+    __extra_table_args__ = (
+        Index("ix_lab_attachments_tenant_order", "tenant_id", "lab_order_id"),
+        CheckConstraint("size_bytes > 0", name="ck_lab_attachment_size"),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    lab_order_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("lab_orders.id", ondelete="CASCADE"), nullable=False
+    )
+    filename: Mapped[str] = mapped_column(String(200), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(120), nullable=False, default="application/octet-stream")
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    uploaded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    uploaded_by: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    data: Mapped[bytes] = deferred(mapped_column(LargeBinary, nullable=False))
+

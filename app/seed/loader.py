@@ -41,6 +41,7 @@ from app.models.ops import (
     Invoice,
     InvoiceLineItem,
     Payment,
+    ServicePrice,
 )
 from app.models.tenancy import (
     ClinicalType,
@@ -118,8 +119,9 @@ async def wipe(session: AsyncSession) -> None:
     tables = ", ".join(
         [
             "audit_events", "login_attempts", "refresh_tokens", "payments", "invoice_line_items",
-            "invoices", "inventory_transactions", "inventory_batches", "prescription_items",
-            "prescriptions", "lab_orders", "encounters", "queue_entries", "appointments",
+            "invoices", "service_prices", "inventory_transactions", "inventory_batches",
+            "prescription_items", "prescriptions", "lab_attachments", "lab_orders", "encounters",
+            "queue_entries", "appointments",
             "patients", "inventory_items", "tenant_configs", "tenant_features",
             "field_definitions", "users", "tenants", "platform_users", "medicine_suggestions",
             "lab_tests", "features", "clinical_types",
@@ -233,6 +235,83 @@ def _by_tenant(rows: list[dict], tenant_short_id: str) -> list[dict]:
     return [r for r in rows if r.get("tenant_id") == tenant_short_id]
 
 
+
+# --- the tariff each demo clinic starts with ---------------------------------
+#
+# §3.12: what a clinic charges is a decision it makes, so these are per-tenant
+# rows rather than numbers in the billing code. Scans differ from each other on
+# purpose — a cone beam CT is not a bitewing.
+
+CONSULTATION_PRICE = {"dental": 500, "ophthalmology": 600, "dermatology": 550}
+
+LAB_PRICES = {
+    "FBC": 350, "HBA1C": 600, "CRP": 450, "CULT": 700,
+    "OPG": 900, "PA": 250, "BW": 350, "CBCT": 3500,
+    "OCT": 1800, "VF": 1200, "BIO": 1500, "CORNEA": 1600,
+    "PATCH": 2400, "MYC": 650, "BIOP": 2800, "DERM": 900,
+}
+
+PROCEDURE_PRICES = {
+    "dental": [
+        ("CROWN-ZR", "Zirconia crown", 12000),
+        ("RCT-MOL", "Root canal treatment — molar", 7500),
+        ("SCALE", "Scaling and polishing", 1500),
+        ("EXTRACT", "Extraction — simple", 2000),
+    ],
+    "ophthalmology": [
+        ("PHACO", "Phacoemulsification with IOL", 38000),
+        ("YAG", "YAG capsulotomy", 6000),
+        ("REFRACT", "Refraction and dispensing", 800),
+    ],
+    "dermatology": [
+        ("CRYO", "Cryotherapy — per lesion", 1200),
+        ("EXCISE", "Excision with histology", 6500),
+        ("PEEL", "Chemical peel", 3500),
+    ],
+}
+
+
+def _seed_service_prices(session: AsyncSession, data: dict, tenant_id, clinical_type: str) -> None:
+    """One row per billable thing that is not stock: the consultation, this
+    discipline's procedures, and every test it can order."""
+    session.add(
+        ServicePrice(
+            tenant_id=tenant_id,
+            kind="consultation",
+            code="CONSULTATION",
+            name="Consultation",
+            price=CONSULTATION_PRICE.get(clinical_type, 500),
+            tax_pct=0,
+            active=True,
+        )
+    )
+
+    for code, name, price in PROCEDURE_PRICES.get(clinical_type, []):
+        session.add(
+            ServicePrice(
+                tenant_id=tenant_id, kind="procedure", code=code, name=name,
+                price=price, tax_pct=0, active=True,
+            )
+        )
+
+    for row in data["CAT_LAB_CATALOG"]:
+        offered = not row.get("clinical_types") or clinical_type in row["clinical_types"]
+        if not offered:
+            continue
+        session.add(
+            ServicePrice(
+                tenant_id=tenant_id,
+                kind="lab",
+                code=row["code"],
+                name=row["name"],
+                price=LAB_PRICES.get(row["code"], 500),
+                tax_pct=0,
+                active=True,
+                note=row["panel"],
+            )
+        )
+
+
 async def seed_tenant(session: AsyncSession, data: dict, tenant_row: dict) -> None:
     """Everything one clinic owns, written with that clinic bound to the
     session — exactly the path a request takes."""
@@ -261,6 +340,8 @@ async def seed_tenant(session: AsyncSession, data: dict, tenant_row: dict) -> No
                 group=row.get("group"),
             )
         )
+
+    _seed_service_prices(session, data, tenant_id, tenant_row["clinical_type"])
 
     for row in _by_tenant(data["TENANT_FEATURES"], short):
         session.add(

@@ -492,9 +492,11 @@ Everything is under `/v1`. The full list is at `/docs`; this is the shape of it.
 | **Scheduling** (§3.5, §3.6) | `GET|POST /appointments`, `GET /appointments/availability`, `PATCH /appointments/{id}/status`, `POST /appointments/{id}/checkin`, `GET /queue`, `POST /queue/walkin`, `PATCH /queue/{id}/status`, `GET /queue/display` |
 | **Consultation** (§3.7, §3.8) | `GET /encounters/schema`, `GET|POST /encounters`, `GET|PATCH /encounters/{id}`, `POST /encounters/{id}/prescriptions`, `GET /prescriptions` |
 | **Pharmacy** (§3.9) 🔒 | `GET /pharmacy/prescriptions`, `POST /pharmacy/prescriptions/{id}/dispense` |
-| **Lab** (§3.10) 🔒 | `POST /encounters/{id}/lab-orders`, `GET /encounters/{id}/lab-results`, `GET /lab/orders`, `POST /lab/orders/{id}/start`, `POST /lab/orders/{id}/results`, `PATCH /lab/orders/{id}` |
-| **Inventory** (§3.11) 🔒 | `GET /inventory/items`, `/batches`, `/levels`, `/expiring`, `GET|POST /inventory/transactions` |
-| **Billing** (§3.12) 🔒 | `GET|POST /billing/invoices`, `GET /billing/invoices/suggestions`, `GET /billing/invoices/{id}`, `POST .../issue`, `.../void`, `.../payments` |
+| **Lab** (§3.10) 🔒 | `POST /encounters/{id}/lab-orders`, `GET /encounters/{id}/lab-results`, `GET /lab/orders`, `POST /lab/orders/{id}/start`, `POST /lab/orders/{id}/results`, `PATCH /lab/orders/{id}`, `GET|POST /lab/orders/{id}/attachments`, `GET|DELETE /lab/orders/{id}/attachments/{aid}` |
+| **Inventory** (§3.11) 🔒 | `GET|POST /inventory/items`, `PATCH /inventory/items/{id}`, `/batches`, `/levels`, `/expiring`, `GET|POST /inventory/transactions` |
+| **Billing** (§3.12) 🔒 | `GET|POST /billing/invoices` (`?department=clinic\|lab\|pharmacy`), `GET /billing/invoices/suggestions`, `GET /billing/invoices/{id}`, `POST .../issue`, `.../void`, `.../payments` |
+| **Pricing** (§3.12) | `GET|POST /pricing/services`, `PATCH|DELETE /pricing/services/{id}`, `POST /pricing/services/import-lab-catalogue` |
+| **Accounts** (§3.12) 🔒 | `GET /billing/patients/{id}/account`, `GET /billing/patients/{id}/charges`, `POST /billing/patients/{id}/invoices`, `POST /billing/patients/{id}/payments` |
 | **Realtime** (§3.6) | `WS /ws/queue?access_token=…` |
 | **Analytics** (§3.14) | `GET /analytics/dashboard` |
 | **Platform** (§3.1) | `GET|POST /platform/tenants`, `PATCH /platform/tenants/{id}/status`, `GET /platform/snapshot`, `GET /platform/me` |
@@ -556,6 +558,38 @@ Things that are enforced here rather than hoped for in the client:
   under a row lock, and cannot take more than a batch holds.
 * **Money is derived.** Invoice totals come from the line items and payments every time, so a
   status cannot disagree with the arithmetic. Overpaying is refused; a void invoice takes nothing.
+* **Prices are the clinic's, not the code's.** What a consultation, a procedure or a particular
+  scan costs lives in `service_prices`, one row per tenant per code, and billing reads it through
+  `app/services/pricing.py`. A line with no tariff behind it is suggested at zero and says so
+  (`priced: false`) rather than quoting a number nobody agreed to. A stock line's selling price is
+  the same idea: `unit_price` is always the answer, and `pricing_mode` records whether it was typed,
+  taken as a margin over cost, or read off the MRP — so changing the cost of a line priced on margin
+  moves the price with it.
+* **Each counter bills its own.** `invoices.department` says which desk raised an invoice. It is
+  derived from the line items when it is not sent — an invoice of nothing but lab lines is the
+  lab's — so the lab and the pharmacy chase their own money without the clinic's ledger being
+  filtered by description.
+* **A charge is billed once.** `invoice_line_items.ref_id` names the row a line bills for: a
+  prescription item, a lab order, an encounter. `app/services/accounts.py` works out what a patient
+  has had that nothing points at yet, which is what lets the dispensing window ask for money for
+  what it just handed over without the front desk charging for it again on the way out. Voiding an
+  invoice puts its charges back, because voiding is how a mistaken charge is undone.
+* **Money is applied, not allocated by hand.** A payment at one counter clears that counter's
+  invoices oldest first, and never touches another's — a patient paying for their medicine has not
+  paid for their scan. Paying more than a counter is owed is refused rather than left as a credit
+  nobody can see.
+* **The final settlement is a subtraction nobody performs.** `GET /billing/patients/{id}/account`
+  answers the question asked at the door — what is still owed, counter by counter, plus a
+  `total_due`. Money already taken at a window is not deducted from that total; it was never in it,
+  because a settled counter has no `due`. Each counter also reports the `paid` it has taken over
+  every invoice it ever raised, so a pharmacy that collected at the hatch reads as *paid* rather
+  than disappearing and looking like a pharmacy that never charged anything. Settling everything is
+  the same four routes run per counter, which is why the ledger still shows three separate bills
+  afterwards.
+* **The counter takes the money.** Every clinical role carries `billing:read` and `billing:write`:
+  the pharmacist asks as the medicine is handed over, the lab tech as the report is collected, the
+  clinician for the consultation. Which counter is being settled is a field on the request, not a
+  role, so the ledger keeps them apart without the permission table having to.
 * **Lab results are withheld until verified.** Ordering, resulting and verifying are separate
   steps, and `GET /encounters/{id}/lab-results` returns verified orders only unless asked
   otherwise — and even then the values themselves stay redacted. `resulted_by` and `verified_by`

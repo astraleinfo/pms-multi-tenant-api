@@ -9,35 +9,47 @@ from __future__ import annotations
 from datetime import date as date_t
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile, status
+from fastapi.responses import Response
 
 from app.api.deps import TenantContext, parse_uuid, require_feature
 from app.core.errors import ValidationFailed
 from app.core.permissions import Permission
-from app.models.enums import DispenseStatus, InvoiceStatus, LabOrderStatus
+from app.models.enums import BillingDepartment, DispenseStatus, InvoiceStatus, LabOrderStatus
 from app.schemas.clinical import (
     DispenseIn,
+    LabAttachmentOut,
     LabOrderOut,
     LabOrderPageOut,
     LabResultsIn,
     PrescriptionOut,
 )
 from app.schemas.ops import (
+    ChargeOut,
+    CounterPaymentIn,
+    CounterPaymentOut,
+    DepartmentAccountOut,
     InventoryBatchOut,
+    InventoryItemIn,
     InventoryItemOut,
+    InventoryItemPatch,
     InventoryTxOut,
     InvoiceIn,
     InvoiceOut,
     InvoicePageOut,
+    PatientAccountOut,
     PaymentIn,
+    RaiseInvoiceIn,
     StockLevelOut,
     StockMovementIn,
     SuggestedLineOut,
 )
+from app.services import accounts as account_service
 from app.services import audit
 from app.services import billing as billing_service
 from app.services import inventory as inventory_service
 from app.services import lab as lab_service
+from app.services import patients as patient_service
 from app.services import pharmacy as pharmacy_service
 
 # --- pharmacy (§3.9) ---------------------------------------------------------
@@ -177,6 +189,104 @@ async def verify_order(
     return LabOrderOut.of(order, ctx.tz)
 
 
+@lab_router.get("/orders/{order_id}/attachments", response_model=list[LabAttachmentOut])
+async def list_attachments(
+    order_id: str,
+    ctx: TenantContext = Depends(require_feature("lab", Permission.LAB_READ)),
+) -> list[LabAttachmentOut]:
+    """What has been filed against this order — names and sizes, not the files."""
+    rows = await lab_service.list_attachments(
+        ctx.session, ctx.tenant_id, parse_uuid(order_id, what="lab order")
+    )
+    return [LabAttachmentOut.of(row, ctx.tz) for row in rows]
+
+
+@lab_router.post(
+    "/orders/{order_id}/attachments",
+    response_model=LabAttachmentOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_attachment(
+    order_id: str,
+    file: UploadFile = File(..., description="The report: a PDF, an image, or a CSV."),
+    note: str | None = Form(default=None),
+    ctx: TenantContext = Depends(require_feature("lab", Permission.LAB_RESULT)),
+) -> LabAttachmentOut:
+    """Attach a scan, a machine printout or a signed report to an order.
+
+    The file is read into the request's transaction and stored as a tenant-owned
+    row, so it is behind the same row-level security as the order itself — and
+    a verified order refuses new paper, because verification is what released
+    the result somebody has already read.
+    """
+    data = await file.read()
+    attachment = await lab_service.add_attachment(
+        ctx.session,
+        ctx.tenant_id,
+        parse_uuid(order_id, what="lab order"),
+        filename=file.filename or "report",
+        content_type=file.content_type or "application/octet-stream",
+        data=data,
+        note=note,
+        actor_id=ctx.actor_id,
+    )
+    await audit.record(
+        ctx.session, action="lab.attachment.add", tenant_id=ctx.tenant_id, actor_kind=ctx.actor_kind,
+        actor_id=ctx.actor_id, actor_label=ctx.principal.label, entity="lab_attachment",
+        entity_id=str(attachment.id),
+        meta={"order": order_id, "filename": attachment.filename, "bytes": attachment.size_bytes},
+    )
+    return LabAttachmentOut.of(attachment, ctx.tz)
+
+
+@lab_router.get("/orders/{order_id}/attachments/{attachment_id}")
+async def download_attachment(
+    order_id: str,
+    attachment_id: str,
+    ctx: TenantContext = Depends(require_feature("lab", Permission.LAB_READ)),
+) -> Response:
+    """The file itself. Reached through its order, so the tenant check that
+    protects the order protects the file."""
+    attachment = await lab_service.get_attachment(
+        ctx.session,
+        ctx.tenant_id,
+        parse_uuid(order_id, what="lab order"),
+        parse_uuid(attachment_id, what="attachment"),
+    )
+    return Response(
+        content=attachment.data,
+        media_type=attachment.content_type,
+        headers={
+            # `inline` so a report opens in the tab it was asked for; the name
+            # was stripped of anything that could steer a save dialogue when it
+            # was stored.
+            "Content-Disposition": f'inline; filename="{attachment.filename}"',
+            "Cache-Control": "private, no-store",
+        },
+    )
+
+
+@lab_router.delete(
+    "/orders/{order_id}/attachments/{attachment_id}", status_code=status.HTTP_204_NO_CONTENT
+)
+async def delete_attachment(
+    order_id: str,
+    attachment_id: str,
+    ctx: TenantContext = Depends(require_feature("lab", Permission.LAB_RESULT)),
+) -> None:
+    await lab_service.delete_attachment(
+        ctx.session,
+        ctx.tenant_id,
+        parse_uuid(order_id, what="lab order"),
+        parse_uuid(attachment_id, what="attachment"),
+    )
+    await audit.record(
+        ctx.session, action="lab.attachment.remove", tenant_id=ctx.tenant_id,
+        actor_kind=ctx.actor_kind, actor_id=ctx.actor_id, actor_label=ctx.principal.label,
+        entity="lab_attachment", entity_id=attachment_id, meta={"order": order_id},
+    )
+
+
 # --- inventory (§3.11) -------------------------------------------------------
 
 inventory_router = APIRouter(prefix="/inventory", tags=["inventory"])
@@ -188,6 +298,70 @@ async def list_items(
 ) -> list[InventoryItemOut]:
     rows = await inventory_service.list_items(ctx.session, ctx.tenant_id)
     return [InventoryItemOut.of(i) for i in rows]
+
+
+@inventory_router.post(
+    "/items", response_model=InventoryItemOut, status_code=status.HTTP_201_CREATED
+)
+async def create_item(
+    payload: InventoryItemIn,
+    ctx: TenantContext = Depends(require_feature("inventory", Permission.INVENTORY_WRITE)),
+) -> InventoryItemOut:
+    """Open a stock line.
+
+    It starts at nothing on hand — the ledger is what puts stock on a shelf, so
+    the first purchase comes next and this is only the label.
+    """
+    item = await inventory_service.create_item(
+        ctx.session,
+        ctx.tenant_id,
+        sku=payload.sku,
+        name=payload.name,
+        form=payload.form,
+        strength=payload.strength,
+        unit=payload.unit,
+        category=payload.category,
+        reorder_level=payload.reorder_level,
+        unit_price=payload.unit_price,
+        cost_price=payload.cost_price,
+        mrp=payload.mrp,
+        margin_pct=payload.margin_pct,
+        pricing_mode=payload.pricing_mode,
+    )
+    await audit.record(
+        ctx.session, action="inventory.item.create", tenant_id=ctx.tenant_id,
+        actor_kind=ctx.actor_kind, actor_id=ctx.actor_id, actor_label=ctx.principal.label,
+        entity="inventory_item", entity_id=str(item.id),
+        meta={"sku": item.sku, "pricing_mode": item.pricing_mode.value},
+    )
+    return InventoryItemOut.of(item)
+
+
+@inventory_router.patch("/items/{item_id}", response_model=InventoryItemOut)
+async def update_item(
+    item_id: str,
+    payload: InventoryItemPatch,
+    ctx: TenantContext = Depends(require_feature("inventory", Permission.INVENTORY_WRITE)),
+) -> InventoryItemOut:
+    """Edit a stock line — including how it is priced.
+
+    The selling price is re-derived from whatever the mode now says: change the
+    cost of a line priced on margin and the price follows, without anyone
+    working it out again.
+    """
+    item = await inventory_service.update_item(
+        ctx.session,
+        ctx.tenant_id,
+        parse_uuid(item_id, what="stock item"),
+        payload.model_dump(exclude_unset=True),
+    )
+    await audit.record(
+        ctx.session, action="inventory.item.update", tenant_id=ctx.tenant_id,
+        actor_kind=ctx.actor_kind, actor_id=ctx.actor_id, actor_label=ctx.principal.label,
+        entity="inventory_item", entity_id=str(item.id),
+        meta={"sku": item.sku, "unit_price": float(item.unit_price)},
+    )
+    return InventoryItemOut.of(item)
 
 
 @inventory_router.get("/batches", response_model=list[InventoryBatchOut])
@@ -260,6 +434,13 @@ async def record_movement(
         actor_id=ctx.actor_id,
         note=payload.note,
         expiry=expiry,
+        # A delivery is when the supplier's figures are in front of somebody.
+        # Sent, they re-price the line; left out, it keeps the price it had.
+        cost_price=payload.cost_price,
+        mrp=payload.mrp,
+        margin_pct=payload.margin_pct,
+        unit_price=payload.unit_price,
+        pricing_mode=payload.pricing_mode,
     )
     await audit.record(
         ctx.session, action=f"inventory.{payload.type.value}", tenant_id=ctx.tenant_id,
@@ -277,6 +458,9 @@ billing_router = APIRouter(prefix="/billing", tags=["billing"])
 @billing_router.get("/invoices", response_model=InvoicePageOut)
 async def list_invoices(
     status_filter: InvoiceStatus | None = Query(default=None, alias="status"),
+    department: BillingDepartment | None = Query(
+        default=None, description="Which counter raised it: clinic, lab or pharmacy."
+    ),
     patient_id: str | None = None,
     unpaid: bool = Query(default=False, description="Issued or part paid, with a balance."),
     search: str | None = Query(default=None, max_length=120),
@@ -288,11 +472,15 @@ async def list_invoices(
 ) -> InvoicePageOut:
     """One page of the ledger, plus the counts behind the tabs. Ordering by
     total or balance is done on sums the database computes, so a page of ten is
-    the ten the ledger means — not the ten a browser could see."""
+    the ten the ledger means — not the ten a browser could see.
+
+    `department` narrows it to one counter — the lab's own book, or the
+    pharmacy's — and the counts narrow with it."""
     rows, total, counts = await billing_service.list_invoices(
         ctx.session,
         ctx.tenant_id,
         status=status_filter,
+        department=department,
         patient_id=parse_uuid(patient_id, what="patient") if patient_id else None,
         unpaid_only=unpaid,
         search=search,
@@ -388,3 +576,144 @@ async def add_payment(
         entity_id=str(invoice.id), meta={"amount": payload.amount, "method": payload.method.value},
     )
     return InvoiceOut.of(invoice, ctx.tz, billing_service.totals_for(invoice))
+
+
+# --- a patient's account (§3.12) ---------------------------------------------
+#
+# One patient, three counters. The clinic, the lab and the pharmacy each keep
+# their own invoices and each is settled on its own — paying for your medicine
+# at the window is not paying for your scan.
+
+
+@billing_router.get("/patients/{patient_id}/account", response_model=PatientAccountOut)
+async def patient_account(
+    patient_id: str,
+    ctx: TenantContext = Depends(require_feature("billing", Permission.BILLING_READ)),
+) -> PatientAccountOut:
+    """What this patient owes, and what nobody has billed them for yet.
+
+    The unbilled half is worked out from what the clinic already recorded —
+    medicine handed over, tests ordered, consultations held — minus whatever an
+    invoice line already points at. It is the question the front desk asks when
+    somebody comes to pay on the way out.
+    """
+    uid = parse_uuid(patient_id, what="patient")
+    patient = await patient_service.get_patient(ctx.session, ctx.tenant_id, uid)
+    accounts = await account_service.account(ctx.session, ctx.tenant_id, uid)
+
+    departments = {
+        department.value: DepartmentAccountOut(
+            department=department,
+            outstanding=entry.outstanding,
+            unbilled_total=entry.unbilled_total,
+            due=entry.due,
+            paid=entry.paid,
+            unbilled=[ChargeOut.of(charge) for charge in entry.unbilled],
+            invoices=[
+                InvoiceOut.of(invoice, ctx.tz, billing_service.totals_for(invoice))
+                for invoice in entry.invoices
+            ],
+        )
+        for department, entry in accounts.items()
+    }
+    return PatientAccountOut(
+        patient_id=str(patient.id),
+        patient_name=patient.full_name,
+        patient_mrn=patient.mrn,
+        departments=departments,
+        total_due=round(sum(entry.due for entry in accounts.values()), 2),
+    )
+
+
+@billing_router.get("/patients/{patient_id}/charges", response_model=list[ChargeOut])
+async def unbilled_charges(
+    patient_id: str,
+    department: BillingDepartment | None = Query(default=None),
+    ctx: TenantContext = Depends(require_feature("billing", Permission.BILLING_READ)),
+) -> list[ChargeOut]:
+    """Just the unbilled half, optionally for one counter — what the dispensing
+    window shows when it asks for money."""
+    charges = await account_service.unbilled_charges(
+        ctx.session,
+        ctx.tenant_id,
+        parse_uuid(patient_id, what="patient"),
+        department=department,
+    )
+    return [ChargeOut.of(charge) for charge in charges]
+
+
+@billing_router.post(
+    "/patients/{patient_id}/invoices", response_model=InvoiceOut, status_code=status.HTTP_201_CREATED
+)
+async def raise_counter_invoice(
+    patient_id: str,
+    payload: RaiseInvoiceIn,
+    ctx: TenantContext = Depends(require_feature("billing", Permission.BILLING_WRITE)),
+) -> InvoiceOut:
+    """Put one counter's outstanding charges onto an invoice.
+
+    Each line points back at what it bills, so the same box of tablets cannot
+    be charged for twice however many times this is called.
+    """
+    invoice = await account_service.raise_invoice(
+        ctx.session,
+        ctx.tenant_id,
+        parse_uuid(patient_id, what="patient"),
+        department=payload.department,
+        today=ctx.today,
+        issue=payload.issue,
+        ref_ids=payload.ref_ids,
+    )
+    await audit.record(
+        ctx.session, action="invoice.create", tenant_id=ctx.tenant_id, actor_kind=ctx.actor_kind,
+        actor_id=ctx.actor_id, actor_label=ctx.principal.label, entity="invoice",
+        entity_id=str(invoice.id),
+        meta={"number": invoice.number, "department": payload.department.value, "counter": True},
+    )
+    return InvoiceOut.of(invoice, ctx.tz, billing_service.totals_for(invoice))
+
+
+@billing_router.post("/patients/{patient_id}/payments", response_model=CounterPaymentOut)
+async def take_counter_payment(
+    patient_id: str,
+    payload: CounterPaymentIn,
+    ctx: TenantContext = Depends(require_feature("billing", Permission.BILLING_WRITE)),
+) -> CounterPaymentOut:
+    """Take one amount at one counter, oldest invoice first.
+
+    A patient hands over one sum at one window; which invoices it clears is the
+    ledger's problem rather than theirs.
+    """
+    uid = parse_uuid(patient_id, what="patient")
+    settled = await account_service.settle(
+        ctx.session,
+        ctx.tenant_id,
+        uid,
+        department=payload.department,
+        amount=payload.amount,
+        method=payload.method,
+        reference=payload.reference,
+        actor_id=ctx.actor_id,
+    )
+    await audit.record(
+        ctx.session, action="invoice.payment", tenant_id=ctx.tenant_id, actor_kind=ctx.actor_kind,
+        actor_id=ctx.actor_id, actor_label=ctx.principal.label, entity="patient",
+        entity_id=str(uid),
+        meta={
+            "amount": payload.amount,
+            "method": payload.method.value,
+            "department": payload.department.value,
+            "invoices": [str(invoice.id) for invoice in settled],
+        },
+    )
+
+    accounts = await account_service.account(ctx.session, ctx.tenant_id, uid)
+    return CounterPaymentOut(
+        department=payload.department,
+        paid=payload.amount,
+        remaining=accounts[payload.department].outstanding,
+        invoices=[
+            InvoiceOut.of(invoice, ctx.tz, billing_service.totals_for(invoice))
+            for invoice in settled
+        ],
+    )
