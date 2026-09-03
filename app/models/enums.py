@@ -132,6 +132,43 @@ class InventoryRefType(StrEnum):
     LAB_ORDER = "lab_order"
 
 
+class PricingMode(StrEnum):
+    """How a stock item's selling price is arrived at (§3.11).
+
+    The three ways a pharmacy actually quotes a price: type the figure, add a
+    margin to what the box cost, or sell at the printed MRP (optionally less a
+    discount). Whichever is chosen, `unit_price` still holds the answer — the
+    mode records *why* it is that number, so a later cost or MRP change can be
+    re-applied without anyone re-deriving it by hand.
+    """
+
+    PRICE = "price"
+    PERCENT = "percent"
+    MRP = "mrp"
+
+
+class ServiceKind(StrEnum):
+    """What a tenant-set price is for. Lab prices are keyed by test code, so a
+    scan can carry its own amount (§3.10)."""
+
+    CONSULTATION = "consultation"
+    PROCEDURE = "procedure"
+    LAB = "lab"
+    OTHER = "other"
+
+
+class BillingDepartment(StrEnum):
+    """Which counter an invoice belongs to.
+
+    Lab and pharmacy bill separately from the clinic: one visit can produce
+    three invoices, each owned by the desk that raised it.
+    """
+
+    CLINIC = "clinic"
+    LAB = "lab"
+    PHARMACY = "pharmacy"
+
+
 class InventoryCategory(StrEnum):
     MEDICINE = "medicine"
     CONSUMABLE = "consumable"
@@ -154,6 +191,17 @@ class LineItemSource(StrEnum):
     PHARMACY = "pharmacy"
     LAB = "lab"
     MANUAL = "manual"
+
+
+#: Which counter a line belongs to. A department is never guessed from a
+#: description — it follows the source the line was created with.
+DEPARTMENT_OF_SOURCE: dict[LineItemSource, BillingDepartment] = {
+    LineItemSource.CONSULTATION: BillingDepartment.CLINIC,
+    LineItemSource.PROCEDURE: BillingDepartment.CLINIC,
+    LineItemSource.MANUAL: BillingDepartment.CLINIC,
+    LineItemSource.LAB: BillingDepartment.LAB,
+    LineItemSource.PHARMACY: BillingDepartment.PHARMACY,
+}
 
 
 class PaymentMethod(StrEnum):

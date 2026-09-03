@@ -11,6 +11,7 @@ from app.api.v1 import (
     modules,
     patients,
     platform,
+    pricing,
     realtime,
     scheduling,
     tenant,
@@ -22,6 +23,7 @@ api_router = APIRouter(prefix="/v1")
 api_router.include_router(auth.router)
 api_router.include_router(catalog.router)
 api_router.include_router(tenant.router)
+api_router.include_router(pricing.router)
 api_router.include_router(patients.router)
 api_router.include_router(scheduling.router)
 api_router.include_router(encounters.router)

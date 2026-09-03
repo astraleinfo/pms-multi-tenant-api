@@ -451,6 +451,32 @@ class LabOrderPageOut(ApiModel):
     offset: int
 
 
+class LabAttachmentOut(ApiModel):
+    """A file filed against a lab order — what it is, not what is in it.
+
+    The bytes are fetched one at a time from the download route, so a drawer
+    listing four reports moves four short rows rather than four scans.
+    """
+
+    id: str
+    lab_order_id: str
+    filename: str
+    content_type: str
+    size_bytes: int
+    note: str | None = None
+    uploaded_at: str
+    uploaded_by: str | None = None
+
+    @classmethod
+    def of(cls, a, tz: str) -> LabAttachmentOut:
+        return cls(
+            id=str(a.id), lab_order_id=str(a.lab_order_id), filename=a.filename,
+            content_type=a.content_type, size_bytes=a.size_bytes, note=a.note,
+            uploaded_at=stamp(a.uploaded_at, tz) or "",
+            uploaded_by=str(a.uploaded_by) if a.uploaded_by else None,
+        )
+
+
 class LabTestIn(InputModel):
     code: str = Field(min_length=1, max_length=20)
     name: str = Field(default="", max_length=160)

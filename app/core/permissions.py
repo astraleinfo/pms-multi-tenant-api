@@ -3,6 +3,12 @@
 Permissions are named after what they let someone do, and each role gets an
 explicit set. Route handlers ask for a permission, never for a role, so adding
 a role is a change in one table rather than a sweep through the routers.
+
+Money is the one place the table looks wider than it reads: every clinical role
+can bill and settle, because in this product the counter takes the money. The
+pharmacist asks for it as the medicine is handed over, the lab tech as the
+report is collected, the clinician for the consultation. Which counter is being
+settled is chosen on the screen, and the ledger keeps the three apart.
 """
 
 from __future__ import annotations
@@ -101,6 +107,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.PHARMACY_READ,
             Permission.INVENTORY_READ,
             Permission.BILLING_READ,
+            Permission.BILLING_WRITE,
             Permission.USER_READ,
             Permission.TENANT_CONFIG_READ,
             Permission.ANALYTICS_READ,
@@ -116,6 +123,8 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.PHARMACY_DISPENSE,
             Permission.INVENTORY_READ,
             Permission.INVENTORY_WRITE,
+            Permission.BILLING_READ,
+            Permission.BILLING_WRITE,
             Permission.QUEUE_READ,
             Permission.USER_READ,
             Permission.TENANT_CONFIG_READ,
@@ -128,6 +137,8 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.LAB_READ,
             Permission.LAB_RESULT,
             Permission.LAB_VERIFY,
+            Permission.BILLING_READ,
+            Permission.BILLING_WRITE,
             Permission.QUEUE_READ,
             Permission.INVENTORY_READ,
             Permission.USER_READ,

@@ -3,6 +3,7 @@
 from app.models.clinical import (  # noqa: F401
     Appointment,
     Encounter,
+    LabAttachment,
     LabOrder,
     Patient,
     Prescription,
@@ -24,6 +25,7 @@ from app.models.ops import (  # noqa: F401
     Invoice,
     InvoiceLineItem,
     Payment,
+    ServicePrice,
 )
 from app.models.tenancy import (  # noqa: F401
     AuditEvent,
@@ -40,8 +42,9 @@ from app.models.tenancy import (  # noqa: F401
 __all__ = [
     "Appointment", "AuditEvent", "AuthToken", "ClinicalType", "Encounter", "Feature", "FieldDefinition",
     "InventoryBatch", "InventoryItem", "InventoryTransaction", "Invoice", "InvoiceLineItem",
-    "LabOrder", "LabTest", "LoginAttempt", "MedicineSuggestion", "Message", "MessagingConfig",
-    "Patient", "Payment",
-    "PlatformUser", "Prescription", "PrescriptionItem", "QueueEntry", "RefreshToken", "Tenant",
+    "LabAttachment", "LabOrder", "LabTest", "LoginAttempt", "MedicineSuggestion", "Message",
+    "MessagingConfig", "Patient", "Payment",
+    "PlatformUser", "Prescription", "PrescriptionItem", "QueueEntry", "RefreshToken",
+    "ServicePrice", "Tenant",
     "TenantConfig", "TenantFeature", "User",
 ]
