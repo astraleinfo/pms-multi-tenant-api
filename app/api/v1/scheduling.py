@@ -123,7 +123,7 @@ async def create_appointment(
 ) -> AppointmentOut:
     appointment = await scheduling_service.create_appointment(ctx.session, ctx.tenant_id, payload)
     await audit.record(
-        ctx.session, action="appointment.create", tenant_id=ctx.tenant_id, actor_kind="user",
+        ctx.session, action="appointment.create", tenant_id=ctx.tenant_id, actor_kind=ctx.actor_kind,
         actor_id=ctx.actor_id, actor_label=ctx.principal.label, entity="appointment",
         entity_id=str(appointment.id),
     )
@@ -171,7 +171,7 @@ async def reschedule_appointment(
     )
     await audit.record(
         ctx.session, action="appointment.rescheduled", tenant_id=ctx.tenant_id,
-        actor_kind="user", actor_id=ctx.actor_id, actor_label=ctx.principal.label,
+        actor_kind=ctx.actor_kind, actor_id=ctx.actor_id, actor_label=ctx.principal.label,
         entity="appointment", entity_id=str(appointment.id),
         meta={"from": f"{was['date']} {was['time']}",
               "to": f"{appointment.date:%d %b %Y} {appointment.time}"},
@@ -229,7 +229,7 @@ async def set_appointment_status(
     )
     await audit.record(
         ctx.session, action=f"appointment.{payload.status.value}", tenant_id=ctx.tenant_id,
-        actor_kind="user", actor_id=ctx.actor_id, actor_label=ctx.principal.label,
+        actor_kind=ctx.actor_kind, actor_id=ctx.actor_id, actor_label=ctx.principal.label,
         entity="appointment", entity_id=str(appointment.id),
     )
     # A slot that is no longer happening must not still text a reminder — and
@@ -271,7 +271,7 @@ async def check_in(
         ctx.session, ctx.tenant_id, parse_uuid(appointment_id, what="appointment"), today=ctx.today
     )
     await audit.record(
-        ctx.session, action="queue.checkin", tenant_id=ctx.tenant_id, actor_kind="user",
+        ctx.session, action="queue.checkin", tenant_id=ctx.tenant_id, actor_kind=ctx.actor_kind,
         actor_id=ctx.actor_id, actor_label=ctx.principal.label, entity="queue_entry",
         entity_id=str(entry.id), meta={"token_no": entry.token_no},
     )
@@ -296,7 +296,7 @@ async def add_walk_in(
 ) -> QueueEntryOut:
     entry = await scheduling_service.add_walk_in(ctx.session, ctx.tenant_id, payload, today=ctx.today)
     await audit.record(
-        ctx.session, action="queue.walkin", tenant_id=ctx.tenant_id, actor_kind="user",
+        ctx.session, action="queue.walkin", tenant_id=ctx.tenant_id, actor_kind=ctx.actor_kind,
         actor_id=ctx.actor_id, actor_label=ctx.principal.label, entity="queue_entry",
         entity_id=str(entry.id), meta={"token_no": entry.token_no},
     )

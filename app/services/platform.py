@@ -17,15 +17,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import Conflict, NotFound
 from app.core.permissions import Role
-from app.core.security import hash_password
 from app.core.tenancy import slug_problem
 from app.db.session import set_tenant
 from app.models.clinical import Appointment, Encounter, Patient
 from app.models.enums import AccountStatus, TenantFeatureStatus, TenantStatus
-from app.models.identity import User
+from app.models.identity import PlatformUser, User
 from app.models.ops import Invoice, Payment
 from app.models.tenancy import ClinicalType, Feature, Tenant, TenantConfig, TenantFeature
-from app.schemas.tenancy import TenantCreateIn
+from app.schemas.tenancy import TenantCreateIn, TenantPatchIn
 from app.services.tenants import CORE_FEATURES
 
 
@@ -93,18 +92,158 @@ async def create_tenant(
             )
         )
 
+    # No password is chosen here, by anyone. The account exists, has no hash,
+    # and cannot be signed into; the caller mints an invitation and emails a
+    # link, and the person who receives it picks their own.
     admin = User(
         tenant_id=tenant.id,
         name=payload.admin_name,
         role=Role.TENANT_ADMIN.value,
         email=str(payload.admin_email).lower(),
-        password_hash=hash_password(payload.admin_password),
+        password_hash=None,
         initials=initials_of(payload.admin_name),
-        status=AccountStatus.ACTIVE,
+        status=AccountStatus.INVITED,
     )
     session.add(admin)
     await session.flush()
     return tenant, admin
+
+
+async def check_slug(session: AsyncSession, slug: str) -> tuple[bool, str | None]:
+    """Whether a subdomain can be claimed, and why not when it cannot.
+
+    The same `slug_problem` the create path uses, so the answer a form gets
+    while someone types is the answer they will get when they submit. It is a
+    convenience, not a reservation: two consoles racing for one subdomain are
+    still settled by the unique index.
+    """
+    normalised = (slug or "").strip().lower()
+    taken = set((await session.execute(select(Tenant.slug))).scalars())
+    problem = slug_problem(normalised, taken)
+    return problem is None, problem
+
+
+async def update_tenant(
+    session: AsyncSession, tenant_id: uuid.UUID, payload: TenantPatchIn
+) -> Tenant:
+    """Edit a clinic's record from the console.
+
+    `slug` is not here and cannot be: it is the clinic's address, every session
+    token carries it, and changing it would strand every signed-in browser and
+    every link anyone has bookmarked. A clinic that needs a different subdomain
+    is a migration, not a field.
+    """
+    tenant = await session.get(Tenant, tenant_id)
+    if tenant is None:
+        raise NotFound("No such clinic.")
+
+    changes = payload.model_dump(exclude_unset=True, exclude_none=True)
+
+    if "clinical_type" in changes:
+        clinical_type = await session.get(ClinicalType, changes["clinical_type"])
+        if clinical_type is None:
+            raise NotFound("No such clinical type.")
+
+    for key, value in changes.items():
+        setattr(tenant, key, value)
+    await session.flush()
+    return tenant
+
+
+async def set_tenant_feature(
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    feature_key: str,
+    *,
+    status: TenantFeatureStatus,
+    today: date,
+) -> TenantFeature:
+    """Switch a module on or off for one clinic, from the console.
+
+    The clinic-side route (`/tenant/features/{key}/purchase`) records a clinic
+    buying something. This one is the platform's own hand on the switch — for
+    onboarding, for a trial, and for turning something off that was never paid
+    for. Both write the same row, so there is one answer to "is this on".
+
+    A core feature cannot be taken away: the product does not work without it.
+    """
+    if feature_key in CORE_FEATURES and status != TenantFeatureStatus.ACTIVE:
+        raise Conflict("That module is part of the core product and cannot be switched off.")
+
+    feature = await session.get(Feature, feature_key)
+    if feature is None:
+        raise NotFound("No such module.")
+
+    await set_tenant(session, tenant_id)
+    row = (
+        await session.execute(
+            select(TenantFeature).where(
+                TenantFeature.tenant_id == tenant_id, TenantFeature.feature_key == feature_key
+            )
+        )
+    ).scalar_one_or_none()
+
+    if row is None:
+        row = TenantFeature(tenant_id=tenant_id, feature_key=feature_key, status=status)
+        session.add(row)
+    else:
+        row.status = status
+
+    # `activated_at` records when it was last switched on, and is left alone by
+    # a deactivation so the history of the entitlement survives it.
+    if status == TenantFeatureStatus.ACTIVE and row.activated_at is None:
+        row.activated_at = today
+
+    await session.flush()
+    return row
+
+
+SUPPORT_EMAIL_DOMAIN = "platform.invalid"
+
+
+async def support_user_for(
+    session: AsyncSession, *, tenant: Tenant, staff: PlatformUser
+) -> User:
+    """The clinic account a platform person acts through, created on demand.
+
+    A support session needs a real `users` row: half the product stamps an
+    author onto what it writes, and those columns have foreign keys. Inventing
+    an id would fail on the first write.
+
+    So there is one row per platform person per clinic. It has no password hash
+    and is never given one, so it is not a way in — `authenticate_user` refuses
+    it by name as well. It is `is_support`, so the clinic's staff directory does
+    not show it, and its email is at a domain that cannot receive mail.
+    """
+    await set_tenant(session, tenant.id)
+    email = f"support+{staff.id}@{SUPPORT_EMAIL_DOMAIN}"
+    row = (
+        await session.execute(
+            select(User).where(User.tenant_id == tenant.id, User.email == email)
+        )
+    ).scalar_one_or_none()
+    if row is not None:
+        # Kept in step with the platform record, so the audit trail and any
+        # screen that renders an author stay truthful after a rename.
+        row.name = f"{staff.name} (platform support)"
+        row.status = AccountStatus.ACTIVE
+        row.password_hash = None
+        await session.flush()
+        return row
+
+    row = User(
+        tenant_id=tenant.id,
+        name=f"{staff.name} (platform support)",
+        role=Role.TENANT_ADMIN.value,
+        email=email,
+        password_hash=None,
+        initials=initials_of(staff.name),
+        status=AccountStatus.ACTIVE,
+        is_support=True,
+    )
+    session.add(row)
+    await session.flush()
+    return row
 
 
 async def set_tenant_status(

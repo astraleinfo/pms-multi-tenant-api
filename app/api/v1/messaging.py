@@ -70,7 +70,7 @@ async def update_config(
     await ctx.session.flush()
     await audit.record(
         ctx.session, action="messaging.config.updated", tenant_id=ctx.tenant_id,
-        actor_kind="user", actor_id=ctx.actor_id, actor_label=ctx.principal.label,
+        actor_kind=ctx.actor_kind, actor_id=ctx.actor_id, actor_label=ctx.principal.label,
         entity="messaging_config", entity_id=str(config.id),
         meta={"provider": str(config.provider), "enabled": config.enabled},
     )
@@ -142,7 +142,7 @@ async def send_message(
     await outbox.nudge(str(message.id))
     await audit.record(
         ctx.session, action="message.queued", tenant_id=ctx.tenant_id,
-        actor_kind="user", actor_id=ctx.actor_id, actor_label=ctx.principal.label,
+        actor_kind=ctx.actor_kind, actor_id=ctx.actor_id, actor_label=ctx.principal.label,
         entity="message", entity_id=str(message.id),
         meta={"template": str(payload.template)},
     )

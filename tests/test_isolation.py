@@ -137,9 +137,21 @@ async def test_staff_lists_do_not_cross_clinics(northgate, clearview):
 
 
 async def test_no_password_material_is_ever_returned(northgate):
-    body = (await northgate.get("/v1/users")).text
-    assert "password" not in body
-    assert "argon2" not in body
+    """No hash and no plaintext — in any field, under any name.
+
+    `must_change_password` is a fact *about* a password rather than any part of
+    one, so the check is for material: the argon2 marker a hash always carries,
+    a `password_hash` field, and a bare `password` field. Matching the word
+    anywhere in the body would fail on a boolean that reveals nothing.
+    """
+    rows = (await northgate.get("/v1/users")).json()
+    assert rows
+    for row in rows:
+        assert "password" not in row
+        assert "password_hash" not in row
+        assert not any(isinstance(v, str) and "argon2" in v for v in row.values())
+
+    assert "argon2" not in (await northgate.get("/v1/users")).text
 
 
 @pytest.mark.parametrize("path", ["/v1/patients", "/v1/appointments", "/v1/queue", "/v1/encounters"])

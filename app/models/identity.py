@@ -11,6 +11,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     Enum,
@@ -26,7 +27,7 @@ from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TenantScoped, TimestampMixin, uuid_pk
-from app.models.enums import AccountStatus, SubjectKind
+from app.models.enums import AccountStatus, AuthTokenPurpose, SubjectKind
 
 
 class User(Base, TenantScoped, TimestampMixin):
@@ -56,6 +57,22 @@ class User(Base, TenantScoped, TimestampMixin):
     locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     password_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    #: Set on an account that was given a password it did not choose. Sign-in
+    #: still succeeds — the session it hands back is deliberately good for one
+    #: thing only, changing the password — because refusing the sign-in would
+    #: leave the person with no way to get past it.
+    must_change_password: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+
+    #: A platform support account, created the first time someone opens this
+    #: clinic from the console. It has no password hash and never gets one, so
+    #: it cannot be signed into; it exists so a support session's writes have a
+    #: real row behind them. Hidden from the clinic's staff directory.
+    is_support: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+
     #: How this person has set the interface up for themselves — which is not
     #: clinical data and not the clinic's configuration (§3.3), so it lives
     #: here rather than on the tenant. Only keys the API knows are ever stored.
@@ -78,6 +95,64 @@ class PlatformUser(Base, TimestampMixin):
     )
     failed_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_sign_in: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AuthToken(Base):
+    """A one-time link: "set your password" or "reset your password".
+
+    Only the SHA-256 is stored, exactly as for refresh tokens — the plaintext
+    lives long enough to be put in an email and nowhere else. Spending one
+    stamps `used_at`; a second presentation of the same link is refused rather
+    than quietly working twice.
+
+    Deliberately not `TenantScoped`. The row has to be found by digest alone
+    before anyone is authenticated, and its policy is the one the auth tables
+    already use: your clinic's rows, or the platform's when no clinic is bound.
+    """
+
+    __tablename__ = "auth_tokens"
+    __table_args__ = (
+        Index("ix_auth_tokens_subject", "subject_kind", "subject_id"),
+        Index("ix_auth_tokens_expires", "expires_at"),
+        CheckConstraint(
+            "(subject_kind = 'user' and tenant_id is not null) "
+            "or (subject_kind = 'platform' and tenant_id is null)",
+            name="ck_auth_token_subject_tenant",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    purpose: Mapped[AuthTokenPurpose] = mapped_column(
+        Enum(
+            AuthTokenPurpose,
+            name="auth_token_purpose",
+            values_callable=lambda e: [m.value for m in e],
+        ),
+        nullable=False,
+    )
+    subject_kind: Mapped[SubjectKind] = mapped_column(
+        Enum(SubjectKind, name="subject_kind", values_callable=lambda e: [m.value for m in e]),
+        nullable=False,
+    )
+    subject_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    issued_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: Who asked for it — platform staff for an invitation, nobody for a
+    #: self-service reset.
+    issued_by_label: Mapped[str] = mapped_column(String(160), nullable=False, default="")
+    ip: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    user_agent: Mapped[str] = mapped_column(String(300), nullable=False, default="")
+
+    @property
+    def spent(self) -> bool:
+        return self.used_at is not None
 
 
 class RefreshToken(Base):

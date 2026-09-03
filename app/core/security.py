@@ -60,6 +60,17 @@ def hash_refresh_token(raw: str) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def new_auth_token() -> tuple[str, str]:
+    """A single-use secret for an invitation or reset link.
+
+    Same shape as a refresh token and for the same reason: the plaintext exists
+    only long enough to be put in an email, and the database holds a digest, so
+    a dump of `auth_tokens` cannot be walked back into working links.
+    """
+    raw = secrets.token_urlsafe(48)
+    return raw, hash_refresh_token(raw)
+
+
 def refresh_tokens_equal(a: str, b: str) -> bool:
     return hmac.compare_digest(a, b)
 
@@ -73,6 +84,13 @@ class AccessClaims:
     session_id: uuid.UUID
     tenant_slug: str | None
     expires_at: datetime
+    #: True on the one token shape that carries both a platform subject and a
+    #: tenant: a support session opened from the console. Ordinary tokens can
+    #: never set it, because `kind` and `tid` are otherwise mutually exclusive.
+    impersonated: bool = False
+    #: The clinic account the impersonator acts through, so writes have a real
+    #: `users` row behind them and audit can name both parties.
+    acting_user_id: uuid.UUID | None = None
 
 
 def create_access_token(
@@ -83,6 +101,9 @@ def create_access_token(
     tenant_id: uuid.UUID | None = None,
     tenant_slug: str | None = None,
     role: str | None = None,
+    impersonated: bool = False,
+    acting_user_id: uuid.UUID | None = None,
+    ttl_seconds: int | None = None,
 ) -> str:
     now = datetime.now(timezone.utc)
     payload: dict[str, Any] = {
@@ -91,7 +112,11 @@ def create_access_token(
         "sid": str(session_id),
         "iat": int(now.timestamp()),
         "nbf": int(now.timestamp()),
-        "exp": int((now + timedelta(seconds=settings.access_token_ttl_seconds)).timestamp()),
+        "exp": int(
+            (
+                now + timedelta(seconds=ttl_seconds or settings.access_token_ttl_seconds)
+            ).timestamp()
+        ),
         "jti": secrets.token_urlsafe(12),
         "iss": "pms-api",
         "aud": "pms-web",
@@ -100,6 +125,9 @@ def create_access_token(
         payload["tid"] = str(tenant_id)
         payload["slug"] = tenant_slug
         payload["role"] = role
+    if impersonated:
+        payload["imp"] = True
+        payload["auid"] = str(acting_user_id) if acting_user_id else None
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
@@ -124,17 +152,24 @@ def decode_access_token(token: str) -> AccessClaims:
     if kind not in ("user", "platform"):
         raise TokenError("unknown subject kind")
 
+    impersonated = payload.get("imp") is True
+
     try:
         subject_id = uuid.UUID(payload["sub"])
         session_id = uuid.UUID(payload["sid"])
         tenant_id = uuid.UUID(payload["tid"]) if payload.get("tid") else None
+        acting_user_id = uuid.UUID(payload["auid"]) if payload.get("auid") else None
     except (ValueError, KeyError, TypeError) as exc:
         raise TokenError("malformed identifiers") from exc
 
     if kind == "user" and tenant_id is None:
         raise TokenError("a clinic token must carry a tenant")
-    if kind == "platform" and tenant_id is not None:
+    if kind == "user" and impersonated:
+        raise TokenError("a clinic token cannot be a support session")
+    if kind == "platform" and tenant_id is not None and not impersonated:
         raise TokenError("a platform token must not carry a tenant")
+    if impersonated and (tenant_id is None or acting_user_id is None):
+        raise TokenError("a support session must name a clinic and an acting account")
 
     return AccessClaims(
         subject_id=subject_id,
@@ -144,4 +179,6 @@ def decode_access_token(token: str) -> AccessClaims:
         session_id=session_id,
         tenant_slug=payload.get("slug"),
         expires_at=datetime.fromtimestamp(payload["exp"], tz=timezone.utc),
+        impersonated=impersonated,
+        acting_user_id=acting_user_id,
     )
