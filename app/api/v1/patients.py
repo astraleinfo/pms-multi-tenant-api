@@ -69,7 +69,7 @@ async def create_patient(
 ) -> PatientOut:
     patient = await patient_service.create_patient(ctx.session, ctx.tenant, payload, today=ctx.today)
     await audit.record(
-        ctx.session, action="patient.create", tenant_id=ctx.tenant_id, actor_kind="user",
+        ctx.session, action="patient.create", tenant_id=ctx.tenant_id, actor_kind=ctx.actor_kind,
         actor_id=ctx.actor_id, actor_label=ctx.principal.label, entity="patient",
         entity_id=str(patient.id),
     )
@@ -97,7 +97,7 @@ async def update_patient(
         ctx.session, ctx.tenant, parse_uuid(patient_id, what="patient"), payload
     )
     await audit.record(
-        ctx.session, action="patient.update", tenant_id=ctx.tenant_id, actor_kind="user",
+        ctx.session, action="patient.update", tenant_id=ctx.tenant_id, actor_kind=ctx.actor_kind,
         actor_id=ctx.actor_id, actor_label=ctx.principal.label, entity="patient",
         entity_id=str(patient.id),
     )

@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     public_scheme: str = "http"
     public_port: str = "3000"
 
+    # The label the super-admin console is served on: `admin.<app_domain>`.
+    # It is a reserved subdomain, so no clinic can ever claim it.
+    admin_host_label: str = "admin"
+
     jwt_secret: str = "development-only-secret"  # noqa: S105 - refused in production, see below
     jwt_algorithm: str = "HS256"
     access_token_ttl_seconds: int = 900
@@ -50,6 +54,48 @@ class Settings(BaseSettings):
 
     login_rate_limit: str = "10/minute"
     api_rate_limit: str = "600/minute"
+    # Asking for a reset link is cheaper than signing in, and answering the
+    # same either way, so it gets its own (tighter) budget.
+    password_reset_rate_limit: str = "5/hour"  # noqa: S105 - a rate, not a secret
+
+    # ------------------------------------------------------- invitations
+    # An invitation is a one-time URL. The token is long-lived enough for a
+    # clinic to act on it in their own time, a reset short enough that a link
+    # sitting in an inbox is not a standing key.
+    invite_token_ttl_seconds: int = 60 * 60 * 24 * 7
+    reset_token_ttl_seconds: int = 60 * 60 * 2
+
+    # ------------------------------------------------------------- email
+    # Transactional mail — invitations and password resets. This is not the
+    # patient-messaging outbox: that is per-clinic and provider-configured,
+    # this is the platform speaking to a staff account. "console" writes the
+    # link to the log, which is what development wants.
+    mail_provider: Literal["console", "smtp"] = "console"
+    mail_from: str = "Astrale PMS <no-reply@astrale.health>"
+    smtp_host: str = "localhost"
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_starttls: bool = True
+    smtp_timeout_seconds: int = 15
+
+    # ----------------------------------------------------------------- outbox
+    # Where queued patient messages wait for the worker. The database row is
+    # the source of truth; Redis only carries the wake-up, so losing Redis
+    # delays delivery but never loses a message.
+    redis_url: str = "redis://localhost:6380/0"
+    outbox_stream: str = "pms:outbox"
+    # A send is retried this many times before the message is parked as failed.
+    message_max_attempts: int = 5
+    message_retry_base_seconds: int = 30
+    # How often the worker sweeps the table for due and stranded messages.
+    worker_poll_seconds: int = 10
+    # Appointment reminders go out this many hours before the slot.
+    reminder_lead_hours: int = 24
+    # Encrypts provider credentials at rest. Defaults to a key derived from
+    # JWT_SECRET so development works out of the box; set your own to rotate
+    # without invalidating sessions.
+    secrets_key: str = ""
 
     @field_validator("app_domain")
     @classmethod
@@ -59,6 +105,28 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.environment == "production"
+
+    @property
+    def admin_host(self) -> str:
+        """Where the super-admin console lives — `admin.<app_domain>`."""
+        return f"{self.admin_host_label}.{self.app_domain}"
+
+    def public_origin(self, host: str) -> str:
+        """An absolute origin for a host this deployment serves.
+
+        Links in email are built from configuration, never from the `Host` of
+        the request that triggered them — a forged header must not be able to
+        decide where an invitation points.
+        """
+        port = f":{self.public_port}" if self.public_port else ""
+        return f"{self.public_scheme}://{host}{port}"
+
+    def tenant_origin(self, slug: str) -> str:
+        return self.public_origin(f"{slug}.{self.app_domain}")
+
+    @property
+    def admin_origin(self) -> str:
+        return self.public_origin(self.admin_host)
 
     @property
     def cors_origins(self) -> list[str]:
@@ -93,6 +161,12 @@ class Settings(BaseSettings):
             problems.append("ALLOW_TENANT_HEADER must be false in production")
         if "pms_owner" in self.database_url:
             problems.append("DATABASE_URL must use the unprivileged app role, not the table owner")
+        if self.mail_provider == "console":
+            # Invitations and resets would be written to the log instead of
+            # being delivered, and nobody would be able to sign in.
+            problems.append("MAIL_PROVIDER must be a real transport, not 'console'")
+        if self.public_scheme != "https":
+            problems.append("PUBLIC_SCHEME must be https")
         return problems
 
 

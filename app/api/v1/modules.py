@@ -71,7 +71,7 @@ async def dispense(
         actor_id=ctx.actor_id,
     )
     await audit.record(
-        ctx.session, action="pharmacy.dispense", tenant_id=ctx.tenant_id, actor_kind="user",
+        ctx.session, action="pharmacy.dispense", tenant_id=ctx.tenant_id, actor_kind=ctx.actor_kind,
         actor_id=ctx.actor_id, actor_label=ctx.principal.label, entity="prescription",
         entity_id=str(prescription.id),
         meta={"lines": [{"item": line.item_id, "qty": line.qty} for line in payload.lines]},
@@ -149,7 +149,7 @@ async def save_results(
         ctx.session, ctx.tenant_id, parse_uuid(order_id, what="lab order"), payload, actor_id=ctx.actor_id
     )
     await audit.record(
-        ctx.session, action="lab.result", tenant_id=ctx.tenant_id, actor_kind="user",
+        ctx.session, action="lab.result", tenant_id=ctx.tenant_id, actor_kind=ctx.actor_kind,
         actor_id=ctx.actor_id, actor_label=ctx.principal.label, entity="lab_order",
         entity_id=str(order.id),
     )
@@ -170,7 +170,7 @@ async def verify_order(
         ctx.session, ctx.tenant_id, parse_uuid(order_id, what="lab order"), actor_id=ctx.actor_id
     )
     await audit.record(
-        ctx.session, action="lab.verify", tenant_id=ctx.tenant_id, actor_kind="user",
+        ctx.session, action="lab.verify", tenant_id=ctx.tenant_id, actor_kind=ctx.actor_kind,
         actor_id=ctx.actor_id, actor_label=ctx.principal.label, entity="lab_order",
         entity_id=str(order.id),
     )
@@ -263,7 +263,7 @@ async def record_movement(
     )
     await audit.record(
         ctx.session, action=f"inventory.{payload.type.value}", tenant_id=ctx.tenant_id,
-        actor_kind="user", actor_id=ctx.actor_id, actor_label=ctx.principal.label,
+        actor_kind=ctx.actor_kind, actor_id=ctx.actor_id, actor_label=ctx.principal.label,
         entity="inventory_transaction", entity_id=str(transaction.id),
     )
     return InventoryTxOut.of(transaction, ctx.tz)
@@ -317,7 +317,7 @@ async def create_invoice(
 ) -> InvoiceOut:
     invoice = await billing_service.create_invoice(ctx.session, ctx.tenant_id, payload, today=ctx.today)
     await audit.record(
-        ctx.session, action="invoice.create", tenant_id=ctx.tenant_id, actor_kind="user",
+        ctx.session, action="invoice.create", tenant_id=ctx.tenant_id, actor_kind=ctx.actor_kind,
         actor_id=ctx.actor_id, actor_label=ctx.principal.label, entity="invoice",
         entity_id=str(invoice.id), meta={"number": invoice.number},
     )
@@ -366,7 +366,7 @@ async def void_invoice(
         ctx.session, ctx.tenant_id, parse_uuid(invoice_id, what="invoice")
     )
     await audit.record(
-        ctx.session, action="invoice.void", tenant_id=ctx.tenant_id, actor_kind="user",
+        ctx.session, action="invoice.void", tenant_id=ctx.tenant_id, actor_kind=ctx.actor_kind,
         actor_id=ctx.actor_id, actor_label=ctx.principal.label, entity="invoice",
         entity_id=str(invoice.id),
     )
@@ -383,7 +383,7 @@ async def add_payment(
         ctx.session, ctx.tenant_id, parse_uuid(invoice_id, what="invoice"), payload, actor_id=ctx.actor_id
     )
     await audit.record(
-        ctx.session, action="invoice.payment", tenant_id=ctx.tenant_id, actor_kind="user",
+        ctx.session, action="invoice.payment", tenant_id=ctx.tenant_id, actor_kind=ctx.actor_kind,
         actor_id=ctx.actor_id, actor_label=ctx.principal.label, entity="invoice",
         entity_id=str(invoice.id), meta={"amount": payload.amount, "method": payload.method.value},
     )

@@ -23,7 +23,7 @@ from app.models.enums import (
     QueueStatus,
 )
 from app.models.identity import User
-from app.schemas.clinical import AppointmentIn, WalkInIn
+from app.schemas.clinical import AppointmentIn, AppointmentRescheduleIn, WalkInIn
 from app.services import paging
 from app.services import tenants as tenant_service
 
@@ -198,6 +198,86 @@ async def create_appointment(
     # the patient is fetched explicitly before this is serialised.
     await session.refresh(appointment, ["patient"])
     return appointment
+
+
+async def reschedule_appointment(
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    appointment_id: uuid.UUID,
+    payload: AppointmentRescheduleIn,
+) -> tuple[Appointment, dict[str, str]]:
+    """Move an appointment, and say what it moved from.
+
+    Returns the appointment and the slot it used to occupy, because the message
+    that tells the patient has to name both — "moved from Tuesday 9am to
+    Thursday 2pm" is the only version of that message worth sending.
+
+    A finished appointment is not moved: once someone has been seen or marked
+    absent, the record is history rather than a plan.
+    """
+    appointment = await get_appointment(session, tenant_id, appointment_id)
+
+    if appointment.status in (
+        AppointmentStatus.COMPLETED,
+        AppointmentStatus.CHECKED_IN,
+        AppointmentStatus.NO_SHOW,
+    ):
+        raise Conflict("That appointment can no longer be moved.")
+
+    was = {
+        "date": appointment.date.strftime("%d %b %Y"),
+        "time": appointment.time,
+    }
+
+    doctor_id = (
+        uuid.UUID(payload.doctor_id) if payload.doctor_id else appointment.doctor_id
+    )
+    if payload.doctor_id:
+        doctor = await _require_doctor(session, tenant_id, doctor_id)
+        doctor_id = doctor.id
+
+    day = payload.date or appointment.date
+    time = payload.time or appointment.time
+    duration = payload.duration_min or appointment.duration_min
+
+    if (day, time, doctor_id, duration) == (
+        appointment.date, appointment.time, appointment.doctor_id, appointment.duration_min
+    ):
+        raise Conflict("That is the slot it is already in.")
+
+    # `ignore_id` keeps the appointment from clashing with itself when only the
+    # duration or the clinician changes.
+    clashes = await conflicts_for(
+        session,
+        tenant_id,
+        doctor_id=doctor_id,
+        day=day,
+        time=time,
+        duration_min=duration,
+        ignore_id=appointment.id,
+    )
+    if clashes:
+        raise Conflict(
+            "That clinician is already booked then.",
+            details={
+                "conflicts": [
+                    {"id": str(c.id), "time": c.time, "reason": c.reason} for c in clashes
+                ]
+            },
+        )
+
+    appointment.doctor_id = doctor_id
+    appointment.date = day
+    appointment.time = time
+    appointment.duration_min = duration
+    if payload.reason is not None:
+        appointment.reason = payload.reason
+    # Moving a slot puts it back in the diary as scheduled, whatever it was.
+    appointment.status = AppointmentStatus.SCHEDULED
+
+    await session.flush()
+    await session.refresh(appointment, ["patient"])
+    return appointment, was
 
 
 async def set_appointment_status(

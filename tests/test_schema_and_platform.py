@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import pytest
 
-from tests.conftest import CONSOLE, NORTHGATE
+from tests.conftest import CLEARVIEW, CONSOLE, NORTHGATE, audit_lines, token_from
 
 # --- §3.3 field resolution ---------------------------------------------------
 
@@ -131,6 +131,12 @@ async def test_configuration_is_per_clinic_and_validated(northgate, clearview):
 
 
 async def test_the_console_creates_a_clinic_that_is_immediately_usable(console, client):
+    """Creating a clinic, and the invitation that is the only way into it.
+
+    No password is sent, chosen, or returned anywhere in this flow. The console
+    gets a link (only because the test transport is `console`); the person named
+    on the account is the one who picks what it will be.
+    """
     created = await console.post(
         "/v1/platform/tenants",
         json={
@@ -140,12 +146,50 @@ async def test_the_console_creates_a_clinic_that_is_immediately_usable(console, 
             "clinical_type": "ophthalmology",
             "admin_name": "Dana Okafor",
             "admin_email": "dana@harbour.eye",
-            "admin_password": "harbour-admin-2026",
         },
     )
     assert created.status_code == 201, created.text
-    tenant = created.json()["tenant"]
+    body = created.json()
+    tenant = body["tenant"]
     assert tenant["status"] == "trial"
+    assert body["invitation_sent"] is True
+
+    # Nothing can sign in yet: the account has no password at all.
+    too_early = await client.post(
+        "/v1/auth/login",
+        headers={"Host": "harbour.localhost"},
+        json={"email": "dana@harbour.eye", "password": "guessing-at-it-2026"},
+    )
+    assert too_early.status_code == 401
+
+    invite_token = token_from(body["invitation_url"])
+
+    # The page behind the link knows who it is for, before anyone is signed in.
+    preview = await client.get(
+        "/v1/auth/invitation",
+        headers={"Host": "harbour.localhost"},
+        params={"token": invite_token},
+    )
+    assert preview.status_code == 200
+    assert preview.json() == {
+        "valid": True, "purpose": "invite", "name": "Dana Okafor",
+        "email": "dana@harbour.eye", "clinic": "Harbour Eye Clinic", "problem": None,
+    }
+
+    accepted = await client.post(
+        "/v1/auth/password/reset",
+        headers={"Host": "harbour.localhost"},
+        json={"token": invite_token, "password": "harbour-admin-2026"},
+    )
+    assert accepted.status_code == 200, accepted.text
+
+    # The link is spent. Somebody reading the same email twice gets nothing.
+    again = await client.post(
+        "/v1/auth/password/reset",
+        headers={"Host": "harbour.localhost"},
+        json={"token": invite_token, "password": "another-password-2026"},
+    )
+    assert again.status_code == 422
 
     login = await client.post(
         "/v1/auth/login",
@@ -153,6 +197,8 @@ async def test_the_console_creates_a_clinic_that_is_immediately_usable(console, 
         json={"email": "dana@harbour.eye", "password": "harbour-admin-2026"},
     )
     assert login.status_code == 200
+    # They chose it themselves, so nothing is forcing a change.
+    assert login.json()["must_change_password"] is False
     token = login.json()["access_token"]
     headers = {"Host": "harbour.localhost", "Authorization": f"Bearer {token}"}
 
@@ -182,7 +228,6 @@ async def test_a_subdomain_cannot_be_claimed_twice_or_reserved(console):
             "clinical_type": "dental",
             "admin_name": "Copy Cat",
             "admin_email": "copy@cat.clinic",
-            "admin_password": "copycat-admin-2026",
         },
     )
     assert taken.status_code == 409
@@ -196,7 +241,6 @@ async def test_a_subdomain_cannot_be_claimed_twice_or_reserved(console):
             "clinical_type": "dental",
             "admin_name": "Copy Cat",
             "admin_email": "copy2@cat.clinic",
-            "admin_password": "copycat-admin-2026",
         },
     )
     assert reserved.status_code == 409
@@ -224,6 +268,192 @@ async def test_the_snapshot_reports_per_clinic_counts(console):
     assert "billing" not in by_slug["rowan"]["active_features"]
 
 
+async def test_the_subdomain_check_answers_before_the_form_is_submitted(console):
+    """§7 — the create form asks while somebody types.
+
+    The same rule the create path enforces, so the answer here is the answer
+    they will get on submit: free, taken, reserved, or malformed.
+    """
+    free = (await console.get("/v1/platform/tenants/slug-check", params={"slug": "harbourside"})).json()
+    assert free["available"] is True and free["problem"] is None
+    assert free["url"].endswith("harbourside.localhost:3000")
+
+    taken = (await console.get("/v1/platform/tenants/slug-check", params={"slug": "northgate"})).json()
+    assert taken["available"] is False
+    assert "already uses" in taken["problem"]
+
+    reserved = (await console.get("/v1/platform/tenants/slug-check", params={"slug": "admin"})).json()
+    assert reserved["available"] is False
+    assert "reserved" in reserved["problem"]
+
+    malformed = (await console.get("/v1/platform/tenants/slug-check", params={"slug": "No Spaces"})).json()
+    assert malformed["available"] is False
+
+    # Uppercase is normalised rather than refused — the form should not punish
+    # somebody for typing a capital.
+    assert (await console.get(
+        "/v1/platform/tenants/slug-check", params={"slug": "HarbourSide"}
+    )).json()["slug"] == "harbourside"
+
+
+async def test_the_console_edits_a_clinic_but_never_its_address(console):
+    """§4 — name, city, plan, timezone and discipline are editable.
+
+    The subdomain is not, and asking for it is a 422 rather than a silent
+    no-op: every live session token carries the slug, so renaming one would
+    sign the whole clinic out.
+    """
+    rowan = next(t for t in (await console.get("/v1/platform/tenants")).json() if t["slug"] == "rowan")
+
+    updated = await console.patch(
+        f"/v1/platform/tenants/{rowan['id']}",
+        json={"name": "Rowan Skin & Laser", "city": "Bath", "plan": "Growth"},
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["name"] == "Rowan Skin & Laser"
+    assert updated.json()["city"] == "Bath"
+    assert updated.json()["slug"] == "rowan", "the address is untouched"
+
+    refused = await console.patch(f"/v1/platform/tenants/{rowan['id']}", json={"slug": "rowan-skin"})
+    assert refused.status_code == 422
+
+    bad_zone = await console.patch(f"/v1/platform/tenants/{rowan['id']}", json={"timezone": "Mars/Olympus"})
+    assert bad_zone.status_code == 422
+
+    await console.patch(
+        f"/v1/platform/tenants/{rowan['id']}",
+        json={"name": rowan["name"], "city": rowan["city"], "plan": rowan["plan"]},
+    )
+
+
+async def test_the_console_switches_a_module_on_and_the_guard_agrees(console, rowan, client):
+    """§5 — the platform's own hand on the switch.
+
+    Rowan has not bought billing, so its billing routes are shut. Switching the
+    module on from the console opens them, because both sides read the same
+    row — turning it off closes them again.
+    """
+    assert (await rowan.get("/v1/billing/invoices")).status_code == 403
+
+    tenant_id = rowan.tenant_id
+    on = await console.put(
+        f"/v1/platform/tenants/{tenant_id}/features/billing", json={"status": "active"}
+    )
+    assert on.status_code == 200, on.text
+    assert on.json()["status"] == "active"
+    assert on.json()["activated_at"] is not None
+
+    assert (await rowan.get("/v1/billing/invoices")).status_code == 200
+
+    off = await console.put(
+        f"/v1/platform/tenants/{tenant_id}/features/billing", json={"status": "inactive"}
+    )
+    assert off.status_code == 200
+    assert (await rowan.get("/v1/billing/invoices")).status_code == 403
+
+    # The product does not work without its core, so that is not a switch.
+    core = await console.put(
+        f"/v1/platform/tenants/{tenant_id}/features/patient", json={"status": "inactive"}
+    )
+    assert core.status_code == 409
+
+
+async def test_a_support_session_can_work_inside_a_clinic_and_is_named_in_the_trail(
+    console, client, northgate
+):
+    """§6 — super admin access, and what it costs to use it.
+
+    The session reads and writes as a practice admin would. What separates it
+    from one is the trail: every line it leaves says `platform` and names the
+    person who opened it, never the clinic account it writes through.
+    """
+    tenant_id = northgate.tenant_id
+    opened = await console.post(f"/v1/platform/tenants/{tenant_id}/impersonate")
+    assert opened.status_code == 200, opened.text
+    support = opened.json()["access_token"]
+    assert opened.json()["url"].startswith("http://northgate.localhost")
+
+    headers = {"Host": NORTHGATE, "Authorization": f"Bearer {support}"}
+
+    me = (await client.get("/v1/auth/me", headers=headers)).json()
+    assert me["impersonated"] is True
+    assert me["platform_user"]["email"] == "ines@astrale.health"
+    assert me["role"] == "tenant_admin"
+
+    # Full access: a clinic's own configuration, which only an admin may read.
+    assert (await client.get("/v1/tenant/config", headers=headers)).status_code == 200
+
+    # And it can write.
+    created = await client.post(
+        "/v1/patients",
+        headers=headers,
+        json={"full_name": "Support Test", "sex": "other", "dob": "1990-01-01", "phone": "07000 000000"},
+    )
+    assert created.status_code == 201, created.text
+
+    trail = await audit_lines(tenant_id)
+
+    opened_line = next(e for e in trail if e["action"] == "platform.impersonate")
+    assert opened_line["actor_kind"] == "platform"
+    assert "ines@astrale.health" in opened_line["actor_label"]
+
+    write_line = next(e for e in trail if e["action"] == "patient.create")
+    assert write_line["actor_kind"] == "platform", "a support write is not a clinic write"
+    assert "platform support" in write_line["actor_label"]
+    assert "ines@astrale.health" in write_line["actor_label"], "the trail names the person"
+
+
+async def test_a_support_account_is_not_a_way_in(console, northgate, client):
+    """The row a support session writes through is not an account anybody has.
+
+    It is invisible to the clinic, it has no password, and a link cannot be
+    minted for it — so the one thing it is for is the only thing it does.
+    """
+    tenant_id = northgate.tenant_id
+    await console.post(f"/v1/platform/tenants/{tenant_id}/impersonate")
+
+    staff = (await northgate.get("/v1/users")).json()
+    assert not any("platform.invalid" in u["email"] for u in staff)
+    assert not any("support" in u["name"].lower() for u in staff)
+
+    # Nor from the console's own view of the clinic.
+    console_view = (await console.get(f"/v1/platform/tenants/{tenant_id}/users")).json()
+    assert not any("platform.invalid" in u["email"] for u in console_view)
+
+    # It cannot be asked for a link either. `platform.invalid` is the reserved
+    # TLD of RFC 2606 — no mail will ever reach it, and it is not even an
+    # address this API will accept in a form.
+    asked = await client.post(
+        "/v1/auth/password/forgot",
+        headers={"Host": NORTHGATE},
+        json={"email": "support+00000000-0000-0000-0000-000000000000@platform.invalid"},
+    )
+    assert asked.status_code == 422
+
+
+async def test_a_support_session_cannot_get_back_into_the_console(console, northgate, client):
+    tenant_id = northgate.tenant_id
+    support = (await console.post(f"/v1/platform/tenants/{tenant_id}/impersonate")).json()["access_token"]
+
+    response = await client.get(
+        "/v1/platform/tenants", headers={"Host": CONSOLE, "Authorization": f"Bearer {support}"}
+    )
+    assert response.status_code == 401
+
+
+async def test_a_support_session_is_scoped_to_the_clinic_it_was_opened_for(
+    console, northgate, clearview, client
+):
+    support = (
+        await console.post(f"/v1/platform/tenants/{northgate.tenant_id}/impersonate")
+    ).json()["access_token"]
+
+    response = await client.get(
+        "/v1/patients", headers={"Host": CLEARVIEW, "Authorization": f"Bearer {support}"}
+    )
+    assert response.status_code == 401
+
+
 # --- the machinery itself ----------------------------------------------------
 
 
@@ -232,17 +462,26 @@ def test_every_tenant_owned_table_has_a_policy():
 
     This fails the moment someone adds a tenant table and forgets the migration.
     """
-    import importlib.util
+    import ast
     from pathlib import Path
 
     from app.db.base import tenant_scoped_tables
 
-    path = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "0002_row_level_security.py"
-    spec = importlib.util.spec_from_file_location("rls_migration", path)
-    migration = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(migration)
+    # A table can be secured by whichever migration introduced it, so the whole
+    # history counts — not just the one that first turned RLS on. Read with ast
+    # rather than importing, so this never depends on a migration's imports.
+    versions = Path(__file__).resolve().parents[1] / "alembic" / "versions"
+    secured: set[str] = set()
+    for path in versions.glob("*.py"):
+        for node in ast.parse(path.read_text(encoding="utf-8")).body:
+            if not isinstance(node, ast.Assign):
+                continue
+            names = {t.id for t in node.targets if isinstance(t, ast.Name)}
+            if "OWNED_TABLES" in names:
+                secured.update(ast.literal_eval(node.value))
 
-    assert sorted(migration.OWNED_TABLES) == tenant_scoped_tables()
+    missing = sorted(set(tenant_scoped_tables()) - secured)
+    assert not missing, f"tenant-owned tables with no RLS policy in any migration: {missing}"
 
 
 async def test_the_orm_guard_refuses_an_unbound_query():

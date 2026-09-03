@@ -29,6 +29,18 @@ class AccountStatus(StrEnum):
     LOCKED = "locked"
 
 
+class AuthTokenPurpose(StrEnum):
+    """Why a one-time link exists.
+
+    An invitation is the first password an account ever has; a reset replaces
+    one that already exists. They are told apart because the wording, the
+    lifetime, and what a spent one leaves behind all differ.
+    """
+
+    INVITE = "invite"
+    RESET = "reset"
+
+
 class FieldScope(StrEnum):
     COMMON = "common"
     CLINICAL_TYPE = "clinical_type"
@@ -212,3 +224,36 @@ INVOICE_TRANSITIONS: dict[InvoiceStatus, set[InvoiceStatus]] = {
     InvoiceStatus.PAID: {InvoiceStatus.VOID},
     InvoiceStatus.VOID: set(),
 }
+
+
+class MessageChannel(StrEnum):
+    SMS = "sms"
+    WHATSAPP = "whatsapp"
+
+
+class MessageTemplate(StrEnum):
+    BOOKING_CONFIRMATION = "booking_confirmation"
+    APPOINTMENT_RESCHEDULED = "appointment_rescheduled"
+    APPOINTMENT_CANCELLED = "appointment_cancelled"
+    APPOINTMENT_REMINDER = "appointment_reminder"
+    FOLLOW_UP = "follow_up"
+    CUSTOM = "custom"
+
+
+class MessageStatus(StrEnum):
+    """`queued` is the only state the worker picks up. `failed` is terminal
+    until someone retries it; `cancelled` is what a scrapped appointment does
+    to a reminder that had not gone out yet."""
+
+    QUEUED = "queued"
+    SENDING = "sending"
+    SENT = "sent"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class MessageProvider(StrEnum):
+    """Adding one is a new adapter plus a member here — nothing else changes."""
+
+    CONSOLE = "console"
+    TWILIO = "twilio"

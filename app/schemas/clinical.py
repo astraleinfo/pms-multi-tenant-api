@@ -18,7 +18,7 @@ from app.models.enums import (
     ResultFlag,
     Sex,
 )
-from app.schemas.common import ApiModel, InputModel, clock, iso_date, stamp
+from app.schemas.common import ApiModel, IdStr, InputModel, clock, iso_date, stamp
 
 # --- patients ---------------------------------------------------------------
 
@@ -133,13 +133,24 @@ class AppointmentOut(ApiModel):
 
 
 class AppointmentIn(InputModel):
-    patient_id: str
-    doctor_id: str
+    patient_id: IdStr
+    doctor_id: IdStr
     date: date_t
     time: str = Field(pattern=_HHMM)
     duration_min: int = Field(default=30, ge=5, le=480)
     reason: str = Field(default="", max_length=240)
     created_via: AppointmentChannel = AppointmentChannel.FRONT_DESK
+
+
+class AppointmentRescheduleIn(InputModel):
+    """Move an appointment. Every field is optional — send only what changes,
+    so moving the time does not require restating the clinician."""
+
+    date: date_t | None = None
+    time: str | None = Field(default=None, pattern=_HHMM)
+    duration_min: int | None = Field(default=None, ge=5, le=480)
+    doctor_id: IdStr | None = None
+    reason: str | None = Field(default=None, max_length=240)
 
 
 class AppointmentStatusIn(InputModel):
@@ -160,11 +171,11 @@ class AppointmentPageOut(ApiModel):
 
 
 class AvailabilityQuery(InputModel):
-    doctor_id: str
+    doctor_id: IdStr
     date: date_t
     time: str = Field(pattern=_HHMM)
     duration_min: int = Field(default=30, ge=5, le=480)
-    ignore_id: str | None = None
+    ignore_id: IdStr | None = None
 
 
 class AvailabilityOut(ApiModel):
@@ -207,8 +218,8 @@ class QueueEntryOut(ApiModel):
 
 
 class WalkInIn(InputModel):
-    patient_id: str
-    doctor_id: str
+    patient_id: IdStr
+    doctor_id: IdStr
     reason: str = Field(default="", max_length=240)
     priority: QueuePriority = QueuePriority.ROUTINE
 
@@ -274,9 +285,9 @@ class EncounterPageOut(ApiModel):
 
 
 class EncounterIn(InputModel):
-    patient_id: str
-    queue_entry_id: str | None = None
-    doctor_id: str | None = None  # defaults to the signed-in clinician
+    patient_id: IdStr
+    queue_entry_id: IdStr | None = None
+    doctor_id: IdStr | None = None  # defaults to the signed-in clinician
     date: date_t | None = None
     chief_complaint: str = Field(default="", max_length=1000)
     notes: str = Field(default="", max_length=20_000)
@@ -367,7 +378,7 @@ class PrescriptionItemIn(InputModel):
     duration: str = Field(default="", max_length=80)
     instructions: str | None = Field(default=None, max_length=1000)
     qty: int = Field(default=1, ge=1, le=10_000)
-    item_id: str | None = None
+    item_id: IdStr | None = None
 
 
 class PrescriptionIn(InputModel):
@@ -375,7 +386,7 @@ class PrescriptionIn(InputModel):
 
 
 class DispenseLineIn(InputModel):
-    item_id: str  # the prescription item, not the stock item
+    item_id: IdStr  # the prescription item, not the stock item
     qty: int = Field(ge=1, le=10_000)
     batch_no: str = Field(min_length=1, max_length=60)
 

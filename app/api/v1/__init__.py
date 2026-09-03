@@ -7,6 +7,7 @@ from app.api.v1 import (
     auth,
     catalog,
     encounters,
+    messaging,
     modules,
     patients,
     platform,
@@ -29,6 +30,7 @@ api_router.include_router(modules.pharmacy_router)
 api_router.include_router(modules.lab_router)
 api_router.include_router(modules.inventory_router)
 api_router.include_router(modules.billing_router)
+api_router.include_router(messaging.router)
 api_router.include_router(analytics.router)
 api_router.include_router(realtime.router)
 api_router.include_router(platform.router)

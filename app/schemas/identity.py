@@ -48,6 +48,11 @@ class UserOut(ApiModel):
     status: AccountStatus
     failed_attempts: int
     last_sign_in: str | None
+    #: True while this account is using a password it did not choose. The
+    #: interface holds them on the change-password screen until it is false.
+    must_change_password: bool = False
+    #: An account waiting on an invitation link — it has no password at all.
+    invitation_pending: bool = False
 
     @classmethod
     def of(cls, u, tz: str | None = None) -> UserOut:
@@ -55,6 +60,8 @@ class UserOut(ApiModel):
             id=str(u.id), tenant_id=str(u.tenant_id), name=u.name, role=u.role, email=u.email,
             initials=u.initials, speciality=u.speciality, status=u.status,
             failed_attempts=u.failed_attempts, last_sign_in=day(u.last_sign_in, tz),
+            must_change_password=u.must_change_password,
+            invitation_pending=u.status == AccountStatus.INVITED and u.password_hash is None,
         )
 
 
@@ -88,6 +95,10 @@ class SessionOut(ApiModel):
     #: this person has seen the tour — rather than flashing it and taking it
     #: away again a moment later.
     preferences: UserPreferences = UserPreferences()
+    #: The session is real, but it is good for one thing until they choose
+    #: their own password. Sent here so the first paint after sign-in is the
+    #: change-password screen, not a dashboard that vanishes.
+    must_change_password: bool = False
 
 
 class MeOut(ApiModel):
@@ -98,6 +109,10 @@ class MeOut(ApiModel):
     permissions: list[str] = []
     features: list[str] = []
     preferences: UserPreferences = UserPreferences()
+    must_change_password: bool = False
+    #: Platform staff working inside this clinic. The interface shows a banner
+    #: saying whose session this really is; the audit trail already knows.
+    impersonated: bool = False
 
 
 class UserStatusIn(InputModel):
@@ -112,6 +127,69 @@ class UserCreateIn(InputModel):
     password: str | None = Field(default=None, min_length=12, max_length=200)
 
 
+class PasswordSetIn(InputModel):
+    """What a practice admin sends to give a colleague a password.
+
+    There is no current password here, and that is the point of the route: the
+    admin does not know it and must not need to. Proving your own password
+    before changing it is a different act, and not this one.
+    """
+
+    password: str = Field(min_length=12, max_length=200)
+
+
 class PasswordChangeIn(InputModel):
+    """Changing your own password, having proved you know the current one.
+
+    This is the route that clears `must_change_password`, so it is also how a
+    temporary credential stops being one.
+    """
+
     current_password: str = Field(min_length=1, max_length=200)
     new_password: str = Field(min_length=12, max_length=200)
+
+
+class PasswordForgotIn(InputModel):
+    """Ask for a reset link.
+
+    Only an address. The response is identical whether or not it names an
+    account here, so this cannot be used to find out who works at a clinic.
+    """
+
+    email: EmailStr
+
+
+class PasswordResetIn(InputModel):
+    """Spend a link and choose a password.
+
+    The token is the proof — there is no current password, because the person
+    using this either never had one or cannot remember it.
+    """
+
+    token: str = Field(min_length=16, max_length=200)
+    password: str = Field(min_length=12, max_length=200)
+
+
+class InvitationOut(ApiModel):
+    """What the "set your password" page is told before anyone is signed in.
+
+    Enough to address the person and name the clinic, and nothing else: no
+    role, no id, no hint about anybody else who works there.
+    """
+
+    valid: bool
+    purpose: str
+    name: str = ""
+    email: str = ""
+    clinic: str = ""
+    problem: str | None = None
+
+
+class AcceptedOut(ApiModel):
+    """The end of a reset. There is no session here on purpose — the password
+    is set and the person signs in with it, which proves it went in as they
+    intended."""
+
+    ok: bool = True
+    email: str
+    message: str = "Your password is set. Sign in with it."

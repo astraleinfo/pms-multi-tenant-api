@@ -68,7 +68,7 @@ def host_context(connection: HTTPConnection) -> HostContext:
         if slug:
             return HostContext("tenant", slug, settings.app_domain, "")
         if connection.headers.get("x-platform-console") == "1":
-            return HostContext("platform", None, settings.app_domain, "")
+            return HostContext("admin", None, settings.app_domain, "")
     return resolve_host(connection.headers.get("host"))
 
 
@@ -96,6 +96,18 @@ class TenantContext:
     @property
     def tenant_id(self) -> uuid.UUID:
         return self.tenant.id
+
+    @property
+    def impersonated(self) -> bool:
+        """Platform staff working inside this clinic."""
+        return self.principal.impersonated
+
+    @property
+    def actor_kind(self) -> str:
+        """What the audit trail records. A support session is `platform`, even
+        though it writes through a clinic account — the trail has to say who,
+        not which row the foreign key points at."""
+        return self.principal.actor_kind
 
     @property
     def tz(self) -> str:
@@ -138,7 +150,9 @@ async def current_tenant(
     except TokenError as exc:
         raise AuthError("Your session has expired. Sign in again.") from exc
 
-    if claims.subject_kind != "user" or claims.tenant_id is None:
+    if claims.tenant_id is None:
+        raise AuthError("That token is not for a clinic.")
+    if claims.subject_kind == "platform" and not claims.impersonated:
         raise AuthError("That token is not for a clinic.")
 
     if host.kind != "tenant" or not host.slug:
@@ -153,25 +167,52 @@ async def current_tenant(
     tenant = await tenant_service.tenant_by_slug(session, host.slug)
     if tenant is None or tenant.id != claims.tenant_id:
         raise AuthError("A clinic session can only be used on that clinic's address.")
-    if tenant.status == TenantStatus.SUSPENDED:
+    if tenant.status == TenantStatus.SUSPENDED and not claims.impersonated:
+        # Support is the one session that may enter a suspended clinic: a
+        # suspension is usually *why* someone from the platform is looking.
         raise AuthError("This clinic is suspended.")
 
     # Step 2 — from here the database itself refuses rows from anyone else.
     await set_tenant(session, tenant.id)
 
-    user = await session.get(User, claims.subject_id)
-    if user is None or user.tenant_id != tenant.id:
-        raise AuthError("Sign in to continue.")
-    if user.status != AccountStatus.ACTIVE:
-        raise AuthError("This account is not active.")
+    if claims.impersonated:
+        # The subject is platform staff; the clinic account named in the token
+        # is only what their writes are attributed to. Both are re-checked
+        # here, so revoking either ends the session at its next request.
+        staff = await session.get(PlatformUser, claims.subject_id)
+        if staff is None or staff.status != AccountStatus.ACTIVE:
+            raise AuthError("Sign in to continue.")
+        user = await session.get(User, claims.acting_user_id)
+        if user is None or user.tenant_id != tenant.id or not user.is_support:
+            raise AuthError("That support session is no longer valid.")
+        principal = Principal(
+            kind="platform",
+            subject_id=staff.id,
+            session_id=claims.session_id,
+            tenant=tenant,
+            user=user,
+            platform_user=staff,
+            impersonated=True,
+        )
+        request.state.platform_actor_id = str(staff.id)
+    else:
+        user = await session.get(User, claims.subject_id)
+        if user is None or user.tenant_id != tenant.id:
+            raise AuthError("Sign in to continue.")
+        if user.status != AccountStatus.ACTIVE:
+            raise AuthError("This account is not active.")
+        if user.is_support:
+            # Only a support *session* may act as one of these, and that path
+            # is above. A clinic token naming one is a forgery or a leftover.
+            raise AuthError("Sign in to continue.")
 
-    principal = Principal(
-        kind="user",
-        subject_id=user.id,
-        session_id=claims.session_id,
-        tenant=tenant,
-        user=user,
-    )
+        principal = Principal(
+            kind="user",
+            subject_id=user.id,
+            session_id=claims.session_id,
+            tenant=tenant,
+            user=user,
+        )
     config = await tenant_service.get_config(session, tenant.id)
     active = await tenant_service.active_feature_keys(session, tenant.id)
 
@@ -204,8 +245,12 @@ async def current_platform_user(
 
     if claims.subject_kind != "platform":
         raise AuthError("That token is not for the platform console.")
-    if host.kind != "platform":
-        raise AuthError("The console is served on the main domain only.")
+    if claims.impersonated:
+        # A support session is scoped to one clinic. It is not a way back into
+        # the console with a token the console never issued for that purpose.
+        raise AuthError("A support session cannot be used on the console.")
+    if not host.is_admin:
+        raise AuthError("The console is served on the admin address only.")
 
     staff = await session.get(PlatformUser, claims.subject_id)
     if staff is None or staff.status != AccountStatus.ACTIVE:

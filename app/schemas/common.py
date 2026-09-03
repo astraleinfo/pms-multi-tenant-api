@@ -8,12 +8,13 @@ room screen means ten past ten *there*.
 
 from __future__ import annotations
 
+import uuid
 from datetime import date, datetime, timezone
 from decimal import Decimal
-from typing import Any
+from typing import Annotated, Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import AfterValidator, BaseModel, ConfigDict
 
 DEFAULT_TZ = "Europe/London"
 
@@ -57,6 +58,21 @@ class ApiModel(BaseModel):
     """Response models: no extra fields, and enums render as their values."""
 
     model_config = ConfigDict(from_attributes=True, use_enum_values=True, extra="forbid")
+
+
+def _valid_id(value: str) -> str:
+    """Ids arrive as strings and are compared as strings, but they must still be
+    well formed: an empty or malformed one used to reach PostgreSQL as a uuid
+    cast and come back as a 500 rather than a 422.
+    """
+    try:
+        uuid.UUID(value)
+    except (AttributeError, TypeError, ValueError):
+        raise ValueError("not a valid id") from None
+    return value
+
+
+IdStr = Annotated[str, AfterValidator(_valid_id)]
 
 
 class InputModel(BaseModel):

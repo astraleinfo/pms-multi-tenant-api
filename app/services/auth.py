@@ -54,6 +54,7 @@ class Principal:
         tenant: Tenant | None = None,
         user: User | None = None,
         platform_user: PlatformUser | None = None,
+        impersonated: bool = False,
     ) -> None:
         self.kind = kind
         self.subject_id = subject_id
@@ -61,6 +62,9 @@ class Principal:
         self.tenant = tenant
         self.user = user
         self.platform_user = platform_user
+        #: A platform person working inside a clinic. `user` is the support
+        #: account they act through; `platform_user` is who they really are.
+        self.impersonated = impersonated
 
     @property
     def tenant_id(self) -> uuid.UUID | None:
@@ -72,11 +76,18 @@ class Principal:
 
     @property
     def label(self) -> str:
+        # An impersonator is named as themselves, never as the clinic account
+        # they are working through — the audit trail has to answer "who".
+        if self.platform_user:
+            base = f"{self.platform_user.name} <{self.platform_user.email}>"
+            return f"{base} (platform support)" if self.impersonated else base
         if self.user:
             return f"{self.user.name} <{self.user.email}>"
-        if self.platform_user:
-            return f"{self.platform_user.name} <{self.platform_user.email}>"
         return "unknown"
+
+    @property
+    def actor_kind(self) -> str:
+        return "platform" if self.platform_user else "user"
 
     @property
     def permissions(self) -> list[str]:
@@ -184,6 +195,16 @@ async def authenticate_user(
         )
         raise AuthError(INVITED)
 
+    if user.is_support:
+        # It has no password hash, so this is unreachable in practice — but a
+        # support account is not a door, and saying so here means it stays that
+        # way if one ever acquires a hash by accident.
+        await _log_attempt(
+            tenant_id=tenant.id, email=normalised, succeeded=False, reason="support_account",
+            ip=ip, user_agent=user_agent,
+        )
+        raise AuthError(GENERIC)
+
     if not password_ok:
         await _count_failure(tenant.id, user.id)
         await _log_attempt(
@@ -278,6 +299,46 @@ async def authenticate_platform_user(
         ip=ip, user_agent=user_agent,
     )
     return staff, access, refresh
+
+
+async def open_support_session(
+    session: AsyncSession,
+    *,
+    staff: PlatformUser,
+    tenant: Tenant,
+    acting_user: User,
+    ip: str,
+    user_agent: str,
+) -> tuple[str, uuid.UUID]:
+    """Mint a short-lived clinic token for platform staff. Returns (token, sid).
+
+    Deliberately an access token and nothing else — no refresh token, no
+    cookie. A support session lasts one access-token lifetime and then has to
+    be opened again from the console, which keeps "I looked at a clinic" a
+    thing someone did at a moment rather than a standing key. It is also why
+    `refresh_tokens` needs no change: there is nothing to store.
+
+    The token carries the platform person as its subject and the clinic as its
+    tenant — the one shape `decode_access_token` accepts only with `imp` set.
+    """
+    session_id = uuid.uuid4()
+    token = create_access_token(
+        subject_id=staff.id,
+        subject_kind="platform",
+        session_id=session_id,
+        tenant_id=tenant.id,
+        tenant_slug=tenant.slug,
+        role=acting_user.role,
+        impersonated=True,
+        acting_user_id=acting_user.id,
+    )
+    await audit.record(
+        session, action="platform.impersonate", tenant_id=tenant.id, actor_kind="platform",
+        actor_id=staff.id, actor_label=f"{staff.name} <{staff.email}>", entity="tenant",
+        entity_id=str(tenant.id), ip=ip, user_agent=user_agent,
+        meta={"slug": tenant.slug, "acting_user_id": str(acting_user.id)},
+    )
+    return token, session_id
 
 
 async def issue_refresh_token(
@@ -378,10 +439,19 @@ async def revoke_session(session: AsyncSession, *, session_id: uuid.UUID) -> Non
     )
 
 
-async def revoke_all_for_subject(session: AsyncSession, *, subject_id: uuid.UUID) -> None:
-    """Used when an account is locked or its password changes."""
-    await session.execute(
-        update(RefreshToken)
-        .where(RefreshToken.subject_id == subject_id, RefreshToken.revoked_at.is_(None))
-        .values(revoked_at=_now())
-    )
+async def revoke_all_for_subject(
+    session: AsyncSession,
+    *,
+    subject_id: uuid.UUID,
+    except_session_id: uuid.UUID | None = None,
+) -> None:
+    """Used when an account is locked or its password changes.
+
+    `except_session_id` spares one sign-in. An admin setting their own password
+    would otherwise revoke the very browser they are doing it in — every other
+    session they hold still goes, which is the part that matters.
+    """
+    conditions = [RefreshToken.subject_id == subject_id, RefreshToken.revoked_at.is_(None)]
+    if except_session_id is not None:
+        conditions.append(RefreshToken.session_id != except_session_id)
+    await session.execute(update(RefreshToken).where(*conditions).values(revoked_at=_now()))

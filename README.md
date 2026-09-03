@@ -128,6 +128,13 @@ They are hashed with Argon2 on the way into the database. Five wrong passwords l
 a practice admin releases it from `PATCH /v1/users/{id}/status`, which also clears the counter
 and, when locking, revokes every session that account holds.
 
+An admin gives a colleague a password with `POST /v1/users/{id}/password` — no current password,
+because the point of the route is that they do not know it. The first password an account is given
+is what accepts its invitation, since an `invited` row has no hash and the sign-in refuses it by
+name. Every session opened with the old password is revoked, except the one making the request when
+an admin is rotating their own. It is not an unlock: a locked account stays locked, or a reset
+could quietly reinstate someone who had been shut out.
+
 ```bash
 curl -H 'Host: northgate.localhost' -H 'Content-Type: application/json' \
      -d '{"email":"admin@northgate.clinic","password":"admin-2026"}' \
