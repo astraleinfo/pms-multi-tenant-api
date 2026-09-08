@@ -104,6 +104,7 @@ class TenantConfigOut(ApiModel):
     invoice_prefix: str
     tax_pct: float
     payment_terms_days: int
+    expiry_alert_days: int
     currency: Currency
     timezone: str
 
@@ -116,7 +117,8 @@ class TenantConfigOut(ApiModel):
             slot_minutes=c.slot_minutes, default_duration=c.default_duration,
             token_prefix=c.token_prefix, urgent_first=c.urgent_first,
             invoice_prefix=c.invoice_prefix, tax_pct=money(c.tax_pct),
-            payment_terms_days=c.payment_terms_days, currency=c.currency, timezone=tz,
+            payment_terms_days=c.payment_terms_days, expiry_alert_days=c.expiry_alert_days,
+            currency=c.currency, timezone=tz,
         )
 
 
@@ -137,6 +139,7 @@ class TenantConfigPatch(InputModel):
     invoice_prefix: str | None = Field(default=None, pattern=r"^[A-Z0-9-]{1,12}$")
     tax_pct: float | None = Field(default=None, ge=0, le=100)
     payment_terms_days: int | None = Field(default=None, ge=0, le=365)
+    expiry_alert_days: int | None = Field(default=None, ge=1, le=730)
     currency: Currency | None = None
 
 

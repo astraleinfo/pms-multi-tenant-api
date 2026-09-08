@@ -370,6 +370,21 @@ async def test_a_purchase_adds_to_the_ledger_and_the_batch(northgate):
     assert after["on_hand"] == before["on_hand"] + 25
 
 
+async def test_expiry_alert_threshold_is_configurable(northgate):
+    default = (await northgate.get("/v1/inventory/expiring")).json()
+
+    updated = (await northgate.patch("/v1/tenant/config", json={"expiry_alert_days": 5})).json()
+    assert updated["expiry_alert_days"] == 5
+
+    tightened = (await northgate.get("/v1/inventory/expiring")).json()
+    assert len(tightened) <= len(default)
+
+    override = (await northgate.get("/v1/inventory/expiring", params={"within_days": 730})).json()
+    assert len(override) >= len(tightened)
+
+    await northgate.patch("/v1/tenant/config", json={"expiry_alert_days": 90})
+
+
 async def test_an_invoice_can_be_voided_but_not_paid_afterwards(northgate):
     patient = (await patients_of(northgate))[0]
     invoice = (

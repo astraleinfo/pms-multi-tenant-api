@@ -117,6 +117,7 @@ class TenantConfig(Base, TenantScoped, TimestampMixin):
         CheckConstraint("default_duration between 5 and 240", name="ck_config_duration"),
         CheckConstraint("tax_pct >= 0 and tax_pct <= 100", name="ck_config_tax"),
         CheckConstraint("payment_terms_days between 0 and 365", name="ck_config_terms"),
+        CheckConstraint("expiry_alert_days between 1 and 730", name="ck_config_expiry_alert"),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -140,6 +141,7 @@ class TenantConfig(Base, TenantScoped, TimestampMixin):
     invoice_sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=2044)
     tax_pct: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False, default=0)
     payment_terms_days: Mapped[int] = mapped_column(Integer, nullable=False, default=14)
+    expiry_alert_days: Mapped[int] = mapped_column(Integer, nullable=False, default=90)
     currency: Mapped[Currency] = mapped_column(
         Enum(Currency, name="currency", values_callable=lambda e: [m.value for m in e]),
         nullable=False,

@@ -407,11 +407,12 @@ async def stock_levels(
 
 @inventory_router.get("/expiring", response_model=list[InventoryBatchOut])
 async def expiring_batches(
-    within_days: int = Query(default=90, ge=1, le=730),
+    within_days: int | None = Query(default=None, ge=1, le=730),
     ctx: TenantContext = Depends(require_feature("inventory", Permission.INVENTORY_READ)),
 ) -> list[InventoryBatchOut]:
+    days = within_days if within_days is not None else ctx.config.expiry_alert_days
     rows = await inventory_service.near_expiry(
-        ctx.session, ctx.tenant_id, today=ctx.today, within_days=within_days
+        ctx.session, ctx.tenant_id, today=ctx.today, within_days=days
     )
     return [InventoryBatchOut.of(b) for b in rows]
 
