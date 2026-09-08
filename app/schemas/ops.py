@@ -41,6 +41,9 @@ class InventoryItemOut(ApiModel):
     mrp: float
     margin_pct: float
     pricing_mode: PricingMode
+    manufacturer: str
+    description: str
+    hsn_code: str
 
     @classmethod
     def of(cls, i) -> InventoryItemOut:
@@ -49,7 +52,8 @@ class InventoryItemOut(ApiModel):
             strength=i.strength, unit=i.unit, category=i.category,
             reorder_level=i.reorder_level, unit_price=money(i.unit_price),
             cost_price=money(i.cost_price), mrp=money(i.mrp), margin_pct=money(i.margin_pct),
-            pricing_mode=i.pricing_mode,
+            pricing_mode=i.pricing_mode, manufacturer=i.manufacturer,
+            description=i.description, hsn_code=i.hsn_code,
         )
 
 

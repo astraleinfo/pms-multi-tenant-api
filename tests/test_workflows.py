@@ -105,6 +105,9 @@ async def test_register_book_check_in_consult_prescribe_dispense_bill(client, no
     # 3.8 — prescribing is core.
     items = (await northgate.get("/v1/inventory/items")).json()
     stock_item = next(i for i in items if i["name"].startswith("Ibuprofen"))
+    assert "manufacturer" in stock_item
+    assert "description" in stock_item
+    assert "hsn_code" in stock_item
     prescription = (
         await doctor_client.post(
             f"/v1/encounters/{encounter['id']}/prescriptions",

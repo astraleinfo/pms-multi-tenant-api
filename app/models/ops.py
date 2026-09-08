@@ -90,6 +90,9 @@ class InventoryItem(Base, TenantScoped, TimestampMixin):
     pricing_mode: Mapped[PricingMode] = mapped_column(
         _enum(PricingMode, "pricing_mode"), nullable=False, default=PricingMode.PRICE
     )
+    manufacturer: Mapped[str] = mapped_column(String(160), nullable=False, default="")
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    hsn_code: Mapped[str] = mapped_column(String(20), nullable=False, default="")
 
 
 class InventoryBatch(Base, TenantScoped, TimestampMixin):
