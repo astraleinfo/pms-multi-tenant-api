@@ -18,7 +18,9 @@ from fastapi import APIRouter, Depends, Query, status
 from app.api.deps import TenantContext, parse_uuid, require_permission
 from app.core.permissions import Permission
 from app.models.enums import ServiceKind
+from app.schemas.identity import UserOut
 from app.schemas.ops import (
+    DoctorFeeIn,
     LabCatalogueImportIn,
     ServicePriceIn,
     ServicePriceOut,
@@ -129,3 +131,20 @@ async def import_lab_catalogue(
         entity_id="", meta={"created": len(created)},
     )
     return [ServicePriceOut.of(row) for row in created]
+
+
+@router.patch("/doctors/{doctor_id}", response_model=UserOut)
+async def update_doctor_fee(
+    doctor_id: str,
+    payload: DoctorFeeIn,
+    ctx: TenantContext = Depends(require_permission(Permission.TENANT_CONFIG_WRITE)),
+) -> UserOut:
+    doctor = await pricing_service.set_doctor_fee(
+        ctx.session, ctx.tenant_id, parse_uuid(doctor_id, what="clinician"), payload.consultation_fee
+    )
+    await audit.record(
+        ctx.session, action="pricing.doctor_fee", tenant_id=ctx.tenant_id, actor_kind=ctx.actor_kind,
+        actor_id=ctx.actor_id, actor_label=ctx.principal.label, entity="user",
+        entity_id=str(doctor.id), meta={"consultation_fee": payload.consultation_fee},
+    )
+    return UserOut.of(doctor)

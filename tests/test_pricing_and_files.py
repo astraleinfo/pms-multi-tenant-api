@@ -210,6 +210,57 @@ async def test_an_unpriced_line_says_so_rather_than_guessing(northgate, northgat
         await northgate.patch(f"/v1/pricing/services/{consultation['id']}", json={"active": True})
 
 
+async def test_a_doctor_with_their_own_fee_overrides_the_clinic_default(northgate, northgate_doctor):
+    doctor = (await northgate.get("/v1/users/doctors")).json()[0]
+    patient = (
+        await northgate.post(
+            "/v1/patients",
+            json={"full_name": "Doctor Fee Test", "dob": "1985-05-05", "sex": "male", "phone": "+44 7700 900557"},
+        )
+    ).json()
+    encounter = (
+        await northgate.post(
+            "/v1/encounters",
+            json={
+                "patient_id": patient["id"], "doctor_id": doctor["id"], "date": "2026-09-08",
+                "chief_complaint": "Fee test", "notes": "", "diagnosis": "", "clinical_ext": {},
+            },
+        )
+    ).json()
+
+    # No fee set yet: the clinic default applies.
+    before = (
+        await northgate.get("/v1/billing/invoices/suggestions", params={"encounter_id": encounter["id"]})
+    ).json()
+    consultation_before = next(line for line in before["lines"] if line["source"] == "consultation")
+    default_price = consultation_before["unit_price"]
+
+    # Set this doctor's own fee.
+    updated = (
+        await northgate.patch(f"/v1/pricing/doctors/{doctor['id']}", json={"consultation_fee": 999.0})
+    ).json()
+    assert updated["consultation_fee"] == 999.0
+
+    after = (
+        await northgate.get("/v1/billing/invoices/suggestions", params={"encounter_id": encounter["id"]})
+    ).json()
+    consultation_after = next(line for line in after["lines"] if line["source"] == "consultation")
+    assert consultation_after["unit_price"] == 999.0
+    assert consultation_after["unit_price"] != default_price
+
+    # Clearing it reverts to the clinic default.
+    cleared = (
+        await northgate.patch(f"/v1/pricing/doctors/{doctor['id']}", json={"consultation_fee": None})
+    ).json()
+    assert cleared["consultation_fee"] is None
+
+    reverted = (
+        await northgate.get("/v1/billing/invoices/suggestions", params={"encounter_id": encounter["id"]})
+    ).json()
+    consultation_reverted = next(line for line in reverted["lines"] if line["source"] == "consultation")
+    assert consultation_reverted["unit_price"] == default_price
+
+
 # --- lab and pharmacy bill separately ---------------------------------------
 
 

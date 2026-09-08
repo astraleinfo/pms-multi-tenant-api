@@ -382,8 +382,8 @@ async def suggest_lines(
         }
 
     # -- consultation: one charge per encounter, either billed or not --------
-    consultation = await pricing_service.price_for(
-        session, tenant_id, kind=ServiceKind.CONSULTATION, code=pricing_service.CONSULTATION_CODE
+    consultation_price, consultation_tax, consultation_priced = (
+        await pricing_service.resolve_consultation_price(session, tenant_id, encounter.doctor_id)
     )
     consultation_billed = await billed_ref_lines(
         session, tenant_id, LineItemSource.CONSULTATION, [encounter.id]
@@ -391,16 +391,16 @@ async def suggest_lines(
     if encounter.id in consultation_billed:
         already_billed.append(_already(
             "Consultation", LineItemSource.CONSULTATION, 1,
-            float(consultation.price) if consultation else 0.0,
-            float(consultation.tax_pct) if consultation else default_tax,
+            float(consultation_price),
+            float(consultation_tax),
             consultation_billed[encounter.id],
         ))
     else:
         lines.append(_line(
             "Consultation", LineItemSource.CONSULTATION, 1,
-            float(consultation.price) if consultation else 0.0,
-            float(consultation.tax_pct) if consultation else default_tax,
-            consultation is not None,
+            float(consultation_price),
+            float(consultation_tax),
+            consultation_priced,
         ))
 
     # -- lab orders: one charge each, either billed or not -------------------

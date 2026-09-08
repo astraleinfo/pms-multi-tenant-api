@@ -447,6 +447,10 @@ class ServicePricePatch(InputModel):
     note: str | None = Field(default=None, max_length=500)
 
 
+class DoctorFeeIn(InputModel):
+    consultation_fee: float | None = Field(default=None, ge=0, le=1_000_000)
+
+
 class LabCatalogueImportIn(InputModel):
     """Give every test this clinic can order a row to price, at one starting
     figure. Tests that already have a price are left exactly as they are."""

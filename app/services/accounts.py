@@ -218,24 +218,24 @@ async def _consultation_charges(
     billed = await _billed_ref_qty(
         session, tenant_id, LineItemSource.CONSULTATION, [e.id for e in encounters]
     )
-    tariff = await pricing_service.price_for(
-        session, tenant_id, kind=ServiceKind.CONSULTATION, code=pricing_service.CONSULTATION_CODE
-    )
 
     charges: list[Charge] = []
     for encounter in encounters:
         if billed.get(encounter.id, 0) > 0:
             continue
+        price, encounter_tax, priced = await pricing_service.resolve_consultation_price(
+            session, tenant_id, encounter.doctor_id
+        )
         charges.append(
             Charge(
                 source=LineItemSource.CONSULTATION,
                 department=BillingDepartment.CLINIC,
                 description=f"Consultation — {encounter.date.isoformat()}",
                 qty=1,
-                unit_price=float(tariff.price) if tariff else 0.0,
-                tax_pct=float(tariff.tax_pct) if tariff else tax,
+                unit_price=float(price),
+                tax_pct=float(encounter_tax),
                 ref_id=str(encounter.id),
-                priced=tariff is not None,
+                priced=priced,
             )
         )
     return charges

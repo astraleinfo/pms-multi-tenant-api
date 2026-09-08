@@ -146,6 +146,25 @@ async def test_dispensing_puts_a_charge_on_the_pharmacy_counter(northgate, north
     assert pharmacy["due"] == 60.0
 
 
+async def test_the_clinic_counter_reflects_a_doctors_own_fee(northgate, northgate_doctor):
+    patient = await _new_patient(northgate, "Doctor Fee Account")
+    doctor = await _doctor(northgate)
+
+    await northgate.patch(f"/v1/pricing/doctors/{doctor['id']}", json={"consultation_fee": 777.0})
+    try:
+        await _encounter(northgate_doctor, patient, doctor, "Doctor's own fee")
+
+        account = (await northgate.get(f"/v1/billing/patients/{patient['id']}/account")).json()
+        clinic = account["departments"]["clinic"]
+        assert len(clinic["unbilled"]) == 1
+        charge = clinic["unbilled"][0]
+        assert charge["unit_price"] == 777.0
+        assert charge["priced"] is True
+        assert clinic["due"] == charge["total"]
+    finally:
+        await northgate.patch(f"/v1/pricing/doctors/{doctor['id']}", json={"consultation_fee": None})
+
+
 async def test_a_visit_charges_each_counter_separately(northgate, northgate_doctor):
     patient = await _new_patient(northgate, "Three Counters")
     doctor = await _doctor(northgate)
