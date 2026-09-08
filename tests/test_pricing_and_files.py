@@ -140,7 +140,7 @@ async def test_a_suggested_line_quotes_the_tariff_not_a_number_in_the_code(north
     encounter = (await northgate.get("/v1/encounters", params={"limit": 1})).json()["items"][0]
     lines = (
         await northgate.get("/v1/billing/invoices/suggestions", params={"encounter_id": encounter["id"]})
-    ).json()
+    ).json()["lines"]
 
     consultation = next(line for line in lines if line["source"] == "consultation")
     tariff = next(
@@ -177,7 +177,7 @@ async def test_a_lab_line_is_priced_by_its_own_code(northgate, northgate_doctor)
 
     lines = (
         await northgate.get("/v1/billing/invoices/suggestions", params={"encounter_id": encounter["id"]})
-    ).json()
+    ).json()["lines"]
     lab_line = next(line for line in lines if line["source"] == "lab")
     cbct = next(
         row
@@ -202,7 +202,7 @@ async def test_an_unpriced_line_says_so_rather_than_guessing(northgate, northgat
             await northgate.get(
                 "/v1/billing/invoices/suggestions", params={"encounter_id": encounter["id"]}
             )
-        ).json()
+        ).json()["lines"]
         line = next(line for line in lines if line["source"] == "consultation")
         assert line["unit_price"] == 0
         assert line["priced"] is False

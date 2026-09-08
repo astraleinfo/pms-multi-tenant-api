@@ -155,7 +155,7 @@ async def test_register_book_check_in_consult_prescribe_dispense_bill(client, no
     # 3.12 — the invoice, composed from the visit.
     suggestions = (
         await northgate.get("/v1/billing/invoices/suggestions", params={"encounter_id": encounter["id"]})
-    ).json()
+    ).json()["lines"]
     assert any(line["source"] == "consultation" for line in suggestions)
     assert any(line["source"] == "pharmacy" for line in suggestions)
 

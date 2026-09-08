@@ -36,7 +36,7 @@ from app.models.enums import (
     PaymentMethod,
     ServiceKind,
 )
-from app.models.ops import InventoryItem, Invoice, InvoiceLineItem
+from app.models.ops import InventoryItem, Invoice
 from app.schemas.ops import InvoiceIn, InvoiceLineItemIn, PaymentIn
 from app.services import billing as billing_service
 from app.services import patients as patient_service

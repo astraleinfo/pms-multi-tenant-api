@@ -384,7 +384,9 @@ async def suggest_lines(
     consultation = await pricing_service.price_for(
         session, tenant_id, kind=ServiceKind.CONSULTATION, code=pricing_service.CONSULTATION_CODE
     )
-    consultation_billed = await billed_ref_lines(session, tenant_id, LineItemSource.CONSULTATION, [encounter.id])
+    consultation_billed = await billed_ref_lines(
+        session, tenant_id, LineItemSource.CONSULTATION, [encounter.id]
+    )
     if encounter.id in consultation_billed:
         already_billed.append(_already(
             "Consultation", LineItemSource.CONSULTATION, 1,
@@ -410,12 +412,16 @@ async def suggest_lines(
         session, tenant_id, LineItemSource.LAB, [order.id for order in orders]
     )
     for order in orders:
-        tariff = await pricing_service.price_for(session, tenant_id, kind=ServiceKind.LAB, code=order.test_code)
+        tariff = await pricing_service.price_for(
+            session, tenant_id, kind=ServiceKind.LAB, code=order.test_code
+        )
         description = f"Lab — {order.test_name}"
         unit_price = float(tariff.price) if tariff else 0.0
         tax_pct = float(tariff.tax_pct) if tariff else default_tax
         if order.id in lab_billed:
-            already_billed.append(_already(description, LineItemSource.LAB, 1, unit_price, tax_pct, lab_billed[order.id]))
+            already_billed.append(
+                _already(description, LineItemSource.LAB, 1, unit_price, tax_pct, lab_billed[order.id])
+            )
         else:
             lines.append(_line(description, LineItemSource.LAB, 1, unit_price, tax_pct, tariff is not None))
 
@@ -446,8 +452,14 @@ async def suggest_lines(
         outstanding = item.dispensed_qty - billed_qty
 
         if entries:
-            already_billed.append(_already(description, LineItemSource.PHARMACY, billed_qty, unit_price, default_tax, entries))
+            already_billed.append(
+                _already(
+                    description, LineItemSource.PHARMACY, billed_qty, unit_price, default_tax, entries
+                )
+            )
         if outstanding > 0:
-            lines.append(_line(description, LineItemSource.PHARMACY, outstanding, unit_price, default_tax, priced))
+            lines.append(
+                _line(description, LineItemSource.PHARMACY, outstanding, unit_price, default_tax, priced)
+            )
 
     return {"lines": lines, "already_billed": already_billed}
