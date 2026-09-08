@@ -24,7 +24,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import date
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import Conflict
@@ -93,25 +93,9 @@ class DepartmentAccount:
 async def _billed_ref_qty(
     session: AsyncSession, tenant_id: uuid.UUID, source: LineItemSource, ref_ids: list[uuid.UUID]
 ) -> dict[uuid.UUID, int]:
-    """How much of each referenced row has already been billed.
-
-    Void invoices do not count: voiding one is how a mistaken charge is undone,
-    and what it undoes is exactly this.
-    """
-    if not ref_ids:
-        return {}
-    rows = await session.execute(
-        select(InvoiceLineItem.ref_id, func.coalesce(func.sum(InvoiceLineItem.qty), 0))
-        .join(Invoice, Invoice.id == InvoiceLineItem.invoice_id)
-        .where(
-            InvoiceLineItem.tenant_id == tenant_id,
-            InvoiceLineItem.source == source,
-            InvoiceLineItem.ref_id.in_(ref_ids),
-            Invoice.status != InvoiceStatus.VOID,
-        )
-        .group_by(InvoiceLineItem.ref_id)
-    )
-    return {ref_id: int(total or 0) for ref_id, total in rows.all()}
+    """How much of each referenced row has already been billed."""
+    details = await billing_service.billed_ref_lines(session, tenant_id, source, ref_ids)
+    return {ref_id: sum(entry["qty"] for entry in entries) for ref_id, entries in details.items()}
 
 
 async def _pharmacy_charges(

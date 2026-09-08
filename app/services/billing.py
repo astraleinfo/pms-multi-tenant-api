@@ -319,18 +319,40 @@ async def add_payment(
     return invoice
 
 
+async def billed_ref_lines(
+    session: AsyncSession, tenant_id: uuid.UUID, source: LineItemSource, ref_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, list[dict]]:
+    """Every non-void invoice line that already bills each ref_id — which
+    invoice it's on, that invoice's status, and how much of the ref it
+    accounts for. Void invoices do not count: voiding one is how a mistaken
+    charge is undone, and what it undoes is exactly this."""
+    if not ref_ids:
+        return {}
+    rows = await session.execute(
+        select(InvoiceLineItem, Invoice)
+        .join(Invoice, Invoice.id == InvoiceLineItem.invoice_id)
+        .where(
+            InvoiceLineItem.tenant_id == tenant_id,
+            InvoiceLineItem.source == source,
+            InvoiceLineItem.ref_id.in_(ref_ids),
+            Invoice.status != InvoiceStatus.VOID,
+        )
+    )
+    out: dict[uuid.UUID, list[dict]] = {}
+    for line, invoice in rows.all():
+        out.setdefault(line.ref_id, []).append(
+            {"invoice_number": invoice.number, "invoice_status": invoice.status.value, "qty": line.qty}
+        )
+    return out
+
+
 async def suggest_lines(
     session: AsyncSession, tenant_id: uuid.UUID, *, encounter_id: uuid.UUID
-) -> list[dict]:
+) -> dict[str, list[dict]]:
     """§3.12 — what this visit would bill for: the consultation itself, then
-    anything the lab and the pharmacy did for it.
-
-    Every figure comes from something the clinic set: the tariff a practice
-    admin keeps for consultations and scans, and the selling price on the stock
-    line for anything dispensed. Where nothing has been set the line still
-    appears, priced at zero and saying so — which is the honest answer to "what
-    do you charge for this?" before anyone has said.
-    """
+    anything the lab and the pharmacy did for it — less whatever a counter has
+    already billed or been paid for separately, which is reported alongside
+    rather than suggested again."""
     encounter = (
         await session.execute(
             select(Encounter).where(Encounter.id == encounter_id, Encounter.tenant_id == tenant_id)
@@ -342,64 +364,62 @@ async def suggest_lines(
     config = await tenant_service.get_config(session, tenant_id)
     default_tax = float(config.tax_pct)
     lines: list[dict] = []
+    already_billed: list[dict] = []
 
-    def _line(
-        description: str,
-        source: LineItemSource,
-        qty: int,
-        unit_price: float,
-        tax_pct: float,
-        priced: bool,
-    ) -> dict:
+    def _line(description, source, qty, unit_price, tax_pct, priced) -> dict:
         return {
-            "description": description,
-            "source": source.value,
-            "department": DEPARTMENT_OF_SOURCE[source].value,
-            "qty": qty,
-            "unit_price": unit_price,
-            "tax_pct": tax_pct,
-            "priced": priced,
+            "description": description, "source": source.value,
+            "department": DEPARTMENT_OF_SOURCE[source].value, "qty": qty,
+            "unit_price": unit_price, "tax_pct": tax_pct, "priced": priced,
         }
 
+    def _already(description, source, qty, unit_price, tax_pct, invoices) -> dict:
+        return {
+            "description": description, "source": source.value,
+            "department": DEPARTMENT_OF_SOURCE[source].value, "qty": qty,
+            "unit_price": unit_price, "tax_pct": tax_pct, "invoices": invoices,
+        }
+
+    # -- consultation: one charge per encounter, either billed or not --------
     consultation = await pricing_service.price_for(
-        session,
-        tenant_id,
-        kind=ServiceKind.CONSULTATION,
-        code=pricing_service.CONSULTATION_CODE,
+        session, tenant_id, kind=ServiceKind.CONSULTATION, code=pricing_service.CONSULTATION_CODE
     )
-    lines.append(
-        _line(
-            "Consultation",
-            LineItemSource.CONSULTATION,
-            1,
+    consultation_billed = await billed_ref_lines(session, tenant_id, LineItemSource.CONSULTATION, [encounter.id])
+    if encounter.id in consultation_billed:
+        already_billed.append(_already(
+            "Consultation", LineItemSource.CONSULTATION, 1,
+            float(consultation.price) if consultation else 0.0,
+            float(consultation.tax_pct) if consultation else default_tax,
+            consultation_billed[encounter.id],
+        ))
+    else:
+        lines.append(_line(
+            "Consultation", LineItemSource.CONSULTATION, 1,
             float(consultation.price) if consultation else 0.0,
             float(consultation.tax_pct) if consultation else default_tax,
             consultation is not None,
-        )
-    )
+        ))
 
-    orders = (
+    # -- lab orders: one charge each, either billed or not -------------------
+    orders = list((
         await session.execute(
             select(LabOrder).where(LabOrder.tenant_id == tenant_id, LabOrder.encounter_id == encounter.id)
         )
-    ).scalars()
+    ).scalars())
+    lab_billed = await billed_ref_lines(
+        session, tenant_id, LineItemSource.LAB, [order.id for order in orders]
+    )
     for order in orders:
-        # Each scan carries its own amount: the tariff is keyed by test code,
-        # so an ultrasound and a blood count are not the same money.
-        tariff = await pricing_service.price_for(
-            session, tenant_id, kind=ServiceKind.LAB, code=order.test_code
-        )
-        lines.append(
-            _line(
-                f"Lab — {order.test_name}",
-                LineItemSource.LAB,
-                1,
-                float(tariff.price) if tariff else 0.0,
-                float(tariff.tax_pct) if tariff else default_tax,
-                tariff is not None,
-            )
-        )
+        tariff = await pricing_service.price_for(session, tenant_id, kind=ServiceKind.LAB, code=order.test_code)
+        description = f"Lab — {order.test_name}"
+        unit_price = float(tariff.price) if tariff else 0.0
+        tax_pct = float(tariff.tax_pct) if tariff else default_tax
+        if order.id in lab_billed:
+            already_billed.append(_already(description, LineItemSource.LAB, 1, unit_price, tax_pct, lab_billed[order.id]))
+        else:
+            lines.append(_line(description, LineItemSource.LAB, 1, unit_price, tax_pct, tariff is not None))
 
+    # -- pharmacy: partial billing is normal, so split by outstanding qty ----
     prescriptions = (
         await session.execute(
             select(Prescription).where(
@@ -407,26 +427,27 @@ async def suggest_lines(
             )
         )
     ).scalars()
-    for prescription in prescriptions:
-        for item in prescription.items:
-            if item.dispensed_qty <= 0:
-                continue
-            unit_price = 0.0
-            priced = False
-            if item.item_id:
-                stock = await session.get(InventoryItem, item.item_id)
-                if stock is not None and stock.tenant_id == tenant_id:
-                    unit_price = float(stock.unit_price)
-                    priced = True
-            lines.append(
-                _line(
-                    f"{item.medicine} {item.strength}".strip(),
-                    LineItemSource.PHARMACY,
-                    item.dispensed_qty,
-                    unit_price,
-                    default_tax,
-                    priced,
-                )
-            )
+    dispensed_items = [item for rx in prescriptions for item in rx.items if item.dispensed_qty > 0]
+    pharmacy_billed = await billed_ref_lines(
+        session, tenant_id, LineItemSource.PHARMACY, [item.id for item in dispensed_items]
+    )
+    for item in dispensed_items:
+        unit_price = 0.0
+        priced = False
+        if item.item_id:
+            stock = await session.get(InventoryItem, item.item_id)
+            if stock is not None and stock.tenant_id == tenant_id:
+                unit_price = float(stock.unit_price)
+                priced = True
+        description = f"{item.medicine} {item.strength}".strip()
 
-    return lines
+        entries = pharmacy_billed.get(item.id, [])
+        billed_qty = sum(e["qty"] for e in entries)
+        outstanding = item.dispensed_qty - billed_qty
+
+        if entries:
+            already_billed.append(_already(description, LineItemSource.PHARMACY, billed_qty, unit_price, default_tax, entries))
+        if outstanding > 0:
+            lines.append(_line(description, LineItemSource.PHARMACY, outstanding, unit_price, default_tax, priced))
+
+    return {"lines": lines, "already_billed": already_billed}

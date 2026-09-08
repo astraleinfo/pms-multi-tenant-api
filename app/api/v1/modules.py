@@ -25,6 +25,7 @@ from app.schemas.clinical import (
     PrescriptionOut,
 )
 from app.schemas.ops import (
+    AlreadyBilledLineOut,
     ChargeOut,
     CounterPaymentIn,
     CounterPaymentOut,
@@ -43,6 +44,7 @@ from app.schemas.ops import (
     StockLevelOut,
     StockMovementIn,
     SuggestedLineOut,
+    SuggestedLinesOut,
 )
 from app.services import accounts as account_service
 from app.services import audit
@@ -513,15 +515,18 @@ async def create_invoice(
     return InvoiceOut.of(invoice, ctx.tz, billing_service.totals_for(invoice))
 
 
-@billing_router.get("/invoices/suggestions", response_model=list[SuggestedLineOut])
+@billing_router.get("/invoices/suggestions", response_model=SuggestedLinesOut)
 async def suggested_lines(
     encounter_id: str,
     ctx: TenantContext = Depends(require_feature("billing", Permission.BILLING_WRITE)),
-) -> list[SuggestedLineOut]:
-    lines = await billing_service.suggest_lines(
+) -> SuggestedLinesOut:
+    result = await billing_service.suggest_lines(
         ctx.session, ctx.tenant_id, encounter_id=parse_uuid(encounter_id, what="consultation")
     )
-    return [SuggestedLineOut(**line) for line in lines]
+    return SuggestedLinesOut(
+        lines=[SuggestedLineOut(**line) for line in result["lines"]],
+        already_billed=[AlreadyBilledLineOut(**line) for line in result["already_billed"]],
+    )
 
 
 @billing_router.get("/invoices/{invoice_id}", response_model=InvoiceOut)

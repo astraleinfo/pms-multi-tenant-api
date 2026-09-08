@@ -382,6 +382,24 @@ class SuggestedLineOut(ApiModel):
     priced: bool = True
 
 
+class AlreadyBilledLineOut(ApiModel):
+    """A line the visit implies that some invoice already covers, so Compose
+    Invoice reports it instead of suggesting it again."""
+
+    description: str
+    source: LineItemSource
+    department: BillingDepartment
+    qty: int
+    unit_price: float
+    tax_pct: float
+    invoices: list[dict]
+
+
+class SuggestedLinesOut(ApiModel):
+    lines: list[SuggestedLineOut]
+    already_billed: list[AlreadyBilledLineOut]
+
+
 # --- the tariff (§3.12) ------------------------------------------------------
 
 
