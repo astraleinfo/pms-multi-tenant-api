@@ -212,7 +212,7 @@ async def test_compose_invoice_does_not_resuggest_a_pharmacy_settled_item(northg
     before = (
         await northgate.get("/v1/billing/invoices/suggestions", params={"encounter_id": encounter_id})
     ).json()
-    assert any(l["source"] == "pharmacy" for l in before["lines"])
+    assert any(line["source"] == "pharmacy" for line in before["lines"])
     assert before["already_billed"] == []
 
     # The pharmacy counter bills and takes payment for it, the way the
@@ -233,7 +233,7 @@ async def test_compose_invoice_does_not_resuggest_a_pharmacy_settled_item(northg
     after = (
         await northgate.get("/v1/billing/invoices/suggestions", params={"encounter_id": encounter_id})
     ).json()
-    assert not any(l["source"] == "pharmacy" for l in after["lines"])
+    assert not any(line["source"] == "pharmacy" for line in after["lines"])
     assert len(after["already_billed"]) == 1
     billed = after["already_billed"][0]
     assert billed["qty"] == 6
@@ -248,7 +248,7 @@ async def test_compose_invoice_does_not_resuggest_a_pharmacy_settled_item(northg
         await northgate.get("/v1/billing/invoices/suggestions", params={"encounter_id": encounter_id})
     ).json()
     assert reopened["already_billed"] == []
-    pharmacy_line = next(l for l in reopened["lines"] if l["source"] == "pharmacy")
+    pharmacy_line = next(line for line in reopened["lines"] if line["source"] == "pharmacy")
     assert pharmacy_line["qty"] == 6
 
 
