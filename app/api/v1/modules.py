@@ -329,6 +329,9 @@ async def create_item(
         mrp=payload.mrp,
         margin_pct=payload.margin_pct,
         pricing_mode=payload.pricing_mode,
+        manufacturer=payload.manufacturer,
+        description=payload.description,
+        hsn_code=payload.hsn_code,
     )
     await audit.record(
         ctx.session, action="inventory.item.create", tenant_id=ctx.tenant_id,

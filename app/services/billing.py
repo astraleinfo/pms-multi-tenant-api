@@ -337,6 +337,7 @@ async def billed_ref_lines(
             InvoiceLineItem.ref_id.in_(ref_ids),
             Invoice.status != InvoiceStatus.VOID,
         )
+        .order_by(Invoice.issued_at, Invoice.number)
     )
     out: dict[uuid.UUID, list[dict]] = {}
     for line, invoice in rows.all():

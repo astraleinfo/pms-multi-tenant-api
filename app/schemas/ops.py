@@ -78,6 +78,9 @@ class InventoryItemIn(InputModel):
     mrp: float = Field(default=0, ge=0, le=1_000_000)
     margin_pct: float = Field(default=0, ge=-100, le=1000)
     pricing_mode: PricingMode = PricingMode.PRICE
+    manufacturer: str = Field(default="", max_length=160)
+    description: str = Field(default="", max_length=2000)
+    hsn_code: str = Field(default="", max_length=20)
 
 
 class InventoryItemPatch(InputModel):
@@ -96,6 +99,9 @@ class InventoryItemPatch(InputModel):
     mrp: float | None = Field(default=None, ge=0, le=1_000_000)
     margin_pct: float | None = Field(default=None, ge=-100, le=1000)
     pricing_mode: PricingMode | None = None
+    manufacturer: str | None = Field(default=None, max_length=160)
+    description: str | None = Field(default=None, max_length=2000)
+    hsn_code: str | None = Field(default=None, max_length=20)
 
 
 class InventoryBatchOut(ApiModel):

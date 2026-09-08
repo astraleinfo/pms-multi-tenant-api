@@ -492,6 +492,69 @@ async def test_a_stock_line_can_be_opened_and_starts_at_nothing(northgate):
     assert ours["on_hand"] == 0
 
 
+async def test_a_stock_line_records_manufacturer_description_and_hsn_code(northgate):
+    """The companion frontend sends these on every create and edit — a 422
+    here means every save from that form breaks."""
+    created = await northgate.post(
+        "/v1/inventory/items",
+        json={
+            "sku": "DETAIL-1",
+            "name": "Line with full detail",
+            "category": "medicine",
+            "manufacturer": "Cipla Ltd",
+            "description": "Blister pack of 10, store below 25C",
+            "hsn_code": "30049099",
+        },
+    )
+    assert created.status_code == 201, created.text
+    item = created.json()
+    assert item["manufacturer"] == "Cipla Ltd"
+    assert item["description"] == "Blister pack of 10, store below 25C"
+    assert item["hsn_code"] == "30049099"
+
+    listed = next(
+        row for row in (await northgate.get("/v1/inventory/items")).json() if row["id"] == item["id"]
+    )
+    assert listed["manufacturer"] == "Cipla Ltd"
+    assert listed["description"] == "Blister pack of 10, store below 25C"
+    assert listed["hsn_code"] == "30049099"
+
+    edited = (
+        await northgate.patch(
+            f"/v1/inventory/items/{item['id']}",
+            json={
+                "manufacturer": "Sun Pharma",
+                "description": "Repacked, store below 30C",
+                "hsn_code": "30049011",
+            },
+        )
+    ).json()
+    assert edited["manufacturer"] == "Sun Pharma"
+    assert edited["description"] == "Repacked, store below 30C"
+    assert edited["hsn_code"] == "30049011"
+
+    refetched = next(
+        row for row in (await northgate.get("/v1/inventory/items")).json() if row["id"] == item["id"]
+    )
+    assert refetched["manufacturer"] == "Sun Pharma"
+    assert refetched["description"] == "Repacked, store below 30C"
+    assert refetched["hsn_code"] == "30049011"
+
+
+async def test_a_stock_line_defaults_these_detail_fields_to_blank(northgate):
+    """A create that doesn't send them at all — the common case before every
+    caller is updated — must not fail, and should read back as empty."""
+    created = await northgate.post(
+        "/v1/inventory/items",
+        json={"sku": "DETAIL-2", "name": "No detail supplied", "category": "consumable"},
+    )
+    assert created.status_code == 201, created.text
+    item = created.json()
+    assert item["manufacturer"] == ""
+    assert item["description"] == ""
+    assert item["hsn_code"] == ""
+
+
 async def test_two_stock_lines_cannot_share_a_code(northgate):
     body = {"sku": "DUP-SKU", "name": "First", "category": "consumable"}
     assert (await northgate.post("/v1/inventory/items", json=body)).status_code == 201
