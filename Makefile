@@ -1,4 +1,4 @@
-.PHONY: help install db up down migrate seed run test lint fmt reset check
+.PHONY: help install db up down migrate seed run worker billing test lint fmt reset check
 
 VENV := .venv
 PY   := $(VENV)/bin/python
@@ -23,6 +23,12 @@ seed:  ## load the demo clinics
 
 run:  ## serve on http://localhost:8000
 	$(VENV)/bin/uvicorn app.main:app --reload --port 8000
+
+worker:  ## run the patient-messaging outbox worker
+	$(PY) scripts/worker.py
+
+billing:  ## run the platform billing worker (renewals, invoices, webhooks)
+	$(PY) scripts/billing_worker.py
 
 test:  ## run the suite against the test database
 	$(PY) -m pytest -q

@@ -18,6 +18,7 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
@@ -88,10 +89,36 @@ class Tenant(Base, TimestampMixin):
 
 
 class TenantFeature(Base, TenantScoped, TimestampMixin):
-    """§3.2 — entitlement. Never consulted to decide clinical behaviour."""
+    """§3.2 — entitlement. Never consulted to decide clinical behaviour.
+
+    This row is also the add-on billing record, and deliberately so: "is the
+    lab switched on" and "is the lab being paid for" have to be one answer, or
+    a clinic ends up using a module it is not billed for (or billed for one it
+    cannot reach). The three columns below are what platform billing adds, and
+    nothing clinical reads them:
+
+    *   `charged_through` — the exclusive date this add-on is paid up to. The
+        invoice generator will not bill a period that ends on or before it, so
+        running the job twice cannot charge twice.
+    *   `cancel_at` — a cancellation the clinic has asked for, taking effect at
+        the end of the cycle they have already paid for. The feature stays
+        `active` until that day: requirement 7 is that access continues, with
+        no refund and no charge next cycle.
+    *   `deactivated_at` — when it actually went off, for the metrics.
+
+    Clearing `cancel_at` before the cycle ends is the whole of requirement 8:
+    the feature never stopped, so nothing is charged again.
+    """
 
     __tablename__ = "tenant_features"
-    __extra_table_args__ = (UniqueConstraint("tenant_id", "feature_key", name="uq_tenant_feature"),)
+    __extra_table_args__ = (
+        UniqueConstraint("tenant_id", "feature_key", name="uq_tenant_feature"),
+        CheckConstraint(
+            "cancel_at is null or activated_at is null or cancel_at >= activated_at",
+            name="ck_tenant_feature_cancel_order",
+        ),
+        Index("ix_tenant_features_cancel_at", "cancel_at"),
+    )
 
     id: Mapped[uuid.UUID] = uuid_pk()
     feature_key: Mapped[str] = mapped_column(String(40), ForeignKey("features.key"), nullable=False)
@@ -105,6 +132,17 @@ class TenantFeature(Base, TenantScoped, TimestampMixin):
         default=TenantFeatureStatus.INACTIVE,
     )
     activated_at: Mapped[date | None] = mapped_column(Date, nullable=True)
+
+    #: Exclusive. Billing is paid up to, but not including, this day.
+    charged_through: Mapped[date | None] = mapped_column(Date, nullable=True)
+    #: The cycle end a scheduled cancellation takes effect on. Access continues
+    #: until then; nothing is refunded, and nothing is charged after.
+    cancel_at: Mapped[date | None] = mapped_column(Date, nullable=True)
+    deactivated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    @property
+    def cancellation_scheduled(self) -> bool:
+        return self.cancel_at is not None and self.status == TenantFeatureStatus.ACTIVE
 
 
 class TenantConfig(Base, TenantScoped, TimestampMixin):

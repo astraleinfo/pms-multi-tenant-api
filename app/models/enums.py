@@ -305,3 +305,177 @@ class MessageProvider(StrEnum):
 
     CONSOLE = "console"
     TWILIO = "twilio"
+
+
+# --- platform billing (subscriptions, add-ons, invoices) --------------------
+#
+# This is the platform billing a *tenant* for the product, which is a different
+# ledger from `InvoiceStatus` above — that one is a clinic billing its patients.
+# The two never share a table, an enum, or a service.
+
+
+class PlanInterval(StrEnum):
+    """How often a plan bills. Monthly is the only cycle the product sells
+    today; the column exists so adding a yearly plan is data, not a migration
+    of every invoice that already quotes one."""
+
+    MONTHLY = "monthly"
+    YEARLY = "yearly"
+
+
+class SubscriptionStatus(StrEnum):
+    """The lifecycle of a tenant's subscription.
+
+    `pending` is a subscription created but not yet paid for — the gateway has
+    an authorisation to collect and has not collected. `past_due` is a renewal
+    whose invoice went unpaid; the clinic keeps working through the grace
+    period, and suspension is a separate, deliberate act by the platform.
+    """
+
+    PENDING = "pending"
+    TRIALING = "trialing"
+    ACTIVE = "active"
+    PAST_DUE = "past_due"
+    PAUSED = "paused"
+    CANCELLED = "cancelled"
+    EXPIRED = "expired"
+
+
+class BillingCycleStatus(StrEnum):
+    """A cycle is `open` while it is the one being lived in, `closed` once its
+    invoice has been generated, and `superseded` when a plan change ended it
+    early."""
+
+    OPEN = "open"
+    CLOSED = "closed"
+    SUPERSEDED = "superseded"
+
+
+class SubscriptionInvoiceStatus(StrEnum):
+    DRAFT = "draft"
+    ISSUED = "issued"
+    PARTIALLY_PAID = "partially_paid"
+    PAID = "paid"
+    VOID = "void"
+    UNCOLLECTIBLE = "uncollectible"
+
+
+class InvoiceItemKind(StrEnum):
+    """What a line on a subscription invoice is.
+
+    The order here is the order the requirement states the sum in: base plan,
+    add-ons, proration, then discounts and credits, then tax. `position` on the
+    row is what actually orders them; this is what each one means.
+    """
+
+    BASE_PLAN = "base_plan"
+    ADDON = "addon"
+    PRORATION = "proration"
+    DISCOUNT = "discount"
+    CREDIT = "credit"
+    TAX = "tax"
+
+
+class PaymentGateway(StrEnum):
+    """Adding one is a new adapter package plus a member here. The billing
+    engine never names a member of this enum in an arithmetic path."""
+
+    RAZORPAY = "razorpay"
+    MANUAL = "manual"
+
+
+class SubscriptionPaymentStatus(StrEnum):
+    """What the *gateway* says, never what a browser says.
+
+    `created` and `authorised` are money that has not arrived. Only `captured`
+    counts as paid, and only a webhook or a server-side fetch can set it.
+    """
+
+    CREATED = "created"
+    AUTHORISED = "authorised"
+    CAPTURED = "captured"
+    FAILED = "failed"
+    REFUNDED = "refunded"
+    PARTIALLY_REFUNDED = "partially_refunded"
+
+
+class RefundStatus(StrEnum):
+    PENDING = "pending"
+    PROCESSED = "processed"
+    FAILED = "failed"
+
+
+class WebhookStatus(StrEnum):
+    """Every webhook is stored before it is interpreted, so `received` is the
+    state of a delivery nobody has processed yet — including one whose
+    signature failed, which is stored as `rejected` and never processed."""
+
+    RECEIVED = "received"
+    PROCESSED = "processed"
+    IGNORED = "ignored"
+    FAILED = "failed"
+    REJECTED = "rejected"
+
+
+class TaxScope(StrEnum):
+    """Where a tax rate applies. `intra_state` and `inter_state` are what an
+    Indian deployment splits CGST/SGST from IGST on; a deployment that does not
+    care uses `any` and never sees the distinction."""
+
+    ANY = "any"
+    INTRA_STATE = "intra_state"
+    INTER_STATE = "inter_state"
+
+
+SUBSCRIPTION_TRANSITIONS: dict[SubscriptionStatus, set[SubscriptionStatus]] = {
+    SubscriptionStatus.PENDING: {
+        SubscriptionStatus.TRIALING,
+        SubscriptionStatus.ACTIVE,
+        SubscriptionStatus.CANCELLED,
+        SubscriptionStatus.EXPIRED,
+    },
+    SubscriptionStatus.TRIALING: {
+        SubscriptionStatus.ACTIVE,
+        SubscriptionStatus.PAUSED,
+        SubscriptionStatus.CANCELLED,
+        SubscriptionStatus.EXPIRED,
+    },
+    SubscriptionStatus.ACTIVE: {
+        SubscriptionStatus.PAST_DUE,
+        SubscriptionStatus.PAUSED,
+        SubscriptionStatus.CANCELLED,
+    },
+    SubscriptionStatus.PAST_DUE: {
+        SubscriptionStatus.ACTIVE,
+        SubscriptionStatus.PAUSED,
+        SubscriptionStatus.CANCELLED,
+        SubscriptionStatus.EXPIRED,
+    },
+    SubscriptionStatus.PAUSED: {SubscriptionStatus.ACTIVE, SubscriptionStatus.CANCELLED},
+    SubscriptionStatus.CANCELLED: set(),
+    SubscriptionStatus.EXPIRED: set(),
+}
+
+SUBSCRIPTION_INVOICE_TRANSITIONS: dict[SubscriptionInvoiceStatus, set[SubscriptionInvoiceStatus]] = {
+    SubscriptionInvoiceStatus.DRAFT: {
+        SubscriptionInvoiceStatus.ISSUED,
+        SubscriptionInvoiceStatus.VOID,
+    },
+    SubscriptionInvoiceStatus.ISSUED: {
+        SubscriptionInvoiceStatus.PARTIALLY_PAID,
+        SubscriptionInvoiceStatus.PAID,
+        SubscriptionInvoiceStatus.VOID,
+        SubscriptionInvoiceStatus.UNCOLLECTIBLE,
+    },
+    SubscriptionInvoiceStatus.PARTIALLY_PAID: {
+        SubscriptionInvoiceStatus.PAID,
+        SubscriptionInvoiceStatus.VOID,
+        SubscriptionInvoiceStatus.UNCOLLECTIBLE,
+    },
+    SubscriptionInvoiceStatus.PAID: {SubscriptionInvoiceStatus.VOID},
+    SubscriptionInvoiceStatus.UNCOLLECTIBLE: {
+        SubscriptionInvoiceStatus.PAID,
+        SubscriptionInvoiceStatus.VOID,
+    },
+    SubscriptionInvoiceStatus.VOID: set(),
+}

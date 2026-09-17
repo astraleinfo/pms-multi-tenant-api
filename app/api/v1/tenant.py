@@ -58,12 +58,64 @@ async def feature_catalog(ctx: TenantContext = Depends(current_tenant)) -> list[
     return [FeatureOut.of(f) for f in rows]
 
 
+async def _billable_addon(ctx: TenantContext, feature_key: str):
+    """The billing route for this module, or `None` if there is not one.
+
+    These two endpoints predate platform billing, and once a clinic has a
+    subscription they become a second door to the same switch — one that skips
+    the money. A tenant administrator could switch the lab on here and never be
+    charged for it, which is not a nuance, it is a free lab.
+
+    So when this clinic has a live subscription and the module is one it would
+    be billed for, the call is handed to `payment/addon` and behaves exactly as
+    Settings → Billing does. Everything else keeps the old behaviour: a
+    deployment with `BILLING_ENABLED=false`, a clinic that has not subscribed,
+    and every core or plan-included module go down the original path, because
+    for them there is no money to get wrong.
+    """
+    from app.core.config import settings
+    from app.services.payment import billing_service
+
+    if not settings.billing_enabled:
+        return None
+    subscription = await billing_service.active_subscription(ctx.session, ctx.tenant_id)
+    if subscription is None:
+        return None
+    price = await billing_service.addon_price(ctx.session, subscription.plan_id, feature_key)
+    return price if price.billable else None
+
+
 @router.post("/tenant/features/{feature_key}/purchase", response_model=TenantFeatureOut)
 async def purchase_feature(
     feature_key: str,
     payload: FeaturePurchaseIn,
     ctx: TenantContext = Depends(require_permission(Permission.TENANT_FEATURE_MANAGE)),
 ) -> TenantFeatureOut:
+    """Switch a module on.
+
+    For a subscribed clinic this is the billed path — prorated over the days
+    left in the cycle, invoiced immediately, and identical to what the billing
+    screen does. `payment_reference` is kept in the audit line for the
+    unsubscribed case, where somebody settled it some other way.
+    """
+    if await _billable_addon(ctx, feature_key) is not None:
+        from app.services.payment.addon import billing_service as addon_service
+
+        result = await addon_service.activate(
+            ctx.session, ctx.tenant_id, feature_key, today=ctx.today
+        )
+        await audit.record(
+            ctx.session, action="feature.purchase", tenant_id=ctx.tenant_id, actor_kind=ctx.actor_kind,
+            actor_id=ctx.actor_id, actor_label=ctx.principal.label, entity="feature",
+            entity_id=feature_key,
+            meta={
+                "charged": result.charged,
+                "reinstated": result.reinstated,
+                "invoice": result.invoice.number if result.invoice else None,
+            },
+        )
+        return TenantFeatureOut.of(result.entitlement)
+
     row = await tenant_service.set_feature(
         ctx.session, ctx.tenant_id, feature_key, active=True, today=ctx.today
     )
@@ -80,6 +132,29 @@ async def deactivate_feature(
     feature_key: str,
     ctx: TenantContext = Depends(require_permission(Permission.TENANT_FEATURE_MANAGE)),
 ) -> TenantFeatureOut:
+    """Switch a module off.
+
+    For a subscribed clinic this *schedules* the stop for the end of the period
+    already paid for, rather than cutting it off today — the row comes back
+    still `active`, with `cancel_at` set. Switching something off the day after
+    paying a month for it, and losing both the money and the module, would be
+    the wrong answer however plainly the button was labelled.
+    """
+    if await _billable_addon(ctx, feature_key) is not None:
+        from app.services.payment.addon import billing_service as addon_service
+
+        result = await addon_service.cancel(
+            ctx.session, ctx.tenant_id, feature_key, today=ctx.today
+        )
+        cancels_on = result.entitlement.cancel_at
+        await audit.record(
+            ctx.session, action="feature.deactivate", tenant_id=ctx.tenant_id,
+            actor_kind=ctx.actor_kind, actor_id=ctx.actor_id, actor_label=ctx.principal.label,
+            entity="feature", entity_id=feature_key,
+            meta={"cancels_on": cancels_on.isoformat() if cancels_on else None},
+        )
+        return TenantFeatureOut.of(result.entitlement)
+
     row = await tenant_service.set_feature(
         ctx.session, ctx.tenant_id, feature_key, active=False, today=ctx.today
     )

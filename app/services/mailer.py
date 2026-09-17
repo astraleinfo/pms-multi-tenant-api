@@ -335,3 +335,96 @@ def password_reset(*, to: str, name: str, clinic: str, url: str, expires_in_hour
         ),
     )
     return Email(to=to, subject=f"Reset your {clinic} password", text=text, html=html)
+
+
+def subscription_invoice(
+    *,
+    to: str,
+    clinic: str,
+    number: str,
+    period: str,
+    currency: str,
+    total: str,
+    balance: str,
+    due_on: str,
+    pay_url: str,
+    lines: list[tuple[str, str]],
+) -> Email:
+    """The monthly invoice, with a Pay Now button (requirement 12).
+
+    The line items are in the message rather than only behind a link: an
+    invoice that has to be clicked to be read is an invoice that gets filed
+    unread, and the one question a practice manager actually has — "what am I
+    being charged for this month" — should be answerable from the inbox.
+
+    `pay_url` is whatever was stored on the invoice: the gateway's hosted page
+    when there is one, the clinic's own billing screen otherwise. It is built
+    from configuration, never from the `Host` of whatever triggered the send,
+    and it carries no token — the recipient still signs in.
+    """
+    safe_clinic = escape(clinic)
+    settled = balance == "0.00"
+
+    rows = "\n".join(f"    {label:<48} {amount:>14}" for label, amount in lines)
+    text = (
+        f"Invoice {number} for {clinic}\n"
+        f"Billing period: {period}\n\n"
+        f"{rows}\n\n"
+        f"    {'Total':<48} {currency} {total:>10}\n"
+        + ("" if settled else f"    {'Balance due':<48} {currency} {balance:>10}\n")
+        + (
+            "\nThis invoice is settled. Nothing further is needed.\n"
+            if settled
+            else f"\nDue by {due_on}. Pay here:\n\n    {pay_url}\n"
+        )
+    )
+
+    body_rows = "".join(
+        f"""<tr>
+  <td style="padding:7px 0;font-family:{_SANS};font-size:13.5px;color:{_INK_2};
+             border-bottom:1px solid {_LINE};">{escape(label)}</td>
+  <td style="padding:7px 0;font-family:{_SANS};font-size:13.5px;color:{_INK};text-align:right;
+             white-space:nowrap;border-bottom:1px solid {_LINE};">{escape(amount)}</td>
+</tr>"""
+        for label, amount in lines
+    )
+    table = f"""
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"
+       style="margin:18px 0 0 0;border-collapse:collapse;">
+  {body_rows}
+  <tr>
+    <td style="padding:11px 0 0 0;font-family:{_SANS};font-size:14px;font-weight:700;color:{_INK};">Total</td>
+    <td style="padding:11px 0 0 0;font-family:{_SANS};font-size:14px;font-weight:700;color:{_INK};
+               text-align:right;white-space:nowrap;">{escape(currency)} {escape(total)}</td>
+  </tr>
+</table>"""
+
+    html = _shell(
+        preheader=f"Invoice {number} — {currency} {total} for {period}.",
+        heading=f"Invoice {escape(number)}",
+        body=(
+            _paragraph(
+                f"Here is the subscription invoice for "
+                f"<strong style=\"color:{_INK};\">{safe_clinic}</strong>, "
+                f"covering {escape(period)}."
+            )
+            + table
+            + (
+                _notice("This invoice is settled. Nothing further is needed.")
+                if settled
+                else (
+                    _button(pay_url, "Pay now")
+                    + _fallback_link(pay_url)
+                    + _notice(
+                        f"<strong>{escape(currency)} {escape(balance)}</strong> is due by "
+                        f"<strong>{escape(due_on)}</strong>."
+                    )
+                )
+            )
+            + _footnote(
+                "This is the platform's invoice to your practice for the software. It is not "
+                "related to anything you bill your own patients."
+            )
+        ),
+    )
+    return Email(to=to, subject=f"Invoice {number} — {clinic}", text=text, html=html)

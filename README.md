@@ -507,6 +507,38 @@ whatever its staff's roles say.
 
 ---
 
+### Platform billing
+
+```
+GET    /v1/settings/billing                             the whole billing screen, in one response
+GET    /v1/settings/billing/plans                       the base plans on offer
+POST   /v1/settings/billing/subscribe                   take a plan (plan code only — never a price)
+POST   /v1/settings/billing/plan                        change plan; credits the unused remainder
+POST   /v1/settings/billing/pause | /resume             stop and restart billing
+POST   /v1/settings/billing/cancel                      at the end of the period already paid for
+POST   /v1/settings/billing/resume-cancellation         change your mind; nothing is charged
+GET    /v1/settings/billing/account                     who to bill, where, under which tax identity
+PATCH  /v1/settings/billing/account
+POST   /v1/settings/billing/addons/{feature_key}        switch a module on (full or prorated)
+DELETE /v1/settings/billing/addons/{feature_key}        schedule it to stop at the cycle end
+GET    /v1/settings/billing/invoices                    billing history
+GET    /v1/settings/billing/invoices/{id}
+GET    /v1/settings/billing/invoices/{id}/download      the PDF, from the stored line items
+POST   /v1/settings/billing/invoices/{id}/checkout      Pay Now — returns the public key and an order
+POST   /v1/settings/billing/invoices/{id}/verify        the claim, checked three ways server-side
+GET    /v1/settings/billing/payments
+
+GET    /v1/platform/billing/metrics                     MRR, revenue, subscriptions, add-ons — filtered
+GET    /v1/platform/billing/plans
+GET    /v1/platform/billing/tenants/{id}/invoices
+POST   /v1/platform/billing/tenants/{id}/refunds        nothing refunds automatically
+POST   /v1/platform/billing/tenants/{id}/invoices/{id}/void
+GET    /v1/platform/billing/refunds
+GET    /v1/platform/billing/webhooks                    the delivery log, refusals included
+
+POST   /v1/webhooks/{gateway}                           unauthenticated; the signature is the auth
+```
+
 ## One person's own settings
 
 `PATCH /v1/auth/me/preferences` stores interface state against the account — which guided tour
@@ -654,8 +686,8 @@ guards on that endpoint are the only guards that matter.
 make test
 ```
 
-83 tests against a real PostgreSQL with the real migrations — row-level security does not exist
-in SQLite, and it is the thing most worth testing.
+Against a real PostgreSQL with the real migrations — row-level security does not exist in
+SQLite, and it is the thing most worth testing.
 
 `tests/test_isolation.py` is the file to read first. It attacks the boundary from every angle:
 a valid token at another clinic's address, a real id from another clinic on every route, a
@@ -670,6 +702,32 @@ whole loop from registration to a paid invoice, plus the state machines and the 
 `test_schema_and_platform.py` (field resolution, clinic creation, and the checks that keep the
 isolation machinery honest), and `test_realtime.py` (the socket: refused at another clinic's
 address, one clinic's events never reaching another, and no patient data on the wire).
+
+Platform billing has eight files of its own, and they split by what can only be tested one way.
+The date-driven behaviour is tested against the services with an explicit `today` — there is no
+other way to bill the same clinic through a 28-day February, a 29-day one and a 31-day January
+without waiting a year — while the surface, the shapes and the authorisation are tested over
+HTTP:
+
+* `test_billing_proration.py` — the month arithmetic, over 28/29/30/31-day cycles, including the
+  test that fails if anybody reintroduces a `/ 30`;
+* `test_billing_addons.py` — requirements 5 to 8, one test each at minimum, plus the
+  double-charge a mid-cycle activation followed by a renewal would otherwise cause;
+* `test_billing_subscription.py` — the lifecycle, idempotent renewal, catching a clinic up one
+  real month at a time, and plan changes;
+* `test_billing_invoices.py` — that the stored totals equal the sum of the stored lines, that
+  tax follows the `tax_rates` table rather than the code, and that the immutability trigger and
+  rules actually hold when attacked through the ORM;
+* `test_billing_payments.py` — the three-step verification, with a stubbed gateway and a **real**
+  HMAC: a correctly signed ₹1 payment for a ₹2,999 invoice must be refused;
+* `test_billing_webhooks.py` — signatures, storage, redelivery, and a refused signature being
+  kept and audited;
+* `test_billing_metrics.py`, `test_billing_jobs.py` — the figures, and the jobs run twice;
+* `test_billing_architecture.py` — the gateway-independence rule, enforced rather than reviewed.
+
+These tests never touch the seeded demo clinics: each creates its own, because the rest of the
+suite asserts on Northgate's entitlements and Rowan's, and a billing test that subscribed one of
+them to a plan bundling the lab would break tests in three other files.
 
 ---
 
@@ -690,11 +748,25 @@ app/
     base.py            Base, TimestampMixin, TenantScoped
     session.py         engine, one transaction per request, app.tenant_id
     guard.py           the ORM isolation listeners
-  models/              tables — clinical, identity, ops, tenancy, enums
+  models/              tables — clinical, identity, ops, tenancy, billing, enums
   schemas/             request and response contracts
   services/            the decisions: auth, tenants, patients, scheduling,
                        encounters, pharmacy, lab, inventory, billing, history,
                        analytics, platform, audit
+    payment/           platform billing — what a clinic pays *us*
+      gateway.py       the seam: what a payment gateway is, without naming one
+      money.py         Decimal rounding, and calendars that count real days
+      billing_service.py       plans, add-on prices, cycles, the billing screen
+      subscription_service.py  create, pause, resume, cancel, renew, change plan
+      payment_service.py       orders, server-side verification, refunds
+      invoice/         building the monthly invoice, once
+      proration/       charging for part of a cycle, over its real length
+      addon/           switching modules on and off, and what that costs
+      tax/             tax as configuration — no jurisdiction is in the code
+      webhook/         receiving and processing callbacks, exactly once each
+      metrics/         the console's billing figures
+      razorpay/        the only code that knows what Razorpay is
+  jobs/                the six billing jobs, and the worker loop
   api/
     deps.py            the §4 middleware stack as dependencies
     v1/                routers
@@ -702,10 +774,134 @@ app/
 alembic/versions/
   0001_initial_schema.py
   0002_row_level_security.py    policies, grants, and the audit-log rules
+  0009_platform_billing.py      subscriptions, invoices, payments, webhooks
 scripts/
   bootstrap_db.sql     the two roles, and why they are two
   seed.py
+  worker.py            the patient-messaging outbox
+  billing_worker.py    the billing jobs, on a loop or one by name
 ```
+
+---
+
+## Platform billing (Settings → Billing)
+
+Two ledgers live in this codebase and they never touch. `app/services/billing.py` is a **clinic
+billing its patients** — a consultation, a scan, some medicine, settled at the counter.
+`app/services/payment/` is **the platform billing a clinic** for the software. Different money,
+different people, different tables: the subscription ledger's tables carry a `subscription_`
+prefix because `invoices` and `payments` were already taken by the other one.
+
+### The shape
+
+Every clinic has one mandatory monthly **base plan** (`plans`), and modules are monthly
+**add-ons** priced by `plan_features` with a fallback to `features.price_monthly` — so the common
+case needs no row at all and a plan that bundles or discounts a module needs exactly one.
+Entitlement is still `tenant_features`, the same row the feature guard reads: "can this clinic use
+the lab" and "is this clinic paying for the lab" have to be one answer, so that row gained three
+billing columns rather than a second table growing up beside it.
+
+A **billing cycle** is half-open, `[period_start, period_end)`, and `period_end` is the first day
+of the next one. That is what makes proration honest — `period_end - period_start` is 28, 29, 30
+or 31, and nothing in the package divides by 30.
+
+### What the money does
+
+| Situation | What happens |
+| --- | --- |
+| Add-on switched on, first day of the cycle | Full monthly charge — and not as a special case: proration from `period_start` *is* the whole month |
+| Add-on switched on mid-cycle | Prorated over the days the cycle actually has, invoiced immediately |
+| Add-on cancelled | Stays usable to the end of the period already paid for. No refund, no credit, nothing on the next invoice |
+| Add-on switched back on before that | The scheduled cancellation is dropped. **Nothing is charged** — it never stopped |
+| Plan changed mid-cycle | The old cycle ends today and its unused remainder becomes a credit line on the new cycle's invoice |
+| Invoice unpaid past its grace period | The subscription is flagged `past_due`. Nothing is switched off — suspension is a person's decision, not a cron job's |
+
+An invoice is `Base plan + Add-ons + Proration − Discounts/Credits + Taxes`, and it is **immutable
+once issued**: a trigger refuses any change to its number, currency, period or money columns, and
+`subscription_invoice_items` has `DO INSTEAD NOTHING` rules against UPDATE and DELETE — the same
+treatment `audit_events` gets. A mistake is corrected by voiding and re-raising, never by editing.
+
+Tax is rows in `tax_rates`, not code. Two 9% `intra_state` rows produce two tax lines; one 18%
+`inter_state` row produces one; no rows produce a zero tax total. Nothing in the package knows
+what GST is.
+
+### Gateway independence
+
+`app/services/payment/gateway.py` defines what a payment gateway *is* — protocols and DTOs,
+amounts as `Decimal`, two failure shapes (`GatewayUnavailable` retries, `GatewayRefused` does
+not). Everything that decides money imports that and nothing else; everything that talks HTTP
+lives in `payment/razorpay/` and decides nothing. Adding Cashfree or Stripe is a new package
+beside `razorpay/` and one line in `_ADAPTERS`.
+
+`tests/test_billing_architecture.py` enforces it rather than trusting review: it parses the core
+modules for gateway imports and gateway-named attributes, blocks the adapter from `sys.meta_path`
+and imports every core service anyway, and asserts `httpx` appears in exactly one file under
+`payment/`.
+
+The PMS is the source of truth throughout. A gateway is told what happened and asked to collect;
+it is never asked what a clinic owes. A `subscription.cancelled` webhook is recorded in
+`gateway_status` and **not obeyed** — a gateway that thinks a subscription is halted does not get
+to stop a clinic whose invoices this system knows are paid.
+
+### Never trusting the browser
+
+What Checkout hands back is a claim, and it is checked three ways, all server-side:
+
+1. the signature, against the key secret — proving the fields were not edited in the browser;
+2. a re-fetch of the payment from the gateway — proving it exists and was captured;
+3. the amount and currency against the invoice *this* system raised.
+
+A correctly signed ₹1 payment for a ₹2,999 invoice fails at step three, which is what step three
+is for. No request body anywhere carries an amount: `SubscribeIn` takes a plan code,
+`PaymentVerifyIn` takes three opaque ids, and `InputModel` rejects unknown keys — so a client
+cannot smuggle a price into a call that decides money.
+
+Webhooks are stored before they are believed, including the ones whose signature fails: those are
+kept as `rejected`, never processed, and written to the audit trail. Redelivery is a no-op because
+of `uq_webhook_event_id`, not because anything counted, and the endpoint answers `200 received`
+either way — telling an unauthenticated caller that their forgery was detected helps them iterate.
+
+### Duplicates
+
+Five indexes, not five checks in Python. Every job is idempotent because of these:
+
+| Index | What it prevents |
+| --- | --- |
+| `uq_subscriptions_one_live_per_tenant` | Two subscriptions for one clinic |
+| `uq_billing_cycle_period` | The same period opened twice |
+| `uq_subscription_invoice_per_cycle` (partial, `status <> 'void'`) | A cycle invoiced twice |
+| `uq_subscription_payment_gateway_id` | One gateway payment booked twice — or to two clinics |
+| `uq_webhook_event_id` | One delivery processed twice |
+
+Invoice numbers come from a PostgreSQL sequence rather than a locked row, so two renewal runs get
+two numbers without waiting for each other and no number is ever reused.
+
+### Jobs
+
+`make billing` runs the loop; `python scripts/billing_worker.py <JobName>` runs one by hand.
+
+```
+GenerateMonthlyInvoicesJob      backstop: raise any cycle's missing invoice
+ProcessBillingJob               apply cancellations, flag past-due, clear it again
+ProcessSubscriptionRenewalsJob  close the cycle, apply what was scheduled, open the next
+SendInvoiceEmailJob             email each new invoice with a Pay Now link
+ProcessRazorpayWebhookJob       work through the stored deliveries
+SyncRazorpaySubscriptionJob     reconcile with the gateway, without obeying it
+```
+
+Each visits one clinic at a time, in its own transaction, with `app.tenant_id` bound — so a cron
+job goes through row-level security exactly as a request does, and one clinic's failure is one
+clinic's failure rather than a month of missing invoices. "Today" is the clinic's own date in the
+clinic's own timezone: a clinic in Kolkata and one in London do not renew at the same instant.
+
+### Authorisation
+
+`SUBSCRIPTION_READ` and `SUBSCRIPTION_MANAGE` belong to the tenant administrator alone — the
+narrowest permissions in the table. Every clinical role can take a *patient's* money; only the
+person who runs the practice can change what the practice itself pays for. The console's metrics
+are on `admin.<apex>` behind `current_platform_user`, and they are gathered one clinic at a time
+with that clinic bound: there is no `BYPASSRLS` role in this application and the console does not
+get one either.
 
 ---
 

@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import hash_password
 from app.db.session import set_tenant
+from app.models.billing import Plan, PlanFeature, TaxRate
 from app.models.clinical import (
     Appointment,
     Encounter,
@@ -118,6 +119,9 @@ async def wipe(session: AsyncSession) -> None:
     """
     tables = ", ".join(
         [
+            "webhook_events", "subscription_refunds", "subscription_payments",
+            "subscription_invoice_items", "subscription_invoices", "billing_cycles",
+            "subscriptions", "billing_accounts", "plan_features", "plans", "tax_rates",
             "audit_events", "login_attempts", "refresh_tokens", "payments", "invoice_line_items",
             "invoices", "service_prices", "inventory_transactions", "inventory_batches",
             "prescription_items", "prescriptions", "lab_attachments", "lab_orders", "encounters",
@@ -128,6 +132,97 @@ async def wipe(session: AsyncSession) -> None:
         ]
     )
     await session.execute(text(f"TRUNCATE TABLE {tables} RESTART IDENTITY CASCADE"))
+
+
+#: The base plans this deployment sells, and the tax it charges. Seeded rather
+#: than migrated, because they are data a deployment owns: a different market
+#: writes different rows and changes no code. Prices are in the deployment's
+#: billing currency, and add-on prices are *not* here — they fall back to
+#: `features.price_monthly`, so a plan needs a `plan_features` row only where it
+#: bundles or discounts a module.
+BILLING_PLANS = [
+    {
+        "code": "starter",
+        "name": "Starter",
+        "description": "One clinician, the core record, and nothing to switch on.",
+        "amount": 2999,
+        "sort_order": 10,
+        "trial_days": 14,
+        "included": [],
+    },
+    {
+        "code": "practice",
+        "name": "Practice",
+        "description": "A working practice: the core record with billing included.",
+        "amount": 4999,
+        "sort_order": 20,
+        "trial_days": 14,
+        "included": ["billing"],
+    },
+    {
+        "code": "clinic",
+        "name": "Clinic",
+        "description": "Everything a multi-room clinic runs on, with lab and billing bundled.",
+        "amount": 8999,
+        "sort_order": 30,
+        "trial_days": 0,
+        "included": ["billing", "lab"],
+    },
+]
+
+#: 18% GST, as two nine-percent components — which is what an intra-state
+#: Indian supply is actually charged, and what proves the tax engine is not
+#: hard-coded to one line. A deployment billing from elsewhere replaces these
+#: rows and touches nothing else.
+BILLING_TAX_RATES = [
+    {"code": "CGST", "name": "CGST", "percent": 9, "scope": "intra_state", "country": "IN"},
+    {"code": "SGST", "name": "SGST", "percent": 9, "scope": "intra_state", "country": "IN"},
+    {"code": "IGST", "name": "IGST", "percent": 18, "scope": "inter_state", "country": "IN"},
+]
+
+
+def seed_billing_catalogue(session: AsyncSession) -> None:
+    """The plans a clinic can choose from, and the tax they are charged.
+
+    Deliberately in the seeder rather than in a migration: a migration changes
+    the shape of the database and must mean the same thing everywhere, while
+    what a deployment charges is its own business.
+    """
+    for row in BILLING_PLANS:
+        plan = Plan(
+            id=rid("plan", row["code"]),
+            code=row["code"],
+            name=row["name"],
+            description=row["description"],
+            amount=row["amount"],
+            trial_days=row["trial_days"],
+            sort_order=row["sort_order"],
+        )
+        session.add(plan)
+        for feature_key in row["included"]:
+            session.add(
+                PlanFeature(
+                    id=rid("plan_feature", f"{row['code']}:{feature_key}"),
+                    plan_id=plan.id,
+                    feature_key=feature_key,
+                    included=True,
+                )
+            )
+
+    for row in BILLING_TAX_RATES:
+        session.add(
+            TaxRate(
+                id=rid("tax_rate", row["code"]),
+                code=row["code"],
+                name=row["name"],
+                percent=row["percent"],
+                scope=row["scope"],
+                country=row["country"],
+                # Backdated well before any invoice this deployment can raise,
+                # so a demo invoice is never taxed at nothing by accident.
+                effective_from=date(2020, 1, 1),
+            )
+        )
 
 
 async def seed_platform_tables(session: AsyncSession, data: dict) -> None:
@@ -155,6 +250,8 @@ async def seed_platform_tables(session: AsyncSession, data: dict) -> None:
                 unlocks=row["unlocks"],
             )
         )
+
+    seed_billing_catalogue(session)
 
     for row in data["CAT_LAB_CATALOG"]:
         session.add(

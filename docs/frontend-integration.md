@@ -206,7 +206,112 @@ Small, and all of it in the same direction — the server is now the authority:
 * **The clinic switcher lost its list.** Signed in at one address you cannot enumerate the
   others; the API would not answer if asked. The console link stays.
 
-## 7. Reference
+## 7. Settings → Billing
+
+The billing screen is one GET. `GET /v1/settings/billing` returns the plan, every module with its
+price and state, the next billing date, any scheduled cancellations, and what is outstanding — so
+the screen does not need to assemble itself from four requests and cannot show a half-consistent
+picture while they land.
+
+```ts
+const billing = await api<BillingSummary>("/v1/settings/billing");
+
+billing.subscription            // null until the clinic takes a plan
+billing.subscription?.plan      // { code, name, amount, currency, interval }
+billing.subscription?.current_period_days   // 28 | 29 | 30 | 31
+billing.next_billing_on         // null while paused or cancelling
+billing.recurring_subtotal      // what the next invoice comes to, before tax
+billing.outstanding_total       // and what is owed right now
+billing.addons                  // every module, priced and stated
+```
+
+### Rendering an add-on row
+
+Four fields decide what the row says, and the combination that trips people up is the third:
+
+| State | Fields | What to show |
+| --- | --- | --- |
+| Covered by the plan | `included: true`, `monthly_amount: null` | "Included" — not "Free", and no price |
+| Off | `active: false` | the price, and a button to switch it on |
+| On | `active: true`, `cancels_on: null` | the price, and a button to cancel |
+| **Cancelling** | `active: true`, `cancels_on: "2026-03-01"` | "Active until 1 March" and a button to **keep** it |
+
+That last row is the one to get right: the module is still on, still usable and still paid for.
+Showing it as "cancelled" would be wrong, and offering "activate" rather than "keep" would imply a
+charge that is not going to happen.
+
+### Switching a module on and off
+
+```ts
+const result = await api<AddonAction>(`/v1/settings/billing/addons/${key}`, { method: "POST" });
+```
+
+The response says what actually happened, so the toast can be specific rather than vague:
+
+* `charged: true` — `amount`, `prorated_days` and `cycle_days` are set, and `invoice` is the
+  one-off invoice raised for it. "₹1,096.23 for 17 of 31 days" is a better message than "Done".
+* `charged: false, reinstated: true` — a scheduled cancellation was dropped. **Nothing was
+  charged.** Say so; a practice manager who has just clicked a button on a billing screen wants
+  to know whether it cost anything.
+* `charged: false, reinstated: false` — the module is covered by the plan.
+
+`DELETE` on the same path schedules the cancellation and returns `cancels_on`. It never charges
+and never refunds.
+
+### Pay Now
+
+Never construct an amount in the browser. `POST .../invoices/{id}/checkout` returns the gateway's
+**public** key id and an order id, priced from the invoice server-side:
+
+```ts
+const checkout = await api<Checkout>(`/v1/settings/billing/invoices/${id}/checkout`, {
+  method: "POST",
+});
+
+const rzp = new Razorpay({
+  key: checkout.key_id,          // public by design; the secret never leaves the server
+  order_id: checkout.order_id,
+  amount: checkout.amount * 100, // display only — the server already priced the order
+  currency: checkout.currency,
+  name: checkout.customer_name,
+  handler: async (response) => {
+    // A claim, not a fact. The server verifies the signature, re-fetches the
+    // payment from the gateway and compares the amount before anything is paid.
+    await api(`/v1/settings/billing/invoices/${id}/verify`, {
+      method: "POST",
+      body: JSON.stringify({
+        order_id: response.razorpay_order_id,
+        payment_id: response.razorpay_payment_id,
+        signature: response.razorpay_signature,
+      }),
+    });
+  },
+});
+```
+
+Two things follow from that, and both matter for the UI:
+
+* **the handler firing is not proof of payment.** Re-read the invoice after `verify` returns and
+  render *its* status. A `409` from `verify` means the gateway's own record did not match what
+  this server asked for, and the invoice is still owing.
+* **the webhook may get there first.** If the tab is closed mid-payment, the invoice still turns
+  paid — both paths end at the same idempotent write. So the billing screen should be refetched
+  on focus rather than assumed stale-free.
+
+`GET .../invoices/{id}/download` returns a PDF built from the stored line items, which is why an
+invoice downloaded a year from now says what it said the day it was raised.
+
+### Errors worth handling by code
+
+`409 conflict` covers the states a person can reach by clicking: *already active*, *not active*,
+*part of the base plan and cannot be cancelled on its own*, *already settled*, *online payment is
+not configured*. The `message` is written to be shown, so a toast can print it directly.
+
+`403 forbidden` on any of these means the signed-in user is not a tenant administrator —
+`SUBSCRIPTION_READ` and `SUBSCRIPTION_MANAGE` belong to that role alone. Hide the Billing item in
+Settings for everyone else; the server refuses it regardless of what the nav shows.
+
+## 8. Reference
 
 `GET /docs` when the API is not in production mode — the full OpenAPI document, every request
 and response model, with the demo data behind it.

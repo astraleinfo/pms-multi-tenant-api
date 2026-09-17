@@ -9,6 +9,11 @@ can bill and settle, because in this product the counter takes the money. The
 pharmacist asks for it as the medicine is handed over, the lab tech as the
 report is collected, the clinician for the consultation. Which counter is being
 settled is chosen on the screen, and the ledger keeps the three apart.
+
+The clinic's *own* subscription is the exception, and the narrowest thing in
+this table: `SUBSCRIPTION_READ` and `SUBSCRIPTION_MANAGE` belong to the tenant
+administrator alone. Everyone else can take a patient's money; only the person
+who runs the practice can change what the practice itself pays for.
 """
 
 from __future__ import annotations
@@ -58,6 +63,13 @@ class Permission(str, Enum):
     BILLING_WRITE = "billing:write"
 
     ANALYTICS_READ = "analytics:read"
+
+    # What the clinic pays the platform. Separate from `BILLING_*`, which is
+    # what the clinic charges its patients — the two ledgers are different
+    # money and different people, and a receptionist who settles a patient's
+    # bill has no business changing the clinic's own subscription.
+    SUBSCRIPTION_READ = "subscription:read"
+    SUBSCRIPTION_MANAGE = "subscription:manage"
 
     # Patient messaging. Reading history and sending are separate so a role can
     # see what went out without being able to send anything new.

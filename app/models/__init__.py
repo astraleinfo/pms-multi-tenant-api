@@ -1,5 +1,18 @@
 """Import every model so `Base.metadata` is complete for Alembic and the guard."""
 
+from app.models.billing import (  # noqa: F401
+    BillingAccount,
+    BillingCycle,
+    Plan,
+    PlanFeature,
+    Subscription,
+    SubscriptionInvoice,
+    SubscriptionInvoiceItem,
+    SubscriptionPayment,
+    SubscriptionRefund,
+    TaxRate,
+    WebhookEvent,
+)
 from app.models.clinical import (  # noqa: F401
     Appointment,
     Encounter,
@@ -40,11 +53,13 @@ from app.models.tenancy import (  # noqa: F401
 )
 
 __all__ = [
-    "Appointment", "AuditEvent", "AuthToken", "ClinicalType", "Encounter", "Feature", "FieldDefinition",
+    "Appointment", "AuditEvent", "AuthToken", "BillingAccount", "BillingCycle", "ClinicalType",
+    "Encounter", "Feature", "FieldDefinition",
     "InventoryBatch", "InventoryItem", "InventoryTransaction", "Invoice", "InvoiceLineItem",
     "LabAttachment", "LabOrder", "LabTest", "LoginAttempt", "MedicineSuggestion", "Message",
-    "MessagingConfig", "Patient", "Payment",
+    "MessagingConfig", "Patient", "Payment", "Plan", "PlanFeature",
     "PlatformUser", "Prescription", "PrescriptionItem", "QueueEntry", "RefreshToken",
-    "ServicePrice", "Tenant",
-    "TenantConfig", "TenantFeature", "User",
+    "ServicePrice", "Subscription", "SubscriptionInvoice", "SubscriptionInvoiceItem",
+    "SubscriptionPayment", "SubscriptionRefund", "TaxRate", "Tenant",
+    "TenantConfig", "TenantFeature", "User", "WebhookEvent",
 ]

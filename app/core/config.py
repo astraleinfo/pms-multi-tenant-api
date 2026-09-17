@@ -97,6 +97,58 @@ class Settings(BaseSettings):
     # without invalidating sessions.
     secrets_key: str = ""
 
+    # --------------------------------------------------- platform billing
+    # What a clinic pays *us*. Nothing here is a price: every amount the
+    # product charges lives in the `plans`, `plan_features` and `tax_rates`
+    # tables, and a deployment that wants different prices writes rows, not
+    # settings. These are the knobs around the money, not the money.
+    billing_enabled: bool = True
+    #: The gateway new subscriptions are created against. Adding Cashfree or
+    #: Stripe is a new adapter package plus a value here — the billing engine
+    #: never reads it.
+    billing_gateway: Literal["razorpay", "manual"] = "razorpay"
+    #: Printed on the invoice, in front of the platform-wide sequence.
+    billing_invoice_prefix: str = "AST"
+    #: How long a clinic has to pay before an invoice is chased.
+    billing_payment_terms_days: int = 7
+    #: How long past due before the subscription moves to `past_due`. Suspension
+    #: is a separate, deliberate act by the platform, never an automatic one —
+    #: cutting a clinic off from its own patient records is not a billing
+    #: decision.
+    billing_grace_days: int = 7
+    #: The state or region the platform itself bills from. Only consulted when
+    #: the `tax_rates` table draws an intra-state/inter-state distinction; a
+    #: deployment whose rates are all `any` never reads it.
+    billing_supplier_region: str = ""
+    #: Where the "Pay Now" button in the invoice email points when the gateway
+    #: has not minted a hosted page. Always a path on the clinic's own origin.
+    billing_portal_path: str = "/settings/billing"
+    #: How often the billing worker sweeps for due cycles, unsent emails and
+    #: unprocessed webhooks.
+    billing_poll_seconds: int = 60
+    #: A webhook that keeps failing is parked after this many attempts and
+    #: waits for someone to look at it.
+    webhook_max_attempts: int = 8
+    webhook_retry_base_seconds: int = 30
+
+    # ------------------------------------------------------------- Razorpay
+    # The secret and the webhook secret never leave this process. `key_id` is
+    # the only value that may reach a browser — it is the public half of the
+    # pair, and checkout needs it. There is no setting here that exposes
+    # anything else, on purpose.
+    razorpay_key_id: str = ""
+    razorpay_key_secret: str = ""
+    #: Razorpay signs each delivery with this. A deployment with webhooks
+    #: configured and no secret set cannot verify anything, so the handler
+    #: refuses every delivery rather than trusting it.
+    razorpay_webhook_secret: str = ""
+    razorpay_api_base: str = "https://api.razorpay.com/v1"
+    razorpay_timeout_seconds: int = 20
+
+    @property
+    def razorpay_configured(self) -> bool:
+        return bool(self.razorpay_key_id and self.razorpay_key_secret)
+
     @field_validator("app_domain")
     @classmethod
     def _strip_domain(cls, v: str) -> str:
@@ -167,6 +219,14 @@ class Settings(BaseSettings):
             problems.append("MAIL_PROVIDER must be a real transport, not 'console'")
         if self.public_scheme != "https":
             problems.append("PUBLIC_SCHEME must be https")
+        if self.billing_enabled and self.billing_gateway == "razorpay":
+            # A production deployment that bills through Razorpay but cannot
+            # authenticate to it would take orders it can never collect, and —
+            # worse — would accept unverifiable webhooks.
+            if not self.razorpay_configured:
+                problems.append("RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET must be set")
+            if not self.razorpay_webhook_secret:
+                problems.append("RAZORPAY_WEBHOOK_SECRET must be set")
         return problems
 
 

@@ -5,6 +5,7 @@ from fastapi import APIRouter
 from app.api.v1 import (
     analytics,
     auth,
+    billing,
     catalog,
     encounters,
     messaging,
@@ -36,5 +37,10 @@ api_router.include_router(messaging.router)
 api_router.include_router(analytics.router)
 api_router.include_router(realtime.router)
 api_router.include_router(platform.router)
+# Platform billing: the clinic's own subscription, the console's metrics, and
+# the gateway's unauthenticated (but signed) front door.
+api_router.include_router(billing.router)
+api_router.include_router(billing.platform_router)
+api_router.include_router(billing.webhooks_router)
 
 __all__ = ["api_router"]
