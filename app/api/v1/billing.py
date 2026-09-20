@@ -64,9 +64,13 @@ from app.schemas.billing import (
     BillingMetricsOut,
     BillingSummaryOut,
     CancelIn,
+    CartItemIn,
+    CartQuoteOut,
     CheckoutOut,
+    CheckoutResultOut,
     InvoiceOut,
     InvoicePageOut,
+    ModuleOut,
     PaymentOut,
     PaymentVerifyIn,
     PlanChangeIn,
@@ -80,8 +84,14 @@ from app.schemas.billing import (
 )
 from app.schemas.common import iso_date, money
 from app.services import audit, paging
-from app.services.payment import billing_service, payment_service, subscription_service
+from app.services.payment import (
+    billing_service,
+    catalogue_service,
+    payment_service,
+    subscription_service,
+)
 from app.services.payment.addon import billing_service as addon_service
+from app.services.payment.cart import cart_service, checkout_service, quote_service
 from app.services.payment.invoice import generation_service
 from app.services.payment.metrics import billing_metrics_service as metrics_service
 from app.services.payment.webhook import handler as webhook_handler
@@ -318,6 +328,137 @@ async def activate_addon(
         },
     )
     return _addon_action(feature_key, result, ctx.tz)
+
+
+# --- the catalogue ------------------------------------------------------------
+
+
+@router.get("/modules", response_model=list[ModuleOut])
+async def list_modules(ctx: TenantContext = Depends(_read)) -> list[ModuleOut]:
+    """Every published module, priced for this clinic's plan.
+
+    One request answers what a card has to show at once: what the module is,
+    what it costs, and whether this clinic already has it. `monthly` is null
+    when nothing is on sale at that interval, which the page is expected to
+    say rather than offer a button that cannot work.
+    """
+    cards = await catalogue_service.catalogue(ctx.session, ctx.tenant_id)
+    return [ModuleOut.of(card) for card in cards]
+
+
+@router.get("/modules/{feature_key}", response_model=ModuleOut)
+async def read_module(feature_key: str, ctx: TenantContext = Depends(_read)) -> ModuleOut:
+    """One module's page — the description, the demo and the screenshots."""
+    return ModuleOut.of(await catalogue_service.one(ctx.session, ctx.tenant_id, feature_key))
+
+
+# --- the cart -----------------------------------------------------------------
+#
+# Reads are `_read`; anything that changes what the clinic owes is `_manage`.
+# Note what no request body here carries: an amount. A cart line names a module
+# and an interval, and the server prices it — a price a browser could name is a
+# price a browser could change.
+
+
+@router.get("/cart", response_model=CartQuoteOut)
+async def read_cart(ctx: TenantContext = Depends(_read)) -> CartQuoteOut:
+    """The cart, priced. Empty until something is added.
+
+    Re-priced on every read rather than remembered, so a catalogue change
+    between adding a module and paying for it is reflected here instead of
+    being honoured silently.
+    """
+    return CartQuoteOut.of(await quote_service.quote(ctx.session, ctx.tenant_id, today=ctx.today))
+
+
+@router.post("/cart/items", response_model=CartQuoteOut, status_code=status.HTTP_201_CREATED)
+async def add_to_cart(payload: CartItemIn, ctx: TenantContext = Depends(_manage)) -> CartQuoteOut:
+    """Put a module in the cart. Adding one twice replaces the line."""
+    from app.models.enums import PlanInterval
+
+    await cart_service.add(
+        ctx.session,
+        ctx.tenant_id,
+        payload.feature_key,
+        interval=PlanInterval(payload.interval),
+        today=ctx.today,
+    )
+    return CartQuoteOut.of(await quote_service.quote(ctx.session, ctx.tenant_id, today=ctx.today))
+
+
+@router.delete("/cart/items/{feature_key}", response_model=CartQuoteOut)
+async def remove_from_cart(
+    feature_key: str, ctx: TenantContext = Depends(_manage)
+) -> CartQuoteOut:
+    """Take a module out. Removing one that is not in is not an error."""
+    await cart_service.remove(ctx.session, ctx.tenant_id, feature_key)
+    return CartQuoteOut.of(await quote_service.quote(ctx.session, ctx.tenant_id, today=ctx.today))
+
+
+@router.delete("/cart", response_model=CartQuoteOut)
+async def empty_cart(ctx: TenantContext = Depends(_manage)) -> CartQuoteOut:
+    await cart_service.clear(ctx.session, ctx.tenant_id)
+    return CartQuoteOut.of(await quote_service.quote(ctx.session, ctx.tenant_id, today=ctx.today))
+
+
+@router.post("/cart/checkout", response_model=CheckoutResultOut)
+async def checkout_cart(
+    request: Request, ctx: TenantContext = Depends(_manage)
+) -> CheckoutResultOut:
+    """Buy everything in the cart, on one invoice and one payment.
+
+    Every module is switched on together or none is: they are all prepared
+    before any invoice exists, so a cart holding one the clinic already has
+    rolls the rest back rather than charging for them.
+
+    The invoice this returns is paid through the ordinary
+    `/invoices/{id}/checkout` and `/verify` pair — there is no second payment
+    path, and nothing here believes a payment.
+    """
+    result = await checkout_service.checkout(ctx.session, ctx.tenant_id, today=ctx.today)
+    await audit.record(
+        ctx.session, action="billing.cart_checkout", tenant_id=ctx.tenant_id,
+        actor_kind=ctx.actor_kind, actor_id=ctx.actor_id, actor_label=ctx.principal.label,
+        entity="cart", entity_id=str(result.cart.id) if result.cart else "",
+        ip=client_ip(request), user_agent=user_agent(request),
+        meta={
+            "modules": result.activated,
+            "reinstated": result.reinstated,
+            "invoice": result.invoice.number if result.invoice else None,
+        },
+    )
+    return CheckoutResultOut.of(
+        result, _invoice_out(result.invoice, ctx.tz) if result.invoice else None
+    )
+
+
+@router.post("/cart/buy-now", response_model=CheckoutResultOut)
+async def buy_now(
+    payload: CartItemIn, request: Request, ctx: TenantContext = Depends(_manage)
+) -> CheckoutResultOut:
+    """Buy one module straight from its page, leaving the cart untouched."""
+    from app.models.enums import PlanInterval
+
+    result = await checkout_service.buy_now(
+        ctx.session,
+        ctx.tenant_id,
+        payload.feature_key,
+        interval=PlanInterval(payload.interval),
+        today=ctx.today,
+    )
+    await audit.record(
+        ctx.session, action="billing.buy_now", tenant_id=ctx.tenant_id,
+        actor_kind=ctx.actor_kind, actor_id=ctx.actor_id, actor_label=ctx.principal.label,
+        entity="tenant_feature", entity_id=payload.feature_key,
+        ip=client_ip(request), user_agent=user_agent(request),
+        meta={
+            "reinstated": result.reinstated,
+            "invoice": result.invoice.number if result.invoice else None,
+        },
+    )
+    return CheckoutResultOut.of(
+        result, _invoice_out(result.invoice, ctx.tz) if result.invoice else None
+    )
 
 
 @router.delete("/addons/{feature_key}", response_model=AddonActionOut)

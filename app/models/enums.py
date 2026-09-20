@@ -427,6 +427,46 @@ class TaxScope(StrEnum):
     INTER_STATE = "inter_state"
 
 
+class ModuleListingStatus(StrEnum):
+    """Whether a module's page is sellable.
+
+    `draft` is the state a listing is born in: the module may already bill
+    perfectly well, but nothing with no description and no demo belongs on a
+    catalogue page. `retired` keeps the page readable for the clinics still on
+    the module while taking it off the shelf for everyone else.
+    """
+
+    DRAFT = "draft"
+    PUBLISHED = "published"
+    RETIRED = "retired"
+
+
+class SubscriptionItemStatus(StrEnum):
+    """One module's place on a subscription.
+
+    `pending_cancel` is the state people misread, so it is named for what it
+    is: the module is **still on**, still usable and already paid for, and it
+    switches off when the cycle it is paid through ends. It is not `cancelled`,
+    and offering to "reactivate" it would imply a charge that is not coming.
+    """
+
+    TRIALING = "trialing"
+    ACTIVE = "active"
+    PENDING_CANCEL = "pending_cancel"
+    CANCELLED = "cancelled"
+
+
+class CartStatus(StrEnum):
+    """`converted` is terminal and keeps the cart as the record of what was
+    bought in one payment; `abandoned` is what a sweep marks a cart nobody came
+    back to. Neither is deleted — a cart is the only place the intent behind a
+    multi-module invoice is written down."""
+
+    OPEN = "open"
+    CONVERTED = "converted"
+    ABANDONED = "abandoned"
+
+
 SUBSCRIPTION_TRANSITIONS: dict[SubscriptionStatus, set[SubscriptionStatus]] = {
     SubscriptionStatus.PENDING: {
         SubscriptionStatus.TRIALING,

@@ -38,7 +38,7 @@ from decimal import Decimal
 from sqlalchemy import select
 
 from app.db.session import session_factory, set_tenant, tenant_session
-from app.models.billing import Plan, Subscription, SubscriptionInvoice
+from app.models.billing import Plan, Subscription, SubscriptionInvoice, SubscriptionItem
 from app.models.enums import TenantFeatureStatus, TenantStatus
 from app.models.tenancy import Feature, Tenant, TenantConfig, TenantFeature
 from app.services.tenants import CORE_FEATURES
@@ -184,6 +184,36 @@ async def entitlement(tenant_id: uuid.UUID, feature_key: str) -> TenantFeature |
                 )
             )
         ).scalar_one_or_none()
+
+
+async def item(tenant_id: uuid.UUID, feature_key: str) -> SubscriptionItem | None:
+    """The live item for a module — the one that is not cancelled."""
+    from app.models.enums import SubscriptionItemStatus
+
+    async with tenant_session(tenant_id) as session:
+        return (
+            await session.execute(
+                select(SubscriptionItem).where(
+                    SubscriptionItem.tenant_id == tenant_id,
+                    SubscriptionItem.feature_key == feature_key,
+                    SubscriptionItem.status != SubscriptionItemStatus.CANCELLED,
+                )
+            )
+        ).scalar_one_or_none()
+
+
+async def items_of(tenant_id: uuid.UUID) -> list[SubscriptionItem]:
+    """Every item this clinic has ever had, cancelled ones included."""
+    async with tenant_session(tenant_id) as session:
+        return list(
+            (
+                await session.execute(
+                    select(SubscriptionItem)
+                    .where(SubscriptionItem.tenant_id == tenant_id)
+                    .order_by(SubscriptionItem.feature_key, SubscriptionItem.created_at)
+                )
+            ).scalars()
+        )
 
 
 def lines_of(invoice: SubscriptionInvoice, kind: str | None = None) -> list:

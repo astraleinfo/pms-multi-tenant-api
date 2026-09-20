@@ -51,6 +51,7 @@ from app.models.enums import (
 )
 from app.models.tenancy import TenantFeature
 from app.services.payment import billing_service
+from app.services.payment.addon import item_service
 from app.services.payment.money import ZERO, money, now
 from app.services.payment.proration import calculator as proration
 from app.services.payment.tax import calculator as tax_calculator
@@ -277,6 +278,9 @@ async def _addon_lines(
             )
         )
         entitlement.charged_through = cycle.period_end
+        await item_service.set_charged_through(
+            session, subscription.tenant_id, entitlement.feature_key, cycle.period_end
+        )
 
     return lines
 
@@ -486,3 +490,6 @@ async def _release_addon_charges(
         ).scalar_one_or_none()
         if row is not None and row.charged_through == invoice.period_end:
             row.charged_through = item.period_start
+            await item_service.set_charged_through(
+                session, invoice.tenant_id, item.feature_key, item.period_start
+            )

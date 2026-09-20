@@ -16,6 +16,7 @@ import json
 import uuid
 from datetime import date, datetime, timedelta
 from datetime import time as time_t
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import hash_password
 from app.db.session import set_tenant
-from app.models.billing import Plan, PlanFeature, TaxRate
+from app.models.billing import ModuleListing, ModulePrice, Plan, PlanFeature, TaxRate
 from app.models.clinical import (
     Appointment,
     Encounter,
@@ -34,6 +35,7 @@ from app.models.clinical import (
     PrescriptionItem,
     QueueEntry,
 )
+from app.models.enums import Currency, ModuleListingStatus, PlanInterval
 from app.models.identity import PlatformUser, User
 from app.models.ops import (
     InventoryBatch,
@@ -128,7 +130,7 @@ async def wipe(session: AsyncSession) -> None:
             "queue_entries", "appointments",
             "patients", "inventory_items", "tenant_configs", "tenant_features",
             "field_definitions", "users", "tenants", "platform_users", "medicine_suggestions",
-            "lab_tests", "features", "clinical_types",
+            "lab_tests", "module_prices", "module_listings", "features", "clinical_types",
         ]
     )
     await session.execute(text(f"TRUNCATE TABLE {tables} RESTART IDENTITY CASCADE"))
@@ -179,6 +181,55 @@ BILLING_TAX_RATES = [
     {"code": "SGST", "name": "SGST", "percent": 9, "scope": "intra_state", "country": "IN"},
     {"code": "IGST", "name": "IGST", "percent": 18, "scope": "inter_state", "country": "IN"},
 ]
+
+
+def seed_module_catalogue(session: AsyncSession, features: list[dict]) -> None:
+    """What each module costs on its own, and the page that sells it.
+
+    Both are derived from the `features` rows rather than restated, so the
+    seeded catalogue cannot contradict `features.price_monthly` — which is
+    still what `billing_service.addon_prices` falls back to until the services
+    move across. Core modules and anything priced at zero get no price row:
+    they are not sold separately.
+
+    **Yearly prices are not seeded.** What a year of a module costs is a
+    commercial decision, and neither a seeder nor a migration is entitled to
+    invent one by multiplying.
+
+    Listings are seeded `published`, unlike the ones migration 0013 opens,
+    which are `draft`. The difference is deliberate: this builds a demo
+    environment, where a catalogue with nothing visible in it is a broken
+    demo, whereas 0013 runs against real data and must not publish a page
+    nobody has written. The copy here is the module's own `summary` and
+    `unlocks` — real text that already exists. Video and screenshots stay
+    empty, because there is nothing honest to put in them.
+    """
+    for position, row in enumerate(features):
+        key = row["key"]
+        session.add(
+            ModuleListing(
+                feature_key=key,
+                headline=row["summary"],
+                long_description="",
+                highlights=list(row.get("unlocks") or []),
+                category="core" if row["is_core"] else "module",
+                sort_order=(position + 1) * 10,
+                status=ModuleListingStatus.PUBLISHED,
+            )
+        )
+        if row["is_core"] or Decimal(str(row["price_monthly"])) <= 0:
+            continue
+        session.add(
+            ModulePrice(
+                id=rid("module_price", f"{key}:monthly"),
+                feature_key=key,
+                interval=PlanInterval.MONTHLY,
+                currency=Currency.INR,
+                amount=Decimal(str(row["price_monthly"])),
+                active=True,
+                effective_from=date(2026, 1, 1),
+            )
+        )
 
 
 def seed_billing_catalogue(session: AsyncSession) -> None:
@@ -251,6 +302,12 @@ async def seed_platform_tables(session: AsyncSession, data: dict) -> None:
             )
         )
 
+    # The catalogue tables carry a bare foreign key to `features` and no ORM
+    # relationship, so the unit of work has no reason to order the inserts.
+    # Flush the features first or their listings arrive before them.
+    await session.flush()
+
+    seed_module_catalogue(session, data["CAT_FEATURES"])
     seed_billing_catalogue(session)
 
     for row in data["CAT_LAB_CATALOG"]:

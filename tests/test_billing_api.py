@@ -388,6 +388,20 @@ async def test_a_clinical_role_cannot_see_or_change_the_subscription(client):
     assert (await doctor.post("/v1/settings/billing/addons/lab")).status_code == 403
     assert (await doctor.delete("/v1/settings/billing/addons/lab")).status_code == 403
 
+    # The cart spends the practice's money, so it is behind the same permission
+    # — reading it included, because what a clinic is shopping for is as much
+    # the administrator's business as what it already pays for.
+    assert (await doctor.get("/v1/settings/billing/cart")).status_code == 403
+    assert (
+        await doctor.post("/v1/settings/billing/cart/items", json={"feature_key": "lab"})
+    ).status_code == 403
+    assert (await doctor.delete("/v1/settings/billing/cart/items/lab")).status_code == 403
+    assert (await doctor.delete("/v1/settings/billing/cart")).status_code == 403
+    assert (await doctor.post("/v1/settings/billing/cart/checkout")).status_code == 403
+    assert (
+        await doctor.post("/v1/settings/billing/cart/buy-now", json={"feature_key": "lab"})
+    ).status_code == 403
+
 
 async def test_billing_is_refused_without_a_session(client):
     from tests.conftest import NORTHGATE

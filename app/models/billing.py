@@ -7,14 +7,19 @@ They share no table, no enum and no service, which is why the table names below
 carry a `subscription_` prefix — `invoices` and `payments` were already taken,
 by a ledger that means something else.
 
-Four kinds of row live here:
+Five kinds of row live here:
 
-*   **catalogue** — `plans`, `plan_features`, `tax_rates`. Platform-owned, the
-    same for every clinic, no `tenant_id`, no row-level policy. They are the
-    only place a price or a tax rate is written down: nothing in the services
-    carries a number.
-*   **the agreement** — `billing_accounts`, `subscriptions`, `billing_cycles`.
-    What this clinic bought, who to bill, and the calendar it is billed on.
+*   **catalogue** — `plans`, `plan_features`, `tax_rates`, `module_prices`,
+    `module_listings`. Platform-owned, the same for every clinic, no
+    `tenant_id`, no row-level policy. They are the only place a price or a tax
+    rate is written down: nothing in the services carries a number.
+*   **the agreement** — `billing_accounts`, `subscriptions`, `billing_cycles`,
+    `subscription_items`. What this clinic bought, who to bill, the calendar it
+    is billed on, and — one row per module — what each part of it costs.
+*   **intent** — `carts`, `cart_items`. Modules a clinic means to buy together
+    on one payment. A cart holds references and no amounts: it is priced on
+    read and re-priced at checkout, so a price that moves between the two is
+    caught rather than honoured.
 *   **the money** — `subscription_invoices`, `subscription_invoice_items`,
     `subscription_payments`, `subscription_refunds`. An issued invoice is
     immutable: its totals are frozen by a database trigger and its line items
@@ -57,12 +62,15 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base, TenantScoped, TimestampMixin, uuid_pk
 from app.models.enums import (
     BillingCycleStatus,
+    CartStatus,
     Currency,
     InvoiceItemKind,
+    ModuleListingStatus,
     PaymentGateway,
     PlanInterval,
     RefundStatus,
     SubscriptionInvoiceStatus,
+    SubscriptionItemStatus,
     SubscriptionPaymentStatus,
     SubscriptionStatus,
     TaxScope,
@@ -205,6 +213,100 @@ class TaxRate(Base, TimestampMixin):
     effective_from: Mapped[date_t] = mapped_column(Date, nullable=False)
     effective_to: Mapped[date_t | None] = mapped_column(Date, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
+class ModulePrice(Base, TimestampMixin):
+    """What one module costs, per interval and per currency.
+
+    This supersedes `features.price_monthly`, which priced a module in exactly
+    one way and therefore could not express a year of it. A yearly row is a
+    row, not `12 * monthly`: an annual commitment is normally sold at a
+    discount, and deriving the figure would make that discount inexpressible.
+
+    Superseded prices stay. A `subscription_items` row that pinned one still
+    points at it, so the price a clinic is grandfathered on remains legible
+    years later; `active` is what says which row is on sale today, and a
+    partial unique index allows exactly one per (module, interval, currency).
+    """
+
+    __tablename__ = "module_prices"
+    __table_args__ = (
+        UniqueConstraint(
+            "feature_key", "interval", "currency", "effective_from", name="uq_module_price_effective"
+        ),
+        UniqueConstraint("razorpay_plan_id", name="uq_module_price_rzp_plan"),
+        Index("ix_module_prices_feature_key", "feature_key"),
+        CheckConstraint("amount >= 0", name="ck_module_price_amount"),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    feature_key: Mapped[str] = mapped_column(
+        String(40), ForeignKey("features.key", ondelete="CASCADE"), nullable=False
+    )
+    interval: Mapped[PlanInterval] = mapped_column(
+        _enum(PlanInterval, "plan_interval"), nullable=False, default=PlanInterval.MONTHLY
+    )
+    currency: Mapped[Currency] = mapped_column(
+        _enum(Currency, "currency"), nullable=False, default=Currency.INR
+    )
+    amount: Mapped[Decimal] = mapped_column(MONEY, nullable=False, default=0)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    effective_from: Mapped[date_t] = mapped_column(Date, nullable=False)
+    #: The gateway's own plan object, when one has been created for recurring
+    #: collection. Null for a module billed on one-off invoices.
+    razorpay_plan_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+
+
+class ModuleListing(Base, TimestampMixin):
+    """The module's page: what it does, a demo, and what it looks like.
+
+    Kept apart from `features` on purpose. That row is the FK target the
+    feature guard reads on request paths, and loading a blob of marketing copy
+    and a screenshot manifest to answer "may this clinic open the lab" would
+    put the catalogue on a hot path for no reason.
+
+    Nothing here is priced and nothing here grants anything. A listing can be
+    `draft` while the module bills perfectly well for the clinics already on
+    it — publishing is a decision about the shop window, not about billing.
+    """
+
+    __tablename__ = "module_listings"
+    __table_args__ = (
+        Index("ix_module_listings_published", "status", "sort_order"),
+        CheckConstraint("jsonb_typeof(highlights) = 'array'", name="ck_module_listing_highlights"),
+        CheckConstraint("jsonb_typeof(screenshots) = 'array'", name="ck_module_listing_screenshots"),
+        CheckConstraint("jsonb_typeof(doc_links) = 'array'", name="ck_module_listing_docs"),
+        CheckConstraint(
+            "video_duration_s is null or video_duration_s > 0", name="ck_module_listing_duration"
+        ),
+    )
+
+    feature_key: Mapped[str] = mapped_column(
+        String(40), ForeignKey("features.key", ondelete="CASCADE"), primary_key=True
+    )
+    headline: Mapped[str] = mapped_column(String(160), nullable=False, default="")
+    long_description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    #: Ordered bullets — the feature list the module's page leads with.
+    highlights: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+
+    video_url: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    video_poster_url: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    video_duration_s: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    #: Ordered `{url, alt, caption}` objects. `alt` is required by the schema
+    #: above this: a screenshot nobody can read is not documentation.
+    screenshots: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    doc_links: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+
+    category: Mapped[str] = mapped_column(String(40), nullable=False, default="")
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
+    status: Mapped[ModuleListingStatus] = mapped_column(
+        _enum(ModuleListingStatus, "module_listing_status"),
+        nullable=False,
+        default=ModuleListingStatus.DRAFT,
+    )
+    #: "New", "Beta" — a word on the card, or empty for none.
+    badge: Mapped[str] = mapped_column(String(24), nullable=False, default="")
 
 
 # --- the agreement -----------------------------------------------------------
@@ -383,6 +485,106 @@ class BillingCycle(Base, TenantScoped, TimestampMixin):
         return (self.period_end - self.period_start).days
 
 
+class SubscriptionItem(Base, TenantScoped, TimestampMixin):
+    """One module on one clinic's subscription, at its own price.
+
+    The reason this table exists: until it did, "what does this clinic pay for
+    the lab" was answered by walking `plan_features` to `features.price_monthly`
+    on every read, so the figure moved whenever the catalogue moved and no two
+    modules could bill on different intervals. A row here pins the number at
+    the moment of purchase.
+
+    Two fields are easy to mix up, so they are worth stating plainly:
+
+    *   **`unit_amount` is the authority.** It is what this item bills, pinned
+        when it was bought, and it is the only figure any invoice derives from.
+    *   **`price_id` is provenance.** It records which catalogue row the figure
+        came from, and is null when a `plan_features` override or the 0013
+        backfill set it instead. Claiming a catalogue price that was never
+        applied would be a lie that only surfaces in an audit.
+
+    `charged_through` is exclusive and carries the same guarantee its
+    counterpart on `tenant_features` does: the invoice generator will not bill
+    a period ending on or before it, so running the renewal job twice cannot
+    charge twice.
+
+    Entitlement is still `tenant_features`. This is not a second answer to "is
+    the module switched on" — it answers what is being paid for, and the two
+    are written in one transaction.
+    """
+
+    __tablename__ = "subscription_items"
+    __extra_table_args__ = (
+        Index("ix_subscription_items_subscription", "subscription_id"),
+        Index("ix_subscription_items_status", "tenant_id", "status"),
+        Index("ix_subscription_items_cancel_at", "cancel_at"),
+        CheckConstraint("quantity > 0", name="ck_subscription_item_quantity"),
+        CheckConstraint("unit_amount >= 0", name="ck_subscription_item_amount"),
+        CheckConstraint(
+            "cancel_at is null or cancel_at >= started_on", name="ck_subscription_item_cancel_order"
+        ),
+        CheckConstraint(
+            "current_period_end is null or current_period_start is null "
+            "or current_period_end > current_period_start",
+            name="ck_subscription_item_period",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    subscription_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("subscriptions.id", ondelete="CASCADE"), nullable=False
+    )
+    feature_key: Mapped[str] = mapped_column(
+        String(40), ForeignKey("features.key", ondelete="RESTRICT"), nullable=False
+    )
+    price_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("module_prices.id", ondelete="RESTRICT"), nullable=True
+    )
+
+    interval: Mapped[PlanInterval] = mapped_column(
+        _enum(PlanInterval, "plan_interval"), nullable=False, default=PlanInterval.MONTHLY
+    )
+    #: One, today. Seats and usage add-ons become a number here rather than a
+    #: migration, which is the whole reason it exists before anything sets it.
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    unit_amount: Mapped[Decimal] = mapped_column(MONEY, nullable=False, default=0)
+    currency: Mapped[Currency] = mapped_column(
+        _enum(Currency, "currency"), nullable=False, default=Currency.INR
+    )
+    status: Mapped[SubscriptionItemStatus] = mapped_column(
+        _enum(SubscriptionItemStatus, "subscription_item_status"),
+        nullable=False,
+        default=SubscriptionItemStatus.ACTIVE,
+    )
+
+    started_on: Mapped[date_t] = mapped_column(Date, nullable=False)
+    current_period_start: Mapped[date_t | None] = mapped_column(Date, nullable=True)
+    #: Exclusive, like `billing_cycles.period_end`.
+    current_period_end: Mapped[date_t | None] = mapped_column(Date, nullable=True)
+    #: Exclusive. Billing is paid up to, but not including, this day.
+    charged_through: Mapped[date_t | None] = mapped_column(Date, nullable=True)
+    #: The cycle end a scheduled cancellation takes effect on. Access continues
+    #: until then; nothing is refunded and nothing is charged after.
+    cancel_at: Mapped[date_t | None] = mapped_column(Date, nullable=True)
+    trial_ends_on: Mapped[date_t | None] = mapped_column(Date, nullable=True)
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    price: Mapped[ModulePrice | None] = relationship("ModulePrice", lazy="selectin")
+
+    @property
+    def cancellation_scheduled(self) -> bool:
+        return self.status == SubscriptionItemStatus.PENDING_CANCEL
+
+    @property
+    def entitled(self) -> bool:
+        """Whether this item grants access right now.
+
+        A `pending_cancel` item does: it is paid for to the end of its cycle
+        and the module stays usable until then.
+        """
+        return self.status != SubscriptionItemStatus.CANCELLED
+
+
 # --- the money ---------------------------------------------------------------
 
 
@@ -493,6 +695,7 @@ class SubscriptionInvoiceItem(Base, TenantScoped, TimestampMixin):
     __extra_table_args__ = (
         Index("ix_sub_invoice_items_invoice", "invoice_id", "position"),
         Index("ix_sub_invoice_items_feature", "tenant_id", "feature_key"),
+        Index("ix_subscription_invoice_items_item", "subscription_item_id"),
         CheckConstraint("quantity > 0", name="ck_sub_item_quantity"),
         CheckConstraint(
             "(period_end is null and period_start is null) or period_end > period_start",
@@ -520,6 +723,12 @@ class SubscriptionInvoiceItem(Base, TenantScoped, TimestampMixin):
     #: plan, on discounts and on tax.
     feature_key: Mapped[str | None] = mapped_column(
         String(40), ForeignKey("features.key", ondelete="SET NULL"), nullable=True
+    )
+    #: Which subscription item this line billed, when it billed one. Null on
+    #: the base plan, on tax, and on every line written before 0013. Set at
+    #: INSERT and never re-pointed — the table's no-UPDATE rule sees to that.
+    subscription_item_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("subscription_items.id", ondelete="SET NULL"), nullable=True
     )
 
     quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
@@ -698,3 +907,88 @@ class WebhookEvent(Base, TimestampMixin):
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"<WebhookEvent {self.gateway}:{self.event_type} {self.status}>"
+
+
+# --- intent ------------------------------------------------------------------
+
+
+class Cart(Base, TenantScoped, TimestampMixin):
+    """Modules a clinic means to buy together, on one payment.
+
+    Server-side rather than in the browser, for the same reason no request body
+    in this API carries an amount: a cart the client owns is a total the client
+    can choose. What is stored is a list of references; the money is worked out
+    on read, and worked out again at checkout.
+
+    One open cart per clinic, enforced by a partial unique index rather than by
+    a service looking first — two tabs pressing Add to Cart at once meet the
+    index. A converted cart is kept, because it is the only place the intent
+    behind a multi-module invoice is written down.
+    """
+
+    __tablename__ = "carts"
+    __extra_table_args__ = (Index("ix_carts_status", "tenant_id", "status"),)
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    status: Mapped[CartStatus] = mapped_column(
+        _enum(CartStatus, "cart_status"), nullable=False, default=CartStatus.OPEN
+    )
+    currency: Mapped[Currency] = mapped_column(
+        _enum(Currency, "currency"), nullable=False, default=Currency.INR
+    )
+    #: Held as typed, and resolved against the coupon rules at quote and again
+    #: at checkout. Storing the discount it worked out to would freeze a figure
+    #: the coupon's own rules are entitled to change.
+    coupon_code: Mapped[str] = mapped_column(String(40), nullable=False, default="")
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    #: The single invoice this cart became. One invoice for every module in it
+    #: is what makes "one payment" true, and what makes activating them all or
+    #: none of them a property of the invoice rather than a loop that can stop
+    #: halfway.
+    converted_invoice_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("subscription_invoices.id", ondelete="SET NULL"), nullable=True
+    )
+    converted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    items: Mapped[list[CartItem]] = relationship(
+        "CartItem", back_populates="cart", cascade="all, delete-orphan", lazy="selectin"
+    )
+
+
+class CartItem(Base, TenantScoped, TimestampMixin):
+    """One module in a cart, at one interval.
+
+    There is no money column here, deliberately. `price_id` names the
+    catalogue row the line intends to buy at; what it comes to is computed, and
+    a price that has moved since the module went in the cart is something the
+    quote reports rather than something the cart remembers.
+
+    One line per module: the lab monthly *and* the lab yearly in the same cart
+    is a contradiction rather than two lines, and the unique constraint says so.
+    """
+
+    __tablename__ = "cart_items"
+    __extra_table_args__ = (
+        UniqueConstraint("cart_id", "feature_key", name="uq_cart_item_feature"),
+        Index("ix_cart_items_cart_id", "cart_id"),
+        CheckConstraint("quantity > 0", name="ck_cart_item_quantity"),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    cart_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("carts.id", ondelete="CASCADE"), nullable=False
+    )
+    feature_key: Mapped[str] = mapped_column(
+        String(40), ForeignKey("features.key", ondelete="CASCADE"), nullable=False
+    )
+    price_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("module_prices.id", ondelete="RESTRICT"), nullable=False
+    )
+    interval: Mapped[PlanInterval] = mapped_column(
+        _enum(PlanInterval, "plan_interval"), nullable=False, default=PlanInterval.MONTHLY
+    )
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+    cart: Mapped[Cart] = relationship("Cart", back_populates="items")
+    price: Mapped[ModulePrice] = relationship("ModulePrice", lazy="selectin")

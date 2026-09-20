@@ -195,6 +195,17 @@ async def set_tenant_feature(
         row.activated_at = today
 
     await session.flush()
+
+    # Switching a module *off* stops any billing for it: a module nobody may
+    # use cannot stay on a bill. Switching one *on* from here deliberately
+    # creates no `subscription_items` row — this is a grant, not a sale, and
+    # inventing an item would bill a clinic for something nobody sold them.
+    # A comp is therefore an entitlement with no item, which is what it is.
+    if status != TenantFeatureStatus.ACTIVE:
+        from app.services.payment.addon import item_service
+
+        await item_service.end(session, tenant_id, feature_key)
+
     return row
 
 

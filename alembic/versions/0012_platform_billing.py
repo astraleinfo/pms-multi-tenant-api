@@ -26,8 +26,8 @@ naming a gateway id, not a clinic — there is no tenant to bind at the moment
 the row is written — so it is platform-owned like `tenants` and `plans`, and it
 is reachable only through the console.
 
-Revision ID: 0009_billing
-Revises: 0008_charges
+Revision ID: 0012_billing
+Revises: 0011_doctor_consultation_fee
 """
 
 from __future__ import annotations
@@ -37,8 +37,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "0009_billing"
-down_revision = "0008_charges"
+revision = "0012_billing"
+down_revision = "0011_doctor_consultation_fee"
 branch_labels = None
 depends_on = None
 

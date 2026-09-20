@@ -181,6 +181,11 @@ class BillingAccountPatch(InputModel):
 class InvoiceItemOut(ApiModel):
     kind: str
     description: str
+    #: Which module this line is for, or null on the base plan, a discount or
+    #: tax. It matters more since a cart checkout: an invoice can now carry
+    #: five add-on lines, and without this a client can only tell them apart by
+    #: parsing the description.
+    feature_key: str | None
     quantity: int
     unit_amount: float
     amount: float
@@ -197,6 +202,7 @@ class InvoiceItemOut(ApiModel):
     def of(cls, item) -> InvoiceItemOut:
         return cls(
             kind=str(item.kind),
+            feature_key=item.feature_key,
             description=item.description,
             quantity=item.quantity,
             unit_amount=money(item.unit_amount),
@@ -564,8 +570,177 @@ class AddonActionOut(ApiModel):
     amount: float | None
 
 
+class ModuleOut(ApiModel):
+    """One module as its card and its page show it.
+
+    `monthly` and `yearly` are null when the catalogue has no active price on
+    that interval — which is not the same as free. `included` is what free
+    means here: bundled by the base plan, switched on, never invoiced
+    separately. A zero would read as "free extra" and be wrong.
+    """
+
+    feature_key: str
+    name: str
+    summary: str
+    is_core: bool
+
+    headline: str
+    long_description: str
+    highlights: list[str]
+    video_url: str
+    video_poster_url: str
+    video_duration_s: int | None
+    screenshots: list[dict]
+    doc_links: list[dict]
+    category: str
+    badge: str
+
+    currency: str
+    monthly: float | None
+    yearly: float | None
+
+    included: bool
+    subscribed: bool
+    cancels_on: str | None
+    in_cart: bool
+    purchasable: bool
+
+    @classmethod
+    def of(cls, card, tz: str | None = None) -> ModuleOut:
+        return cls(
+            feature_key=card.feature_key,
+            name=card.name,
+            summary=card.summary,
+            is_core=card.is_core,
+            headline=card.headline,
+            long_description=card.long_description,
+            highlights=[str(h) for h in card.highlights],
+            video_url=card.video_url,
+            video_poster_url=card.video_poster_url,
+            video_duration_s=card.video_duration_s,
+            screenshots=[dict(s) for s in card.screenshots if isinstance(s, dict)],
+            doc_links=[dict(d) for d in card.doc_links if isinstance(d, dict)],
+            category=card.category,
+            badge=card.badge,
+            currency=str(getattr(card.currency, "value", card.currency)),
+            monthly=money(card.monthly) if card.monthly is not None else None,
+            yearly=money(card.yearly) if card.yearly is not None else None,
+            included=card.included,
+            subscribed=card.subscribed,
+            cancels_on=iso_date(card.cancels_on),
+            in_cart=card.in_cart,
+            purchasable=card.purchasable,
+        )
+
+
+class CartItemIn(InputModel):
+    """What a browser may say about a cart line, which is deliberately little.
+
+    A module and an interval — two things that name a row in the catalogue. No
+    amount, no quantity of money, nothing a client could use to choose its own
+    price. The server looks the figure up.
+    """
+
+    feature_key: str = Field(max_length=40)
+    interval: str = Field(default="monthly", pattern="^(monthly|yearly)$")
+
+
+class CartLineOut(ApiModel):
+    """One module in the cart, priced two ways.
+
+    `list_amount` recurs every cycle; `amount_now` is this payment's share of
+    the cycle in flight, and is smaller whenever the module is bought partway
+    through one. Showing only one of them is how a clinic ends up believing it
+    was overcharged, so both are always sent.
+    """
+
+    feature_key: str
+    name: str
+    interval: str
+    list_amount: float
+    amount_now: float
+    prorated_days: int | None
+    cycle_days: int | None
+    reinstated: bool
+    already_paid: bool
+    #: Why this line cannot be bought, or null. Carried per line so a cart can
+    #: show every problem at once instead of failing on the first.
+    blocked: str | None
+
+    @classmethod
+    def of(cls, line) -> CartLineOut:
+        return cls(
+            feature_key=line.feature_key,
+            name=line.name,
+            interval=str(getattr(line.interval, "value", line.interval)),
+            list_amount=money(line.list_amount),
+            amount_now=money(line.amount_now),
+            prorated_days=line.prorated_days,
+            cycle_days=line.cycle_days,
+            reinstated=line.reinstated,
+            already_paid=line.already_paid,
+            blocked=line.blocked,
+        )
+
+
+class CartQuoteOut(ApiModel):
+    """The cart, totalled. Requirement 4.
+
+    `total` is what leaving this page costs. `recurring_total` is what every
+    invoice after it carries. They differ whenever anything was prorated, and
+    a screen that showed one figure would be read as the other.
+    """
+
+    lines: list[CartLineOut]
+    currency: str
+    subtotal: float
+    tax_total: float
+    total: float
+    recurring_total: float
+    period_start: str
+    period_end: str
+    purchasable: bool
+
+    @classmethod
+    def of(cls, quote) -> CartQuoteOut:
+        return cls(
+            lines=[CartLineOut.of(line) for line in quote.lines],
+            currency=str(getattr(quote.currency, "value", quote.currency)),
+            subtotal=money(quote.subtotal),
+            tax_total=money(quote.tax_total),
+            total=money(quote.total),
+            recurring_total=money(quote.recurring_total),
+            period_start=iso_date(quote.period_start),
+            period_end=iso_date(quote.period_end),
+            purchasable=quote.purchasable,
+        )
+
+
+class CheckoutResultOut(ApiModel):
+    """What a checkout did.
+
+    `invoice` is null when nothing was owed — every module in the cart was free
+    this cycle, or already paid for. That is a success, and `reinstated` says
+    which modules came back on without a charge, because "why was I not
+    billed" is the question that follows.
+    """
+
+    invoice: InvoiceOut | None
+    activated: list[str]
+    reinstated: list[str]
+
+    @classmethod
+    def of(cls, result, invoice: InvoiceOut | None) -> CheckoutResultOut:
+        return cls(
+            invoice=invoice,
+            activated=list(result.activated),
+            reinstated=list(result.reinstated),
+        )
+
+
 __all__ = [
     "AddonActionOut", "AddonMetricOut", "AddonOut", "BillingAccountOut", "BillingAccountPatch",
+    "CartItemIn", "CartLineOut", "CartQuoteOut", "CheckoutResultOut", "ModuleOut",
     "BillingMetricsOut", "BillingSummaryOut", "CancelIn", "CheckoutOut", "InvoiceItemOut",
     "InvoiceOut", "InvoicePageOut", "PaymentOut", "PaymentVerifyIn", "PlanChangeIn", "PlanOut",
     "RefundIn", "RefundOut", "SubscribeIn", "SubscriptionOut", "TenantMetricOut", "WebhookAckOut",

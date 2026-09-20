@@ -29,6 +29,7 @@ import logging
 import uuid
 from dataclasses import dataclass
 from datetime import date
+from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,6 +39,7 @@ from app.models.billing import BillingCycle, Subscription, SubscriptionInvoice
 from app.models.enums import InvoiceItemKind, TenantFeatureStatus
 from app.models.tenancy import TenantFeature
 from app.services.payment import billing_service
+from app.services.payment.addon import item_service
 from app.services.payment.invoice import generation_service
 from app.services.payment.money import ZERO, now
 from app.services.payment.proration import calculator as proration
@@ -80,73 +82,72 @@ async def _entitlement(
     ).scalar_one_or_none()
 
 
-async def activate(
+@dataclass(frozen=True)
+class Assessment:
+    """What switching a module on would cost, worked out without doing it.
+
+    The quote and the purchase both come from here, which is the point: a
+    figure a clinic is shown before checkout and the figure it is charged are
+    produced by the same function, so they cannot drift apart. Nothing in here
+    writes.
+
+    `blocked` carries the reason a module cannot be bought rather than raising,
+    because a cart has to be able to show three unbuyable lines at once instead
+    of failing on the first.
+    """
+
+    feature_key: str
+    price: object
+    charge: generation_service.DraftLine | None = None
+    proration: Proration | None = None
+    reinstated: bool = False
+    already_paid: bool = False
+    blocked: str | None = None
+
+    @property
+    def amount(self) -> Decimal:
+        """What is charged now — zero when the module is free this cycle."""
+        return self.charge.amount if self.charge is not None else ZERO
+
+    @property
+    def recurring(self) -> Decimal:
+        """What it adds to every invoice after this one."""
+        amount = getattr(self.price, "amount", None)
+        return amount if amount is not None else ZERO
+
+
+async def assess(
     session: AsyncSession,
     tenant_id: uuid.UUID,
     feature_key: str,
     *,
+    subscription: Subscription,
+    cycle: BillingCycle,
     today: date,
-) -> AddonResult:
-    """Switch a module on, and charge for it.
-
-    Three paths, and which one is taken is decided by state rather than by a
-    flag the caller passes:
-
-    *   the module is on with a cancellation scheduled — the cancellation is
-        dropped and **nothing is charged**;
-    *   the module is off but already paid for to the end of this cycle (it was
-        on earlier in the same cycle) — it comes back on and **nothing is
-        charged**, because that period's money has already been taken;
-    *   otherwise it is prorated over the remaining days and invoiced now.
-    """
-    subscription = await billing_service.require_subscription(session, tenant_id, for_update=True)
+) -> Assessment:
+    """Price switching this module on, today, without switching it on."""
     price = await billing_service.addon_price(session, subscription.plan_id, feature_key)
-    cycle = await billing_service.ensure_cycle(session, subscription, on=today)
-
     row = await _entitlement(session, tenant_id, feature_key)
-    if row is None:
-        row = TenantFeature(tenant_id=tenant_id, feature_key=feature_key)
-        session.add(row)
-        await session.flush()
 
     # Included in the base plan, or core to the product: on, and free.
     if not price.billable:
-        row.status = TenantFeatureStatus.ACTIVE
-        row.activated_at = row.activated_at or today
-        row.cancel_at = None
-        row.deactivated_at = None
-        await session.flush()
-        return AddonResult(entitlement=row, subscription=subscription, cycle=cycle)
+        return Assessment(feature_key=feature_key, price=price)
 
     # Requirement 8 — re-enable before the cycle ends. The feature never went
     # off, so there is nothing to charge and nothing to re-create.
-    if row.status == TenantFeatureStatus.ACTIVE and row.cancel_at is not None:
-        cancelled_for = row.cancel_at
-        row.cancel_at = None
-        await session.flush()
-        log.info(
-            "tenant %s kept %s: scheduled cancellation on %s dropped",
-            tenant_id, feature_key, cancelled_for,
-        )
-        return AddonResult(
-            entitlement=row, subscription=subscription, cycle=cycle, reinstated=True
-        )
+    if row is not None and row.status == TenantFeatureStatus.ACTIVE and row.cancel_at is not None:
+        return Assessment(feature_key=feature_key, price=price, reinstated=True)
 
-    if row.status == TenantFeatureStatus.ACTIVE:
-        raise Conflict("That module is already active.")
+    if row is not None and row.status == TenantFeatureStatus.ACTIVE:
+        return Assessment(
+            feature_key=feature_key, price=price, blocked="That module is already active."
+        )
 
     # Already paid for to the end of this cycle — switched on and off again
     # inside one month. Charging again would be charging twice for the same
     # days.
-    already_paid = row.charged_through is not None and row.charged_through >= cycle.period_end
-    row.status = TenantFeatureStatus.ACTIVE
-    row.activated_at = today
-    row.cancel_at = None
-    row.deactivated_at = None
-
-    if already_paid:
-        await session.flush()
-        return AddonResult(entitlement=row, subscription=subscription, cycle=cycle)
+    if row is not None and row.charged_through is not None and row.charged_through >= cycle.period_end:
+        return Assessment(feature_key=feature_key, price=price, already_paid=True)
 
     share = proration.prorate(
         full_amount=price.amount or ZERO,
@@ -155,50 +156,187 @@ async def activate(
         effective_from=today,
     )
     if share.amount <= ZERO:
-        await session.flush()
-        return AddonResult(
-            entitlement=row, subscription=subscription, cycle=cycle, proration=share
-        )
+        return Assessment(feature_key=feature_key, price=price, proration=share)
 
     full = share.is_full
-    line = generation_service.DraftLine(
-        kind=InvoiceItemKind.ADDON if full else InvoiceItemKind.PRORATION,
-        description=(
-            f"{price.name} add-on"
-            if full
-            else f"{price.name} add-on — {share.fraction} days"
-        ),
-        amount=share.amount,
-        unit_amount=share.full_amount,
+    return Assessment(
         feature_key=feature_key,
-        period_start=share.period_start,
-        period_end=share.period_end,
-        prorated_days=share.charged_days,
-        cycle_days=share.cycle_days,
+        price=price,
+        proration=share,
+        charge=generation_service.DraftLine(
+            kind=InvoiceItemKind.ADDON if full else InvoiceItemKind.PRORATION,
+            description=(
+                f"{price.name} add-on"
+                if full
+                else f"{price.name} add-on — {share.fraction} days"
+            ),
+            amount=share.amount,
+            unit_amount=share.full_amount,
+            feature_key=feature_key,
+            period_start=share.period_start,
+            period_end=share.period_end,
+            prorated_days=share.charged_days,
+            cycle_days=share.cycle_days,
+        ),
     )
-    invoice = await generation_service.generate_one_off(
-        session,
-        subscription=subscription,
-        lines=[line],
-        today=today,
-        period_start=share.period_start,
-        period_end=share.period_end,
-    )
-    # Paid to the end of this cycle. The renewal that closes this cycle reads
-    # this and does not bill for it again.
-    row.charged_through = cycle.period_end
-    await session.flush()
 
-    log.info(
-        "tenant %s activated %s: %s for %s",
-        tenant_id, feature_key, share.amount, share.fraction,
+
+@dataclass(frozen=True)
+class Prepared:
+    """A module switched on, with the line it owes but no invoice yet.
+
+    The split exists so that buying one module and buying five are the same
+    code. `activate` prepares one and invoices it; the cart prepares each and
+    puts them all on **one** invoice, which is what makes "several modules, a
+    single payment" true rather than a loop that can stop halfway.
+
+    `line` is None when there is nothing to charge — the module is free, it was
+    already paid for this cycle, or a scheduled cancellation was simply
+    dropped. Those are ordinary outcomes, not failures.
+    """
+
+    feature_key: str
+    entitlement: TenantFeature
+    price: object
+    subscription: Subscription
+    cycle: BillingCycle
+    today: date
+    line: generation_service.DraftLine | None = None
+    proration: Proration | None = None
+    reinstated: bool = False
+
+
+async def prepare(
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    feature_key: str,
+    *,
+    today: date,
+    subscription: Subscription | None = None,
+) -> Prepared:
+    """Switch a module on and work out what it owes. Raises no invoice.
+
+    Every validation happens here, before anything is billed, so a cart
+    containing one module the clinic already has fails the whole checkout
+    rather than charging for the others and then stopping — the transaction
+    rolls the rest back with it.
+
+    The money is decided by `assess`, which the quote calls too; this function
+    is the part that writes.
+    """
+    if subscription is None:
+        subscription = await billing_service.require_subscription(
+            session, tenant_id, for_update=True
+        )
+    cycle = await billing_service.ensure_cycle(session, subscription, on=today)
+    verdict = await assess(
+        session, tenant_id, feature_key, subscription=subscription, cycle=cycle, today=today
     )
-    return AddonResult(
+    if verdict.blocked is not None:
+        raise Conflict(verdict.blocked)
+
+    row = await _entitlement(session, tenant_id, feature_key)
+    if row is None:
+        row = TenantFeature(tenant_id=tenant_id, feature_key=feature_key)
+        session.add(row)
+        await session.flush()
+
+    if verdict.reinstated:
+        cancelled_for = row.cancel_at
+        row.cancel_at = None
+        log.info(
+            "tenant %s kept %s: scheduled cancellation on %s dropped",
+            tenant_id, feature_key, cancelled_for,
+        )
+    elif not verdict.price.billable:
+        row.status = TenantFeatureStatus.ACTIVE
+        row.activated_at = row.activated_at or today
+        row.cancel_at = None
+        row.deactivated_at = None
+    else:
+        row.status = TenantFeatureStatus.ACTIVE
+        row.activated_at = today
+        row.cancel_at = None
+        row.deactivated_at = None
+
+    await session.flush()
+    return Prepared(
+        feature_key=feature_key,
         entitlement=row,
+        price=verdict.price,
         subscription=subscription,
         cycle=cycle,
+        today=today,
+        line=verdict.charge,
+        proration=verdict.proration,
+        reinstated=verdict.reinstated,
+    )
+
+
+async def settle(
+    session: AsyncSession, prep: Prepared, *, invoice: SubscriptionInvoice | None
+) -> None:
+    """Close the books on a prepared activation.
+
+    Called for every prepared module whether or not it was charged, because
+    the item has to exist either way — a module that came back free this cycle
+    is still a module the clinic is subscribed to.
+    """
+    if invoice is not None and prep.line is not None:
+        # Paid to the end of this cycle. The renewal that closes this cycle
+        # reads this and does not bill for it again.
+        prep.entitlement.charged_through = prep.cycle.period_end
+    await session.flush()
+    await item_service.record_purchase(
+        session,
+        subscription=prep.subscription,
+        entitlement=prep.entitlement,
+        price=prep.price,
+        cycle=prep.cycle,
+        today=prep.today,
+    )
+
+
+async def activate(
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    feature_key: str,
+    *,
+    today: date,
+) -> AddonResult:
+    """Switch one module on, and charge for it on an invoice of its own.
+
+    Buying a single module straight from its page. The cart takes the same
+    `prepare`/`settle` pair and puts several lines on one invoice instead.
+    """
+    prep = await prepare(session, tenant_id, feature_key, today=today)
+
+    invoice = None
+    if prep.line is not None:
+        invoice = await generation_service.generate_one_off(
+            session,
+            subscription=prep.subscription,
+            lines=[prep.line],
+            today=today,
+            period_start=prep.line.period_start,
+            period_end=prep.line.period_end,
+        )
+
+    await settle(session, prep, invoice=invoice)
+
+    if prep.proration is not None and prep.line is not None:
+        log.info(
+            "tenant %s activated %s: %s for %s",
+            tenant_id, feature_key, prep.proration.amount, prep.proration.fraction,
+        )
+
+    return AddonResult(
+        entitlement=prep.entitlement,
+        subscription=prep.subscription,
+        cycle=prep.cycle,
         invoice=invoice,
-        proration=share,
+        proration=prep.proration,
+        reinstated=prep.reinstated,
     )
 
 
@@ -233,12 +371,18 @@ async def cancel(
         )
 
     if row.cancel_at is not None:
+        await item_service.project(
+            session, subscription=subscription, entitlement=row, price=price
+        )
         return AddonResult(entitlement=row, subscription=subscription, cycle=cycle)
 
     # The end of the cycle, never a date the caller chose: the clinic has paid
     # to this day and keeps the feature to this day.
     row.cancel_at = cycle.period_end
     await session.flush()
+    await item_service.project(
+        session, subscription=subscription, entitlement=row, price=price
+    )
     log.info(
         "tenant %s scheduled %s to end on %s (no refund)", tenant_id, feature_key, cycle.period_end
     )
@@ -261,7 +405,19 @@ async def deactivate_now(
     row.cancel_at = None
     row.deactivated_at = now()
     await session.flush()
+    # Off is off: a module nobody may use cannot stay on a bill.
+    await item_service.end(session, tenant_id, feature_key)
     return row
 
 
-__all__ = ["AddonResult", "activate", "cancel", "deactivate_now"]
+__all__ = [
+    "AddonResult",
+    "Assessment",
+    "Prepared",
+    "activate",
+    "assess",
+    "cancel",
+    "deactivate_now",
+    "prepare",
+    "settle",
+]

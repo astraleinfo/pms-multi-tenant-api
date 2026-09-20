@@ -43,6 +43,7 @@ from app.models.enums import (
 )
 from app.models.tenancy import Feature, TenantFeature
 from app.services.payment import billing_service
+from app.services.payment.addon import item_service
 from app.services.payment.gateway import Gateway, GatewayError, get_gateway
 from app.services.payment.invoice import generation_service
 from app.services.payment.money import ZERO, money, now
@@ -183,6 +184,10 @@ async def _sync_included_features(
             row.activated_at = today
             row.deactivated_at = None
         row.cancel_at = None
+        # The plan includes it now, so it is free. Any item that was billing
+        # for it stops — a plan change that bundles a module must not leave the
+        # clinic paying for it twice.
+        await item_service.end(session, subscription.tenant_id, key)
     await session.flush()
 
 
@@ -392,6 +397,7 @@ async def _end_addons(session: AsyncSession, subscription: Subscription, *, on: 
         row.status = TenantFeatureStatus.INACTIVE
         row.cancel_at = None
         row.deactivated_at = now()
+        await item_service.end(session, subscription.tenant_id, row.feature_key)
     await session.flush()
 
 
@@ -457,6 +463,9 @@ async def renew(
     next_cycle = await billing_service.open_cycle(
         session, subscription, period_start=cycle.period_end
     )
+    # After the cancellations above, so a module that has just stopped is
+    # already cancelled and is not carried into a period it is not in.
+    await item_service.advance_periods(session, subscription, next_cycle)
     next_invoice, _ = await _invoice_cycle(session, subscription, next_cycle, today=today)
     await session.flush()
     return SubscriptionResult(
@@ -506,6 +515,7 @@ async def apply_scheduled_cancellations(
         row.status = TenantFeatureStatus.INACTIVE
         row.deactivated_at = now()
         row.cancel_at = None
+        await item_service.end(session, subscription.tenant_id, row.feature_key)
         ended.append(row.feature_key)
     if ended:
         await session.flush()

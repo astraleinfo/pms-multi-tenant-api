@@ -96,6 +96,14 @@ async def set_feature(
     row.status = TenantFeatureStatus.ACTIVE if active else TenantFeatureStatus.INACTIVE
     row.activated_at = today if active else None
     await session.flush()
+
+    # Off stops the billing for it; on grants nothing that has to be paid for.
+    # Same asymmetry, and same reason, as `platform.set_tenant_feature`.
+    if not active:
+        from app.services.payment.addon import item_service
+
+        await item_service.end(session, tenant_id, key)
+
     return row
 
 

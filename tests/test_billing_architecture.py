@@ -35,6 +35,7 @@ CORE_MODULES = [
     "app.services.payment.invoice.generation_service",
     "app.services.payment.proration.calculator",
     "app.services.payment.addon.billing_service",
+    "app.services.payment.addon.item_service",
     "app.services.payment.tax.calculator",
     "app.services.payment.metrics.billing_metrics_service",
 ]
@@ -46,6 +47,7 @@ CORE_FILES = [
     PAYMENT / "invoice" / "generation_service.py",
     PAYMENT / "proration" / "calculator.py",
     PAYMENT / "addon" / "billing_service.py",
+    PAYMENT / "addon" / "item_service.py",
     PAYMENT / "tax" / "calculator.py",
     PAYMENT / "metrics" / "billing_metrics_service.py",
 ]
