@@ -41,6 +41,9 @@ class InventoryItemOut(ApiModel):
     mrp: float
     margin_pct: float
     pricing_mode: PricingMode
+    manufacturer: str
+    description: str
+    hsn_code: str
 
     @classmethod
     def of(cls, i) -> InventoryItemOut:
@@ -49,7 +52,8 @@ class InventoryItemOut(ApiModel):
             strength=i.strength, unit=i.unit, category=i.category,
             reorder_level=i.reorder_level, unit_price=money(i.unit_price),
             cost_price=money(i.cost_price), mrp=money(i.mrp), margin_pct=money(i.margin_pct),
-            pricing_mode=i.pricing_mode,
+            pricing_mode=i.pricing_mode, manufacturer=i.manufacturer,
+            description=i.description, hsn_code=i.hsn_code,
         )
 
 
@@ -74,6 +78,9 @@ class InventoryItemIn(InputModel):
     mrp: float = Field(default=0, ge=0, le=1_000_000)
     margin_pct: float = Field(default=0, ge=-100, le=1000)
     pricing_mode: PricingMode = PricingMode.PRICE
+    manufacturer: str = Field(default="", max_length=160)
+    description: str = Field(default="", max_length=2000)
+    hsn_code: str = Field(default="", max_length=20)
 
 
 class InventoryItemPatch(InputModel):
@@ -92,6 +99,9 @@ class InventoryItemPatch(InputModel):
     mrp: float | None = Field(default=None, ge=0, le=1_000_000)
     margin_pct: float | None = Field(default=None, ge=-100, le=1000)
     pricing_mode: PricingMode | None = None
+    manufacturer: str | None = Field(default=None, max_length=160)
+    description: str | None = Field(default=None, max_length=2000)
+    hsn_code: str | None = Field(default=None, max_length=20)
 
 
 class InventoryBatchOut(ApiModel):
@@ -378,6 +388,24 @@ class SuggestedLineOut(ApiModel):
     priced: bool = True
 
 
+class AlreadyBilledLineOut(ApiModel):
+    """A line the visit implies that some invoice already covers, so Compose
+    Invoice reports it instead of suggesting it again."""
+
+    description: str
+    source: LineItemSource
+    department: BillingDepartment
+    qty: int
+    unit_price: float
+    tax_pct: float
+    invoices: list[dict]
+
+
+class SuggestedLinesOut(ApiModel):
+    lines: list[SuggestedLineOut]
+    already_billed: list[AlreadyBilledLineOut]
+
+
 # --- the tariff (§3.12) ------------------------------------------------------
 
 
@@ -417,6 +445,10 @@ class ServicePricePatch(InputModel):
     tax_pct: float | None = Field(default=None, ge=0, le=100)
     active: bool | None = None
     note: str | None = Field(default=None, max_length=500)
+
+
+class DoctorFeeIn(InputModel):
+    consultation_fee: float | None = Field(default=None, ge=0, le=1_000_000)
 
 
 class LabCatalogueImportIn(InputModel):

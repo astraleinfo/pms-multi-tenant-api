@@ -140,7 +140,7 @@ async def test_a_suggested_line_quotes_the_tariff_not_a_number_in_the_code(north
     encounter = (await northgate.get("/v1/encounters", params={"limit": 1})).json()["items"][0]
     lines = (
         await northgate.get("/v1/billing/invoices/suggestions", params={"encounter_id": encounter["id"]})
-    ).json()
+    ).json()["lines"]
 
     consultation = next(line for line in lines if line["source"] == "consultation")
     tariff = next(
@@ -177,7 +177,7 @@ async def test_a_lab_line_is_priced_by_its_own_code(northgate, northgate_doctor)
 
     lines = (
         await northgate.get("/v1/billing/invoices/suggestions", params={"encounter_id": encounter["id"]})
-    ).json()
+    ).json()["lines"]
     lab_line = next(line for line in lines if line["source"] == "lab")
     cbct = next(
         row
@@ -202,12 +202,63 @@ async def test_an_unpriced_line_says_so_rather_than_guessing(northgate, northgat
             await northgate.get(
                 "/v1/billing/invoices/suggestions", params={"encounter_id": encounter["id"]}
             )
-        ).json()
+        ).json()["lines"]
         line = next(line for line in lines if line["source"] == "consultation")
         assert line["unit_price"] == 0
         assert line["priced"] is False
     finally:
         await northgate.patch(f"/v1/pricing/services/{consultation['id']}", json={"active": True})
+
+
+async def test_a_doctor_with_their_own_fee_overrides_the_clinic_default(northgate, northgate_doctor):
+    doctor = (await northgate.get("/v1/users/doctors")).json()[0]
+    patient = (
+        await northgate.post(
+            "/v1/patients",
+            json={"full_name": "Doctor Fee Test", "dob": "1985-05-05", "sex": "male", "phone": "+44 7700 900557"},
+        )
+    ).json()
+    encounter = (
+        await northgate.post(
+            "/v1/encounters",
+            json={
+                "patient_id": patient["id"], "doctor_id": doctor["id"], "date": "2026-09-08",
+                "chief_complaint": "Fee test", "notes": "", "diagnosis": "", "clinical_ext": {},
+            },
+        )
+    ).json()
+
+    # No fee set yet: the clinic default applies.
+    before = (
+        await northgate.get("/v1/billing/invoices/suggestions", params={"encounter_id": encounter["id"]})
+    ).json()
+    consultation_before = next(line for line in before["lines"] if line["source"] == "consultation")
+    default_price = consultation_before["unit_price"]
+
+    # Set this doctor's own fee.
+    updated = (
+        await northgate.patch(f"/v1/pricing/doctors/{doctor['id']}", json={"consultation_fee": 999.0})
+    ).json()
+    assert updated["consultation_fee"] == 999.0
+
+    after = (
+        await northgate.get("/v1/billing/invoices/suggestions", params={"encounter_id": encounter["id"]})
+    ).json()
+    consultation_after = next(line for line in after["lines"] if line["source"] == "consultation")
+    assert consultation_after["unit_price"] == 999.0
+    assert consultation_after["unit_price"] != default_price
+
+    # Clearing it reverts to the clinic default.
+    cleared = (
+        await northgate.patch(f"/v1/pricing/doctors/{doctor['id']}", json={"consultation_fee": None})
+    ).json()
+    assert cleared["consultation_fee"] is None
+
+    reverted = (
+        await northgate.get("/v1/billing/invoices/suggestions", params={"encounter_id": encounter["id"]})
+    ).json()
+    consultation_reverted = next(line for line in reverted["lines"] if line["source"] == "consultation")
+    assert consultation_reverted["unit_price"] == default_price
 
 
 # --- lab and pharmacy bill separately ---------------------------------------
@@ -490,6 +541,69 @@ async def test_a_stock_line_can_be_opened_and_starts_at_nothing(northgate):
     levels = (await northgate.get("/v1/inventory/levels")).json()
     ours = next(row for row in levels if row["item_id"] == item["id"])
     assert ours["on_hand"] == 0
+
+
+async def test_a_stock_line_records_manufacturer_description_and_hsn_code(northgate):
+    """The companion frontend sends these on every create and edit — a 422
+    here means every save from that form breaks."""
+    created = await northgate.post(
+        "/v1/inventory/items",
+        json={
+            "sku": "DETAIL-1",
+            "name": "Line with full detail",
+            "category": "medicine",
+            "manufacturer": "Cipla Ltd",
+            "description": "Blister pack of 10, store below 25C",
+            "hsn_code": "30049099",
+        },
+    )
+    assert created.status_code == 201, created.text
+    item = created.json()
+    assert item["manufacturer"] == "Cipla Ltd"
+    assert item["description"] == "Blister pack of 10, store below 25C"
+    assert item["hsn_code"] == "30049099"
+
+    listed = next(
+        row for row in (await northgate.get("/v1/inventory/items")).json() if row["id"] == item["id"]
+    )
+    assert listed["manufacturer"] == "Cipla Ltd"
+    assert listed["description"] == "Blister pack of 10, store below 25C"
+    assert listed["hsn_code"] == "30049099"
+
+    edited = (
+        await northgate.patch(
+            f"/v1/inventory/items/{item['id']}",
+            json={
+                "manufacturer": "Sun Pharma",
+                "description": "Repacked, store below 30C",
+                "hsn_code": "30049011",
+            },
+        )
+    ).json()
+    assert edited["manufacturer"] == "Sun Pharma"
+    assert edited["description"] == "Repacked, store below 30C"
+    assert edited["hsn_code"] == "30049011"
+
+    refetched = next(
+        row for row in (await northgate.get("/v1/inventory/items")).json() if row["id"] == item["id"]
+    )
+    assert refetched["manufacturer"] == "Sun Pharma"
+    assert refetched["description"] == "Repacked, store below 30C"
+    assert refetched["hsn_code"] == "30049011"
+
+
+async def test_a_stock_line_defaults_these_detail_fields_to_blank(northgate):
+    """A create that doesn't send them at all — the common case before every
+    caller is updated — must not fail, and should read back as empty."""
+    created = await northgate.post(
+        "/v1/inventory/items",
+        json={"sku": "DETAIL-2", "name": "No detail supplied", "category": "consumable"},
+    )
+    assert created.status_code == 201, created.text
+    item = created.json()
+    assert item["manufacturer"] == ""
+    assert item["description"] == ""
+    assert item["hsn_code"] == ""
 
 
 async def test_two_stock_lines_cannot_share_a_code(northgate):

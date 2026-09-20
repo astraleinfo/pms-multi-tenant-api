@@ -146,6 +146,25 @@ async def test_dispensing_puts_a_charge_on_the_pharmacy_counter(northgate, north
     assert pharmacy["due"] == 60.0
 
 
+async def test_the_clinic_counter_reflects_a_doctors_own_fee(northgate, northgate_doctor):
+    patient = await _new_patient(northgate, "Doctor Fee Account")
+    doctor = await _doctor(northgate)
+
+    await northgate.patch(f"/v1/pricing/doctors/{doctor['id']}", json={"consultation_fee": 777.0})
+    try:
+        await _encounter(northgate_doctor, patient, doctor, "Doctor's own fee")
+
+        account = (await northgate.get(f"/v1/billing/patients/{patient['id']}/account")).json()
+        clinic = account["departments"]["clinic"]
+        assert len(clinic["unbilled"]) == 1
+        charge = clinic["unbilled"][0]
+        assert charge["unit_price"] == 777.0
+        assert charge["priced"] is True
+        assert clinic["due"] == charge["total"]
+    finally:
+        await northgate.patch(f"/v1/pricing/doctors/{doctor['id']}", json={"consultation_fee": None})
+
+
 async def test_a_visit_charges_each_counter_separately(northgate, northgate_doctor):
     patient = await _new_patient(northgate, "Three Counters")
     doctor = await _doctor(northgate)
@@ -196,6 +215,60 @@ async def test_a_counter_bills_only_its_own_charges(northgate, northgate_doctor)
     assert account["departments"]["pharmacy"]["outstanding"] == 50.0
     # …and the lab's is untouched.
     assert account["departments"]["lab"]["due"] == 350.0
+
+
+async def test_compose_invoice_does_not_resuggest_a_pharmacy_settled_item(northgate, northgate_doctor):
+    """§3.12 Compose Invoice must not offer a line the pharmacy counter has
+    already billed and been paid for — and voiding that invoice must put it
+    straight back on offer, the same as any other counter charge."""
+    patient = await _new_patient(northgate, "No Double Bill")
+    doctor = await _doctor(northgate)
+    item = await _stocked_item(northgate)
+    made = await _dispensed(northgate_doctor, northgate, doctor, patient, item, qty=6)
+    encounter_id = made["encounter"]["id"]
+
+    # Before the counter has billed anything, the pharmacy line is suggested.
+    before = (
+        await northgate.get("/v1/billing/invoices/suggestions", params={"encounter_id": encounter_id})
+    ).json()
+    assert any(line["source"] == "pharmacy" for line in before["lines"])
+    assert before["already_billed"] == []
+
+    # The pharmacy counter bills and takes payment for it, the way the
+    # dispensing window actually does — raise then settle.
+    raised = await northgate.post(
+        f"/v1/billing/patients/{patient['id']}/invoices",
+        json={"department": "pharmacy", "issue": True},
+    )
+    assert raised.status_code == 201, raised.text
+    invoice = raised.json()
+    settled = await northgate.post(
+        f"/v1/billing/patients/{patient['id']}/payments",
+        json={"department": "pharmacy", "amount": 60.0, "method": "cash"},
+    )
+    assert settled.status_code == 200, settled.text
+
+    # Now Compose Invoice for the same visit must not offer it again.
+    after = (
+        await northgate.get("/v1/billing/invoices/suggestions", params={"encounter_id": encounter_id})
+    ).json()
+    assert not any(line["source"] == "pharmacy" for line in after["lines"])
+    assert len(after["already_billed"]) == 1
+    billed = after["already_billed"][0]
+    assert billed["qty"] == 6
+    assert billed["invoices"][0]["invoice_status"] == "paid"
+
+    # Voiding the invoice is how a mistaken charge is undone — the item goes
+    # straight back to being suggested, exactly as if it had never been billed.
+    voided = await northgate.post(f"/v1/billing/invoices/{invoice['id']}/void")
+    assert voided.status_code == 200, voided.text
+
+    reopened = (
+        await northgate.get("/v1/billing/invoices/suggestions", params={"encounter_id": encounter_id})
+    ).json()
+    assert reopened["already_billed"] == []
+    pharmacy_line = next(line for line in reopened["lines"] if line["source"] == "pharmacy")
+    assert pharmacy_line["qty"] == 6
 
 
 async def test_the_same_charge_is_never_billed_twice(northgate, northgate_doctor):

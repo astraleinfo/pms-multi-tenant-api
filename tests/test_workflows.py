@@ -105,6 +105,9 @@ async def test_register_book_check_in_consult_prescribe_dispense_bill(client, no
     # 3.8 — prescribing is core.
     items = (await northgate.get("/v1/inventory/items")).json()
     stock_item = next(i for i in items if i["name"].startswith("Ibuprofen"))
+    assert "manufacturer" in stock_item
+    assert "description" in stock_item
+    assert "hsn_code" in stock_item
     prescription = (
         await doctor_client.post(
             f"/v1/encounters/{encounter['id']}/prescriptions",
@@ -152,7 +155,7 @@ async def test_register_book_check_in_consult_prescribe_dispense_bill(client, no
     # 3.12 — the invoice, composed from the visit.
     suggestions = (
         await northgate.get("/v1/billing/invoices/suggestions", params={"encounter_id": encounter["id"]})
-    ).json()
+    ).json()["lines"]
     assert any(line["source"] == "consultation" for line in suggestions)
     assert any(line["source"] == "pharmacy" for line in suggestions)
 
@@ -365,6 +368,21 @@ async def test_a_purchase_adds_to_the_ledger_and_the_batch(northgate):
         r for r in (await northgate.get("/v1/inventory/levels")).json() if r["item_id"] == item["id"]
     )
     assert after["on_hand"] == before["on_hand"] + 25
+
+
+async def test_expiry_alert_threshold_is_configurable(northgate):
+    default = (await northgate.get("/v1/inventory/expiring")).json()
+
+    updated = (await northgate.patch("/v1/tenant/config", json={"expiry_alert_days": 5})).json()
+    assert updated["expiry_alert_days"] == 5
+
+    tightened = (await northgate.get("/v1/inventory/expiring")).json()
+    assert len(tightened) <= len(default)
+
+    override = (await northgate.get("/v1/inventory/expiring", params={"within_days": 730})).json()
+    assert len(override) >= len(tightened)
+
+    await northgate.patch("/v1/tenant/config", json={"expiry_alert_days": 90})
 
 
 async def test_an_invoice_can_be_voided_but_not_paid_afterwards(northgate):

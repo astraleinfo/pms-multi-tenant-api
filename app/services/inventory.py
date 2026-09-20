@@ -105,6 +105,9 @@ async def create_item(
     mrp: float = 0,
     margin_pct: float = 0,
     pricing_mode: PricingMode = PricingMode.PRICE,
+    manufacturer: str = "",
+    description: str = "",
+    hsn_code: str = "",
 ) -> InventoryItem:
     """Open a new stock line.
 
@@ -125,6 +128,9 @@ async def create_item(
         mrp=_money(mrp),
         margin_pct=_money(margin_pct),
         pricing_mode=pricing_mode,
+        manufacturer=manufacturer.strip(),
+        description=description.strip(),
+        hsn_code=hsn_code.strip(),
     )
     item.unit_price = sale_price(
         pricing_mode,
@@ -151,7 +157,7 @@ async def update_item(
     pricing mode now says it should be."""
     item = await get_item(session, tenant_id, item_id)
 
-    for field in ("name", "form", "strength"):
+    for field in ("name", "form", "strength", "manufacturer", "description", "hsn_code"):
         if changes.get(field) is not None:
             setattr(item, field, str(changes[field]).strip())
     if changes.get("unit") is not None:

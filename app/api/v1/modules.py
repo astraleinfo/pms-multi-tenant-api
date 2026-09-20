@@ -25,6 +25,7 @@ from app.schemas.clinical import (
     PrescriptionOut,
 )
 from app.schemas.ops import (
+    AlreadyBilledLineOut,
     ChargeOut,
     CounterPaymentIn,
     CounterPaymentOut,
@@ -43,6 +44,7 @@ from app.schemas.ops import (
     StockLevelOut,
     StockMovementIn,
     SuggestedLineOut,
+    SuggestedLinesOut,
 )
 from app.services import accounts as account_service
 from app.services import audit
@@ -327,6 +329,9 @@ async def create_item(
         mrp=payload.mrp,
         margin_pct=payload.margin_pct,
         pricing_mode=payload.pricing_mode,
+        manufacturer=payload.manufacturer,
+        description=payload.description,
+        hsn_code=payload.hsn_code,
     )
     await audit.record(
         ctx.session, action="inventory.item.create", tenant_id=ctx.tenant_id,
@@ -407,11 +412,12 @@ async def stock_levels(
 
 @inventory_router.get("/expiring", response_model=list[InventoryBatchOut])
 async def expiring_batches(
-    within_days: int = Query(default=90, ge=1, le=730),
+    within_days: int | None = Query(default=None, ge=1, le=730),
     ctx: TenantContext = Depends(require_feature("inventory", Permission.INVENTORY_READ)),
 ) -> list[InventoryBatchOut]:
+    days = within_days if within_days is not None else ctx.config.expiry_alert_days
     rows = await inventory_service.near_expiry(
-        ctx.session, ctx.tenant_id, today=ctx.today, within_days=within_days
+        ctx.session, ctx.tenant_id, today=ctx.today, within_days=days
     )
     return [InventoryBatchOut.of(b) for b in rows]
 
@@ -512,15 +518,18 @@ async def create_invoice(
     return InvoiceOut.of(invoice, ctx.tz, billing_service.totals_for(invoice))
 
 
-@billing_router.get("/invoices/suggestions", response_model=list[SuggestedLineOut])
+@billing_router.get("/invoices/suggestions", response_model=SuggestedLinesOut)
 async def suggested_lines(
     encounter_id: str,
     ctx: TenantContext = Depends(require_feature("billing", Permission.BILLING_WRITE)),
-) -> list[SuggestedLineOut]:
-    lines = await billing_service.suggest_lines(
+) -> SuggestedLinesOut:
+    result = await billing_service.suggest_lines(
         ctx.session, ctx.tenant_id, encounter_id=parse_uuid(encounter_id, what="consultation")
     )
-    return [SuggestedLineOut(**line) for line in lines]
+    return SuggestedLinesOut(
+        lines=[SuggestedLineOut(**line) for line in result["lines"]],
+        already_billed=[AlreadyBilledLineOut(**line) for line in result["already_billed"]],
+    )
 
 
 @billing_router.get("/invoices/{invoice_id}", response_model=InvoiceOut)

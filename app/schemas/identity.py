@@ -9,7 +9,7 @@ from __future__ import annotations
 from pydantic import EmailStr, Field
 
 from app.models.enums import AccountStatus
-from app.schemas.common import ApiModel, InputModel, day
+from app.schemas.common import ApiModel, InputModel, day, money
 
 
 class UserPreferences(ApiModel):
@@ -45,6 +45,7 @@ class UserOut(ApiModel):
     email: str
     initials: str
     speciality: str | None = None
+    consultation_fee: float | None = None
     status: AccountStatus
     failed_attempts: int
     last_sign_in: str | None
@@ -58,7 +59,9 @@ class UserOut(ApiModel):
     def of(cls, u, tz: str | None = None) -> UserOut:
         return cls(
             id=str(u.id), tenant_id=str(u.tenant_id), name=u.name, role=u.role, email=u.email,
-            initials=u.initials, speciality=u.speciality, status=u.status,
+            initials=u.initials, speciality=u.speciality,
+            consultation_fee=money(u.consultation_fee) if u.consultation_fee is not None else None,
+            status=u.status,
             failed_attempts=u.failed_attempts, last_sign_in=day(u.last_sign_in, tz),
             must_change_password=u.must_change_password,
             invitation_pending=u.status == AccountStatus.INVITED and u.password_hash is None,

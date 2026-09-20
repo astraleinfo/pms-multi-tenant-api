@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     Boolean,
@@ -18,6 +19,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     UniqueConstraint,
     func,
@@ -47,6 +49,10 @@ class User(Base, TenantScoped, TimestampMixin):
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     initials: Mapped[str] = mapped_column(String(4), nullable=False, default="")
     speciality: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    #: A doctor's own price for a consultation. NULL means "use the clinic's
+    #: default" (the ServicePrice row with code CONSULTATION) — never zero,
+    #: which would mean "this doctor's consultation is free."
+    consultation_fee: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     status: Mapped[AccountStatus] = mapped_column(
         Enum(AccountStatus, name="account_status", values_callable=lambda e: [m.value for m in e]),
         nullable=False,

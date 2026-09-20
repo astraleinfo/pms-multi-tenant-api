@@ -21,9 +21,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import Conflict, NotFound
+from app.core.permissions import Role
 from app.models.enums import ServiceKind
+from app.models.identity import User
 from app.models.ops import ServicePrice
 from app.models.tenancy import LabTest
+from app.services import tenants as tenant_service
 
 CENTS = Decimal("0.01")
 
@@ -189,3 +192,42 @@ async def import_lab_catalogue(
 
     await session.flush()
     return created
+
+
+async def resolve_consultation_price(
+    session: AsyncSession, tenant_id: uuid.UUID, doctor_id: uuid.UUID
+) -> tuple[Decimal, Decimal, bool]:
+    """What this doctor's consultation costs: their own fee if they have one,
+    otherwise the clinic's default tariff. Returns (price, tax_pct, priced) —
+    `priced` is false only when neither exists, the same "say so rather than
+    guess" convention every other tariff lookup follows."""
+    config = await tenant_service.get_config(session, tenant_id)
+    doctor = (
+        await session.execute(
+            select(User).where(User.id == doctor_id, User.tenant_id == tenant_id)
+        )
+    ).scalar_one_or_none()
+    if doctor is not None and doctor.consultation_fee is not None:
+        return money(doctor.consultation_fee), money(config.tax_pct), True
+
+    default = await price_for(session, tenant_id, kind=ServiceKind.CONSULTATION, code=CONSULTATION_CODE)
+    if default is not None:
+        return money(default.price), money(default.tax_pct), True
+    return money(0), money(config.tax_pct), False
+
+
+async def set_doctor_fee(
+    session: AsyncSession, tenant_id: uuid.UUID, doctor_id: uuid.UUID, fee: float | None
+) -> User:
+    doctor = (
+        await session.execute(
+            select(User).where(
+                User.id == doctor_id, User.tenant_id == tenant_id, User.role == Role.DOCTOR.value
+            )
+        )
+    ).scalar_one_or_none()
+    if doctor is None:
+        raise NotFound("No such clinician.")
+    doctor.consultation_fee = money(fee) if fee is not None else None
+    await session.flush()
+    return doctor
