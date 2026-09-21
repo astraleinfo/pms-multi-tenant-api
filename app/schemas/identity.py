@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pydantic import EmailStr, Field
 
-from app.models.enums import AccountStatus
+from app.models.enums import AccountStatus, PlatformRole
 from app.schemas.common import ApiModel, InputModel, day, money
 
 
@@ -74,10 +74,16 @@ class PlatformUserOut(ApiModel):
     email: str
     initials: str
     title: str
+    #: `super_admin` or `support`. The console hides what this role cannot
+    #: reach; the API refuses it either way, so this is a courtesy, not a gate.
+    role: str = PlatformRole.SUPER_ADMIN.value
 
     @classmethod
     def of(cls, u) -> PlatformUserOut:
-        return cls(id=str(u.id), name=u.name, email=u.email, initials=u.initials, title=u.title)
+        return cls(
+            id=str(u.id), name=u.name, email=u.email, initials=u.initials,
+            title=u.title, role=u.role,
+        )
 
 
 class SessionOut(ApiModel):

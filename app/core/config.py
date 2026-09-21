@@ -119,6 +119,58 @@ class Settings(BaseSettings):
     celery_visibility_timeout_seconds: int = 60 * 60
     celery_sweep_seconds: int = 60
 
+    # ------------------------------------------------- background-job monitor
+    # Flower watches Celery's event stream and keeps the task history the
+    # console's jobs section reads. It is never published: it answers on the
+    # internal container network only, and the one way to it from outside is
+    # `/v1/platform/jobs/...`, which is behind a super-admin check.
+    #
+    # Switching this off leaves the routes in place — they still refuse anyone
+    # who is not a super admin — and reports the monitor as unavailable.
+    flower_enabled: bool = True
+    flower_url: str = "http://flower:5555"
+    #: What Flower is told it is mounted at (`--url-prefix`). Flower builds its
+    #: own links from it, so it has to be the path the *browser* uses, and the
+    #: API has to forward to the same one. Behind a proxy that serves this API
+    #: under `/api` — which is what the web app's rewrite does — set it to
+    #: `api/v1/platform/jobs/flower` on both the API and the Flower container.
+    flower_url_prefix: str = "v1/platform/jobs/flower"
+    #: `user:password`, matching `--basic-auth` on the Flower container. A
+    #: private network is not an authorisation story on its own: anything else
+    #: that lands on it would otherwise have the whole job history.
+    flower_basic_auth: str = ""
+    flower_timeout_seconds: float = 10.0
+    #: How long the cookie that lets a browser load Flower's own pages lasts.
+    #: Short on purpose — the console mints a new one each time it opens the
+    #: section, and the cookie is good for nothing else (see the `scp` claim).
+    flower_session_ttl_seconds: int = 900
+    #: Where that cookie is sent back to — the same trap as the refresh cookie:
+    #: it must match the path the *browser* uses, not the one this app sees.
+    flower_cookie_path: str = "/"
+    #: How many task records to read from Flower for one screen. Flower holds a
+    #: bounded history in memory; this is the window the console counts over,
+    #: and it is reported alongside the totals so nobody reads them as all time.
+    flower_task_window: int = 500
+    #: How often to make Flower re-inspect the workers. Flower inspects once at
+    #: startup and then never again unless a request asks it to — and in a
+    #: container set the monitor usually starts before any worker exists, so
+    #: that one inspection finds nothing and the concurrency and queue columns
+    #: would stay empty for the life of the process. This is a ping to every
+    #: worker, so it is throttled rather than done on each poll of the screen.
+    flower_inspect_seconds: float = 30.0
+
+    @property
+    def flower_api_base(self) -> str:
+        """Where this API talks to Flower, prefix included."""
+        prefix = self.flower_url_prefix.strip("/")
+        base = self.flower_url.rstrip("/")
+        return f"{base}/{prefix}" if prefix else base
+
+    @property
+    def flower_credentials(self) -> tuple[str, str] | None:
+        user, _, password = self.flower_basic_auth.partition(":")
+        return (user, password) if user else None
+
     @property
     def broker_url(self) -> str:
         return self.celery_broker_url or self.redis_url
@@ -193,6 +245,11 @@ class Settings(BaseSettings):
             problems.append("MAIL_PROVIDER must be a real transport, not 'console'")
         if self.public_scheme != "https":
             problems.append("PUBLIC_SCHEME must be https")
+        if self.flower_enabled and not self.flower_basic_auth:
+            # Flower is not published, but "on a private network" is not a
+            # credential. Without this, anything else on that network reads
+            # every job's arguments.
+            problems.append("FLOWER_BASIC_AUTH must be set, or FLOWER_ENABLED turned off")
         return problems
 
 

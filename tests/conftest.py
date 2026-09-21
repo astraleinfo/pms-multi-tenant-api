@@ -36,6 +36,13 @@ os.environ.update(
         "LOGIN_RATE_LIMIT": "1000/minute",
         "PASSWORD_RESET_RATE_LIMIT": "1000/minute",
         "API_RATE_LIMIT": "100000/minute",
+        # No Flower in the suite. Point the reader at a port nothing listens on
+        # so "the monitor is down" is instant and deterministic — which is the
+        # state every guard test below wants anyway: the answer to "may I look
+        # at this" must not depend on whether there is anything to look at.
+        "FLOWER_URL": "http://127.0.0.1:9/",
+        "FLOWER_TIMEOUT_SECONDS": "2",
+        "FLOWER_BASIC_AUTH": "test:test",
     }
 )
 
@@ -59,10 +66,16 @@ APEX = "localhost"
 ACCOUNTS = {
     "northgate_admin": (NORTHGATE, "admin@northgate.clinic", "admin-2026"),
     "northgate_doctor": (NORTHGATE, "a.iyer@northgate.clinic", "aiyer-2026"),
+    "northgate_reception": (NORTHGATE, "front@northgate.clinic", "front-2026"),
+    "northgate_pharmacist": (NORTHGATE, "pharmacy@northgate.clinic", "pharmacy-2026"),
+    "northgate_lab": (NORTHGATE, "lab@northgate.clinic", "lab-2026"),
     "clearview_admin": (CLEARVIEW, "admin@clearview.eye", "admin-2026"),
     "rowan_admin": (ROWAN, "owner@rowanskin.co", "owner-2026"),
 }
+#: Ines is a `super_admin`; Rafael is `support`, which is every part of the
+#: console except the platform's own machinery.
 PLATFORM = ("ines@astrale.health", "ines-2026")
+PLATFORM_SUPPORT = ("rafael@astrale.health", "rafael-2026")
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -159,14 +172,24 @@ async def rowan(client) -> Signed:
     return await sign_in(client, "rowan_admin")
 
 
-@pytest.fixture
-async def console(client) -> Signed:
-    email, password = PLATFORM
+async def sign_in_console(client: AsyncClient, credentials=PLATFORM) -> Signed:
+    email, password = credentials
     response = await client.post(
         "/v1/platform/auth/login", headers={"Host": CONSOLE}, json={"email": email, "password": password}
     )
     assert response.status_code == 200, response.text
     return Signed(client, CONSOLE, response.json()["access_token"], response.json())
+
+
+@pytest.fixture
+async def console(client) -> Signed:
+    return await sign_in_console(client)
+
+
+@pytest.fixture
+async def console_support(client) -> Signed:
+    """Signed into the console, and not a super admin."""
+    return await sign_in_console(client, PLATFORM_SUPPORT)
 
 
 async def audit_lines(tenant_id: str, *, action: str | None = None) -> list[dict]:

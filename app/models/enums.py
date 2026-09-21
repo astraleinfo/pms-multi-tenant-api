@@ -29,6 +29,57 @@ class AccountStatus(StrEnum):
     LOCKED = "locked"
 
 
+class PlatformRole(StrEnum):
+    """What a platform account may do in the console.
+
+    Clinic roles live in `app.core.permissions`; this is the other side of the
+    seam. `super_admin` is the whole console, including the parts that look at
+    the platform's own machinery — background jobs, the workers running them,
+    the broker behind both. `support` is the desk: clinics, their requests, and
+    nothing underneath them.
+
+    Existing accounts were all of the first kind, so the column defaults to it;
+    narrowing somebody to `support` is a deliberate act.
+    """
+
+    SUPER_ADMIN = "super_admin"
+    SUPPORT = "support"
+
+
+class JobStatus(StrEnum):
+    """The buckets the console counts background jobs in.
+
+    Celery has more states than this and Flower reports every one of them;
+    these are the ones an operator actually asks about. `pending` folds
+    PENDING and RECEIVED together — from the console's point of view both mean
+    "queued, not started" — and `revoked` is kept separate from `failed`
+    because a job somebody cancelled is not a job that went wrong.
+    """
+
+    PENDING = "pending"
+    ACTIVE = "active"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    RETRIED = "retried"
+    REVOKED = "revoked"
+
+
+#: Celery's task states, mapped onto the six above. A state not listed here is
+#: reported as `pending`, which is what an unrecognised state means in practice:
+#: the broker has it and nothing has finished it.
+CELERY_STATE_STATUS: dict[str, JobStatus] = {
+    "PENDING": JobStatus.PENDING,
+    "RECEIVED": JobStatus.PENDING,
+    "STARTED": JobStatus.ACTIVE,
+    "SUCCESS": JobStatus.COMPLETED,
+    "FAILURE": JobStatus.FAILED,
+    "REJECTED": JobStatus.FAILED,
+    "RETRY": JobStatus.RETRIED,
+    "REVOKED": JobStatus.REVOKED,
+    "IGNORED": JobStatus.COMPLETED,
+}
+
+
 class AuthTokenPurpose(StrEnum):
     """Why a one-time link exists.
 

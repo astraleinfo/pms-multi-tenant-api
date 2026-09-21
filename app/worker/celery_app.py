@@ -1,9 +1,12 @@
 """The Celery application.
 
-    celery -A app.worker.celery_app worker --loglevel=INFO -Q pms
+    celery -A app.worker.celery_app worker --loglevel=INFO -Q pms -E
     celery -A app.worker.celery_app beat --loglevel=INFO
+    celery -A app.worker.celery_app flower --port=5555
 
-(`--pool=solo` on Windows, where the prefork pool does not work.)
+(`--pool=solo` on Windows, where the prefork pool does not work. `-E` is what
+feeds Flower; `worker_send_task_events` below turns it on by configuration so
+a worker started without the flag still reports.)
 
 A restart or a deploy must not lose a job. Three settings carry that, and the
 database carries the rest:
@@ -42,6 +45,12 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     # The database row is the result; nothing reads Celery's.
     task_ignore_result=True,
+    # The event stream Flower listens to. Without these a worker runs the job
+    # and says nothing about it, and the console's jobs section is an accurate
+    # picture of an empty room. They cost one small message per state change
+    # and nothing at all when no monitor is subscribed.
+    worker_send_task_events=True,
+    task_send_sent_event=True,
     task_serializer="json",
     accept_content=["json"],
     timezone="UTC",

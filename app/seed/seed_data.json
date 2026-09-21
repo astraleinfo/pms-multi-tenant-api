@@ -2185,7 +2185,8 @@
    "email": "ines@astrale.health",
    "password": "ines-2026",
    "initials": "IO",
-   "title": "Platform operations"
+   "title": "Platform operations",
+  "role": "super_admin"
   },
   {
    "id": "s2",
@@ -2193,7 +2194,8 @@
    "email": "rafael@astrale.health",
    "password": "rafael-2026",
    "initials": "RO",
-   "title": "Customer success"
+   "title": "Customer success",
+  "role": "support"
   }
  ],
  "PRESCRIPTIONS": [

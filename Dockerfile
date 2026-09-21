@@ -13,7 +13,9 @@ RUN apt-get update \
 
 COPY pyproject.toml ./
 COPY app ./app
-RUN pip install --no-cache-dir .
+# `[monitor]` brings Flower. One image runs the API, the worker, beat and the
+# monitor; which of them a container is decides on its command line.
+RUN pip install --no-cache-dir ".[monitor]"
 
 COPY alembic.ini ./
 COPY alembic ./alembic

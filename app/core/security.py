@@ -91,6 +91,12 @@ class AccessClaims:
     #: The clinic account the impersonator acts through, so writes have a real
     #: `users` row behind them and audit can name both parties.
     acting_user_id: uuid.UUID | None = None
+    #: What this token is *for*, when it is for one thing only. An ordinary
+    #: session token has no scope and opens everything the subject may reach;
+    #: a scoped one opens exactly the door named here and nothing else, which
+    #: is what makes it safe to hand to a browser as a cookie. Every general
+    #: dependency refuses a token that carries one.
+    scope: str | None = None
 
 
 def create_access_token(
@@ -103,6 +109,7 @@ def create_access_token(
     role: str | None = None,
     impersonated: bool = False,
     acting_user_id: uuid.UUID | None = None,
+    scope: str | None = None,
     ttl_seconds: int | None = None,
 ) -> str:
     now = datetime.now(timezone.utc)
@@ -128,6 +135,8 @@ def create_access_token(
     if impersonated:
         payload["imp"] = True
         payload["auid"] = str(acting_user_id) if acting_user_id else None
+    if scope:
+        payload["scp"] = scope
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
@@ -153,6 +162,10 @@ def decode_access_token(token: str) -> AccessClaims:
         raise TokenError("unknown subject kind")
 
     impersonated = payload.get("imp") is True
+
+    scope = payload.get("scp")
+    if scope is not None and not isinstance(scope, str):
+        raise TokenError("malformed scope")
 
     try:
         subject_id = uuid.UUID(payload["sub"])
@@ -181,4 +194,5 @@ def decode_access_token(token: str) -> AccessClaims:
         expires_at=datetime.fromtimestamp(payload["exp"], tz=timezone.utc),
         impersonated=impersonated,
         acting_user_id=acting_user_id,
+        scope=scope,
     )

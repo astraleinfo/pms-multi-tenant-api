@@ -33,6 +33,7 @@ from app.models.clinical import (
     PrescriptionItem,
     QueueEntry,
 )
+from app.models.enums import PlatformRole
 from app.models.identity import PlatformUser, User
 from app.models.ops import (
     InventoryBatch,
@@ -188,6 +189,7 @@ async def seed_platform_tables(session: AsyncSession, data: dict) -> None:
                 password_hash=hash_password(row["password"]),
                 initials=row["initials"],
                 title=row["title"],
+                role=row.get("role", PlatformRole.SUPER_ADMIN.value),
                 status="active",
             )
         )

@@ -7,6 +7,7 @@ from app.api.v1 import (
     auth,
     catalog,
     encounters,
+    jobs,
     messaging,
     modules,
     patients,
@@ -36,5 +37,6 @@ api_router.include_router(messaging.router)
 api_router.include_router(analytics.router)
 api_router.include_router(realtime.router)
 api_router.include_router(platform.router)
+api_router.include_router(jobs.router)
 
 __all__ = ["api_router"]

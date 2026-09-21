@@ -38,6 +38,12 @@ dev = [
     "pytest-asyncio>=0.23",
     "ruff>=0.5",
 ]
+# The Celery monitor. Not imported by this application at all — the API reads
+# it over HTTP like any other service — so it is an extra rather than a
+# dependency. The container image installs it because one image runs the API,
+# the worker, beat and Flower; a deployment that runs no monitor can leave it
+# out and set FLOWER_ENABLED=false.
+monitor = ["flower>=2.0"]
 # The outbox nudge, and only the nudge. `app/services/messaging/outbox.py`
 # imports this inside the call and swallows its absence on purpose — without it
 # a queued message waits for the sweep instead of going out immediately, which

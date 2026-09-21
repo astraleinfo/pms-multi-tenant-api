@@ -25,6 +25,7 @@ from app.core.logging import (
 )
 from app.db import guard  # noqa: F401 — importing installs the ORM isolation listeners
 from app.db.session import dispose_engine, engine
+from app.services import jobs as jobs_service
 
 log = logging.getLogger("pms")
 
@@ -57,6 +58,7 @@ async def lifespan(app: FastAPI):
         log.info("connected to postgres as %s", user)
 
     yield
+    await jobs_service.close()
     await dispose_engine()
 
 
