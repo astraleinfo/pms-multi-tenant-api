@@ -1,4 +1,4 @@
-"""Transactional email: invitations and password resets.
+"""Transactional email: invitations, password resets, and support requests.
 
 This is *not* the patient-messaging outbox. That belongs to a clinic, is wired
 to a clinic's own provider, and is scoped by tenant; this is the platform
@@ -47,12 +47,16 @@ class Email:
     subject: str
     text: str
     html: str | None = None
+    #: where a reply goes — a support request answers to the person who asked
+    reply_to: str | None = None
 
     def as_message(self) -> EmailMessage:
         message = EmailMessage()
         message["From"] = settings.mail_from
         message["To"] = self.to
         message["Subject"] = self.subject
+        if self.reply_to:
+            message["Reply-To"] = self.reply_to
         message["Auto-Submitted"] = "auto-generated"
         # Tells a client not to offer "unsubscribe" or threading on a message
         # that is a one-off answer to something the recipient just did.
@@ -252,7 +256,7 @@ def _footnote(text: str) -> str:
 </div>"""
 
 
-# --- the two messages this application sends ---------------------------------
+# --- the messages this application sends -------------------------------------
 
 
 def invitation(*, to: str, name: str, clinic: str, url: str, expires_in_days: int) -> Email:
@@ -335,3 +339,84 @@ def password_reset(*, to: str, name: str, clinic: str, url: str, expires_in_hour
         ),
     )
     return Email(to=to, subject=f"Reset your {clinic} password", text=text, html=html)
+
+
+def _facts(rows: list[tuple[str, str]]) -> str:
+    """A label/value table — the details the desk would otherwise have to ask for."""
+    cells = "".join(
+        f'<tr><td style="padding:6px 14px 6px 0;font-family:{_SANS};font-size:12px;font-weight:600;'
+        f'letter-spacing:0.4px;text-transform:uppercase;color:{_INK_3};white-space:nowrap;vertical-align:top;">{escape(label)}</td>'
+        f'<td style="padding:6px 0;font-family:{_SANS};font-size:14px;line-height:1.5;color:{_INK};">{escape(value)}</td></tr>'
+        for label, value in rows
+    )
+    return f"""<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:6px 0 4px 0;background-color:{_SURFACE_2};border:1px solid {_LINE};border-radius:9px;">
+  <tr><td style="padding:10px 14px;">
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0">{cells}</table>
+  </td></tr>
+</table>"""
+
+
+_SUPPORT_ASK = {
+    "activation": ("Enable {module} for {clinic}", "asked for the {module} module to be enabled."),
+    "walkthrough": ("Walkthrough of {module} for {clinic}", "asked for a walkthrough of the {module} module."),
+    "general": ("Support request from {clinic}", "sent a support request."),
+}
+
+
+def support_request(
+    *,
+    to: str,
+    kind: str,
+    clinic: str,
+    slug: str,
+    module: str | None,
+    module_key: str | None,
+    price: str | None,
+    requested_by: str,
+    reply_to: str | None,
+    message: str,
+    console_url: str,
+    reference: str,
+) -> Email:
+    """To the support desk, not to a clinic: one clinic asking for something.
+
+    Everything the desk needs to act is in the body — which clinic, which
+    module, who asked — and a reply goes straight back to the person who asked.
+    """
+    subject_t, line_t = _SUPPORT_ASK.get(kind, _SUPPORT_ASK["general"])
+    module_name = module or "a module"
+    subject = subject_t.format(module=module_name, clinic=clinic)
+    line = line_t.format(module=module_name)
+
+    rows = [("Clinic", f"{clinic} ({slug})")]
+    if module:
+        rows.append(("Module", f"{module} ({module_key})" if module_key else module))
+    if price:
+        rows.append(("Listed", f"{price} per month"))
+    rows.append(("Asked by", requested_by))
+    rows.append(("Reference", reference))
+
+    text = "\n".join(
+        [
+            f"{clinic} {line}",
+            "",
+            *(f"{label + ':':<11}{value}" for label, value in rows),
+            "",
+            *(["Message:", message, ""] if message else []),
+            f"Open the clinic in the console: {console_url}",
+            "",
+            "Reply to this email to answer the person who asked." if reply_to else "",
+        ]
+    ).rstrip() + "\n"
+
+    body = _paragraph(f"<strong style=\"color:{_INK};\">{escape(clinic)}</strong> {escape(line)}") + _facts(rows)
+    if message:
+        body += _paragraph(
+            f'<span style="white-space:pre-wrap;">{escape(message)}</span>', top=16
+        )
+    body += _button(console_url, "Open in the console")
+    if reply_to:
+        body += _footnote("Reply to this email to answer the person who asked.")
+
+    html = _shell(preheader=subject, heading=escape(subject), body=body)
+    return Email(to=to, subject=subject, text=text, html=html, reply_to=reply_to)

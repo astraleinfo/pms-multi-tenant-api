@@ -6,17 +6,27 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Request, Response, status
 from sqlalchemy import func, select
 
-from app.api.deps import TenantContext, current_tenant, parse_uuid, require_permission
+from app.api.deps import (
+    TenantContext,
+    client_ip,
+    current_tenant,
+    parse_uuid,
+    require_permission,
+    user_agent,
+)
+from app.core.config import settings
 from app.core.errors import Conflict, NotFound
 from app.core.permissions import Permission, Role, permissions_for
+from app.core.rate_limit import Rate, limiter
 from app.core.security import hash_password
 from app.models.enums import AccountStatus, AuthTokenPurpose, FieldEntity, FieldScope
 from app.models.identity import User
 from app.models.tenancy import Feature, FieldDefinition
 from app.schemas.identity import PasswordSetIn, UserCreateIn, UserOut, UserStatusIn
+from app.schemas.support import SupportRequestIn, SupportRequestOut
 from app.schemas.tenancy import (
     FeatureOut,
     FeaturePurchaseIn,
@@ -29,6 +39,7 @@ from app.schemas.tenancy import (
 )
 from app.services import audit, invitations, mailer
 from app.services import auth as auth_service
+from app.services import support as support_service
 from app.services import tenants as tenant_service
 
 log = logging.getLogger("pms.tenant")
@@ -88,6 +99,67 @@ async def deactivate_feature(
         actor_id=ctx.actor_id, actor_label=ctx.principal.label, entity="feature", entity_id=feature_key,
     )
     return TenantFeatureOut.of(row)
+
+
+# --- the support desk ---------------------------------------------------------
+#
+# A clinic cannot switch a module on for itself; it asks, and a super admin
+# grants it from the console. The ask is stored here and the desk is emailed by
+# the Celery worker, so a slow or broken mail server never holds up the clinic.
+
+
+@router.post(
+    "/tenant/support-requests",
+    response_model=SupportRequestOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_support_request(
+    payload: SupportRequestIn,
+    request: Request,
+    response: Response,
+    tasks: BackgroundTasks,
+    ctx: TenantContext = Depends(current_tenant),
+) -> SupportRequestOut:
+    """Ask the platform for a module, a walkthrough of one, or anything else.
+
+    Any signed-in member of staff may ask; the email says who did. The same
+    person repeating the same ask inside a few minutes gets the earlier request
+    back with `200` instead of `201`, and the desk is not emailed again.
+    """
+    limiter.check(f"support:{ctx.user.id}", Rate.parse(settings.support_request_rate_limit))
+    row, created = await support_service.create(
+        ctx.session,
+        tenant=ctx.tenant,
+        user=ctx.user,
+        actor_kind=ctx.actor_kind,
+        actor_label=ctx.principal.label,
+        kind=payload.kind,
+        feature_key=payload.feature_key,
+        message=payload.message,
+        ip=client_ip(request),
+        user_agent=user_agent(request),
+    )
+    if created:
+        # Imported here so the API process only touches Celery on this route.
+        from app.worker.tasks import enqueue_support_request
+
+        # Publishing is blocking I/O, and slow when Redis is down, so it runs in
+        # the threadpool after the response has gone — never on the event loop,
+        # and never between the clinic and "your request is in".
+        tasks.add_task(enqueue_support_request, ctx.tenant_id, row.id)
+    else:
+        response.status_code = status.HTTP_200_OK
+    return SupportRequestOut.of(row, ctx.tz)
+
+
+@router.get("/tenant/support-requests", response_model=list[SupportRequestOut])
+async def list_support_requests(
+    ctx: TenantContext = Depends(current_tenant),
+) -> list[SupportRequestOut]:
+    """This clinic's recent asks, newest first — so a module page can say
+    "requested on …" instead of offering the same button again."""
+    rows = await support_service.list_for_tenant(ctx.session, ctx.tenant_id)
+    return [SupportRequestOut.of(r, ctx.tz) for r in rows]
 
 
 # --- configuration (§3.3) ----------------------------------------------------

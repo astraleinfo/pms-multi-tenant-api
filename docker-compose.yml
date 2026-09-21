@@ -58,6 +58,40 @@ services:
       - ./app:/srv/app:ro
       - ./alembic:/srv/alembic:ro
 
+  # Celery. `stop_grace_period` lets a warm shutdown finish the job in hand
+  # before the container is killed; anything cut off anyway was never acked
+  # and goes back on the queue.
+  worker:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment: &worker-env
+      ENVIRONMENT: development
+      DATABASE_URL: postgresql+asyncpg://pms_app:app-password-change-me@db:5432/pms
+      JWT_SECRET: dev-secret-only-for-local-development-not-a-real-secret
+      APP_DOMAIN: localhost
+      REDIS_URL: redis://redis:6379/0
+    command: celery -A app.worker.celery_app worker -Q pms --loglevel=INFO
+    stop_grace_period: 60s
+    restart: unless-stopped
+    healthcheck:
+      disable: true
+
+  # Exactly one of these, ever: it schedules the sweep.
+  beat:
+    build: .
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment: *worker-env
+    command: celery -A app.worker.celery_app beat --loglevel=INFO --schedule /tmp/celerybeat-schedule
+    restart: unless-stopped
+    healthcheck:
+      disable: true
+
 volumes:
   pms-data:
   pms-redis:

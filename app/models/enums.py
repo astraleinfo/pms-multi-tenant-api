@@ -305,3 +305,22 @@ class MessageProvider(StrEnum):
 
     CONSOLE = "console"
     TWILIO = "twilio"
+
+
+class SupportRequestKind(StrEnum):
+    """What a clinic is asking the support desk for. `activation` and
+    `walkthrough` are about one module; `general` is anything else."""
+
+    ACTIVATION = "activation"
+    WALKTHROUGH = "walkthrough"
+    GENERAL = "general"
+
+
+class SupportRequestStatus(StrEnum):
+    """Whether the desk has been told. `queued` is the only state the worker
+    picks up; `failed` is parked after the last attempt, and the request itself
+    still stands — the row is the ask, the email is only how the desk hears."""
+
+    QUEUED = "queued"
+    SENT = "sent"
+    FAILED = "failed"

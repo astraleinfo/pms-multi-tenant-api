@@ -27,6 +27,7 @@ from app.models.identity import PlatformUser
 from app.models.tenancy import ClinicalType, Feature, Tenant
 from app.schemas.common import zone
 from app.schemas.identity import PlatformUserOut, UserOut
+from app.schemas.support import SupportRequestOut
 from app.schemas.tenancy import (
     ClinicalTypeOut,
     FeatureOut,
@@ -45,6 +46,7 @@ from app.schemas.tenancy import (
 from app.services import audit, invitations, mailer
 from app.services import auth as auth_service
 from app.services import platform as platform_service
+from app.services import support as support_service
 from app.services import tenants as tenant_service
 from app.services.tenants import get_config
 
@@ -61,7 +63,7 @@ async def me(staff: PlatformUser = Depends(current_platform_user)) -> PlatformUs
 @router.get("/tenants", response_model=list[TenantOut])
 async def list_tenants(
     staff: PlatformUser = Depends(current_platform_user),
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_session, scope="function"),
 ) -> list[TenantOut]:
     rows = await platform_service.list_tenants(session)
     return [TenantOut.of(t) for t in rows]
@@ -71,7 +73,7 @@ async def list_tenants(
 async def check_slug(
     slug: str = Query(min_length=1, max_length=40),
     staff: PlatformUser = Depends(current_platform_user),
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_session, scope="function"),
 ) -> SlugCheckOut:
     """Is this subdomain free, and if not, why not.
 
@@ -94,7 +96,7 @@ async def create_tenant(
     payload: TenantCreateIn,
     request: Request,
     staff: PlatformUser = Depends(current_platform_user),
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_session, scope="function"),
 ) -> TenantCreatedOut:
     """Claims the subdomain, seeds core entitlements, clones the clinical-type
     field set, writes a configuration, and invites the first administrator.
@@ -185,7 +187,7 @@ async def update_tenant(
     payload: TenantPatchIn,
     request: Request,
     staff: PlatformUser = Depends(current_platform_user),
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_session, scope="function"),
 ) -> TenantOut:
     """Edit a clinic's record.
 
@@ -210,7 +212,7 @@ async def update_tenant(
 async def tenant_features(
     tenant_id: str,
     staff: PlatformUser = Depends(current_platform_user),
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_session, scope="function"),
 ) -> list[TenantFeatureOut]:
     """Which modules this clinic has, as the console sees them."""
     clinic = await _clinic(session, tenant_id)
@@ -225,7 +227,7 @@ async def set_tenant_feature(
     payload: TenantFeatureSetIn,
     request: Request,
     staff: PlatformUser = Depends(current_platform_user),
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_session, scope="function"),
 ) -> TenantFeatureOut:
     """Switch a module on or off for one clinic.
 
@@ -251,11 +253,24 @@ async def set_tenant_feature(
     return TenantFeatureOut.of(row)
 
 
+@router.get("/tenants/{tenant_id}/support-requests", response_model=list[SupportRequestOut])
+async def tenant_support_requests(
+    tenant_id: str,
+    staff: PlatformUser = Depends(current_platform_user),
+    session: AsyncSession = Depends(db_session, scope="function"),
+) -> list[SupportRequestOut]:
+    """What this clinic has asked the desk for, newest first — the list a
+    super admin works from when granting modules."""
+    clinic = await _clinic(session, tenant_id)
+    rows = await support_service.list_for_tenant(session, clinic.id)
+    return [SupportRequestOut.of(r, clinic.timezone) for r in rows]
+
+
 @router.get("/tenants/{tenant_id}/users", response_model=list[UserOut])
 async def tenant_users(
     tenant_id: str,
     staff: PlatformUser = Depends(current_platform_user),
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_session, scope="function"),
 ) -> list[UserOut]:
     """This clinic's staff, so the console can see who is still waiting on an
     invitation. Support accounts are left out — they are the console's own
@@ -279,7 +294,7 @@ async def resend_invitation(
     user_id: str,
     request: Request,
     staff: PlatformUser = Depends(current_platform_user),
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_session, scope="function"),
 ) -> TenantCreatedOut:
     """Send this account its link again.
 
@@ -322,7 +337,7 @@ async def impersonate(
     tenant_id: str,
     request: Request,
     staff: PlatformUser = Depends(current_platform_user),
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_session, scope="function"),
 ) -> ImpersonationOut:
     """Open a support session inside a clinic.
 
@@ -373,7 +388,7 @@ async def set_tenant_status(
     payload: TenantStatusIn,
     request: Request,
     staff: PlatformUser = Depends(current_platform_user),
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_session, scope="function"),
 ) -> TenantOut:
     """Suspending a clinic takes its subdomain offline: sign-in is refused and
     every existing session stops resolving."""
@@ -391,7 +406,7 @@ async def set_tenant_status(
 @router.get("/snapshot", response_model=PlatformSnapshotOut)
 async def snapshot(
     staff: PlatformUser = Depends(current_platform_user),
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_session, scope="function"),
 ) -> PlatformSnapshotOut:
     """Counts per clinic, gathered one clinic at a time with that clinic bound
     to the session — the console never runs an unscoped query either."""
@@ -418,7 +433,7 @@ async def snapshot(
 @router.get("/catalog/clinical-types", response_model=list[ClinicalTypeOut])
 async def clinical_types(
     staff: PlatformUser = Depends(current_platform_user),
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_session, scope="function"),
 ) -> list[ClinicalTypeOut]:
     rows = (await session.execute(select(ClinicalType).order_by(ClinicalType.label))).scalars()
     return [ClinicalTypeOut.of(c) for c in rows]
@@ -427,7 +442,7 @@ async def clinical_types(
 @router.get("/catalog/features", response_model=list[FeatureOut])
 async def features(
     staff: PlatformUser = Depends(current_platform_user),
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_session, scope="function"),
 ) -> list[FeatureOut]:
     rows = (await session.execute(select(Feature).order_by(Feature.name))).scalars()
     return [FeatureOut.of(f) for f in rows]

@@ -97,6 +97,32 @@ class Settings(BaseSettings):
     # without invalidating sessions.
     secrets_key: str = ""
 
+    # ---------------------------------------------------------------- support
+    # Where a clinic's "enable this module" / "show me a walkthrough" request
+    # is emailed. The request is stored first; this is only how the desk hears.
+    support_email: str = "support@astrale.health"
+    support_request_max_attempts: int = 5
+    support_request_retry_base_seconds: int = 60
+    # One user asking for the same thing again inside this window gets the
+    # request they already made back, not a second email.
+    support_request_dedupe_minutes: int = 10
+    support_request_rate_limit: str = "20/hour"
+
+    # ----------------------------------------------------------------- celery
+    # Background jobs (support emails today). Defaults to the same Redis as the
+    # outbox nudge. Late acks and reject-on-worker-lost mean a job killed by a
+    # restart or deploy goes back on the queue instead of vanishing, and the
+    # beat sweep re-queues anything the broker lost.
+    celery_broker_url: str = ""
+    celery_queue: str = "pms"
+    # Must outlast the longest job, or Redis redelivers one that is still running.
+    celery_visibility_timeout_seconds: int = 60 * 60
+    celery_sweep_seconds: int = 60
+
+    @property
+    def broker_url(self) -> str:
+        return self.celery_broker_url or self.redis_url
+
     @field_validator("app_domain")
     @classmethod
     def _strip_domain(cls, v: str) -> str:

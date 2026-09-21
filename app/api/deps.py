@@ -43,6 +43,13 @@ async def db_session() -> AsyncIterator[AsyncSession]:
 
     `app.tenant_id` is transaction-local, so it is impossible for one request's
     tenant to leak into the next request that borrows the same connection.
+
+    Always depend on it as `Depends(db_session, scope="function")`. The default
+    ("request") scope exits *after* the response is sent, so the commit would
+    land after the client already has its answer: a refetch fired straight
+    after a create could read the table before the new row exists, and a
+    failed commit would reach the client as a success. "function" commits
+    before the response goes out.
     """
     async with session_factory() as session:
         async with session.begin():
@@ -138,7 +145,7 @@ def _token_from(request: Request, credentials: HTTPAuthorizationCredentials | No
 
 async def current_tenant(
     request: Request,
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_session, scope="function"),
     host: HostContext = Depends(host_context),
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
 ) -> TenantContext:
@@ -231,7 +238,7 @@ async def current_tenant(
 
 async def current_platform_user(
     request: Request,
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_session, scope="function"),
     host: HostContext = Depends(host_context),
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
 ) -> PlatformUser:
@@ -304,7 +311,7 @@ def parse_uuid(value: str, *, what: str = "record") -> uuid.UUID:
 
 
 async def host_tenant(
-    session: AsyncSession = Depends(db_session), host: HostContext = Depends(host_context)
+    session: AsyncSession = Depends(db_session, scope="function"), host: HostContext = Depends(host_context)
 ) -> Tenant:
     """The clinic this host belongs to — used by the sign-in page, before
     anyone is authenticated."""

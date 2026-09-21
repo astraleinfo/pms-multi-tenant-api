@@ -183,15 +183,19 @@ async def set_tenant_feature(
         )
     ).scalar_one_or_none()
 
+    was_active = row is not None and row.status == TenantFeatureStatus.ACTIVE
     if row is None:
         row = TenantFeature(tenant_id=tenant_id, feature_key=feature_key, status=status)
         session.add(row)
     else:
         row.status = status
 
-    # `activated_at` records when it was last switched on, and is left alone by
-    # a deactivation so the history of the entitlement survives it.
-    if status == TenantFeatureStatus.ACTIVE and row.activated_at is None:
+    # `activated_at` records when it was last switched on — the console counts
+    # billing from it, so a module switched back on starts again from today
+    # rather than looking billed for the months it was off. Re-sending "on"
+    # for a module already on leaves it alone, and a deactivation leaves the
+    # last date in place.
+    if status == TenantFeatureStatus.ACTIVE and not was_active:
         row.activated_at = today
 
     await session.flush()

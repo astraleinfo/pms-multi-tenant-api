@@ -27,6 +27,9 @@ dependencies = [
     # one; Windows does not, so every clinic timezone lookup raises there unless
     # this is installed. Free on the platforms that do not need it.
     "tzdata>=2024.1; platform_system == 'Windows'",
+    # Background jobs — support-request emails. A dependency, not an extra:
+    # the API enqueues on the support route. `[redis]` brings the broker client.
+    "celery[redis]>=5.4",
 ]
 
 [project.optional-dependencies]

@@ -106,7 +106,7 @@ async def login(
     payload: LoginIn,
     request: Request,
     response: Response,
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_session, scope="function"),
     host: HostContext = Depends(host_context),
 ) -> SessionOut:
     """The tenant comes from the address, never from the request body."""
@@ -147,7 +147,7 @@ async def login(
 async def refresh_session(
     request: Request,
     response: Response,
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_session, scope="function"),
     host: HostContext = Depends(host_context),
 ) -> SessionOut:
     """Rotates the refresh token. Re-using a spent one kills the whole chain."""
@@ -210,7 +210,7 @@ async def refresh_session(
 async def logout(
     request: Request,
     response: Response,
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_session, scope="function"),
 ) -> Response:
     """Revokes the whole sign-in chain, not just this token."""
     raw = request.cookies.get(REFRESH_COOKIE)
@@ -294,7 +294,7 @@ async def update_preferences(
 @router.get("/auth/invitation", response_model=InvitationOut)
 async def inspect_invitation(
     token: str,
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_session, scope="function"),
     host: HostContext = Depends(host_context),
 ) -> InvitationOut:
     """What the "choose a password" page shows before anyone is signed in.
@@ -322,7 +322,7 @@ async def inspect_invitation(
 async def forgot_password(
     payload: PasswordForgotIn,
     request: Request,
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_session, scope="function"),
     host: HostContext = Depends(host_context),
 ) -> dict:
     """Ask for a reset link.
@@ -384,7 +384,7 @@ async def forgot_password(
 async def reset_password(
     payload: PasswordResetIn,
     request: Request,
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_session, scope="function"),
     host: HostContext = Depends(host_context),
 ) -> Response:
     """Spend a link and choose a password.
@@ -472,7 +472,7 @@ async def platform_login(
     payload: LoginIn,
     request: Request,
     response: Response,
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_session, scope="function"),
     host: HostContext = Depends(host_context),
 ) -> SessionOut:
     limiter.check(_login_rate_key(request, payload.email), Rate.parse(settings.login_rate_limit))

@@ -119,7 +119,8 @@ async def wipe(session: AsyncSession) -> None:
     tables = ", ".join(
         [
             "audit_events", "login_attempts", "refresh_tokens", "payments", "invoice_line_items",
-            "invoices", "service_prices", "inventory_transactions", "inventory_batches",
+            "support_requests", "invoices", "service_prices", "inventory_transactions",
+            "inventory_batches",
             "prescription_items", "prescriptions", "lab_attachments", "lab_orders", "encounters",
             "queue_entries", "appointments",
             "patients", "inventory_items", "tenant_configs", "tenant_features",

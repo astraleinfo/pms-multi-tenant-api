@@ -49,7 +49,9 @@ async def public_tenant(tenant=Depends(host_tenant)) -> PublicTenantOut:
 
 
 @router.get("/catalog/clinical-types", response_model=list[ClinicalTypeOut])
-async def clinical_types(session: AsyncSession = Depends(db_session)) -> list[ClinicalTypeOut]:
+async def clinical_types(
+    session: AsyncSession = Depends(db_session, scope="function"),
+) -> list[ClinicalTypeOut]:
     rows = (await session.execute(select(ClinicalType).order_by(ClinicalType.label))).scalars()
     return [ClinicalTypeOut.of(c) for c in rows]
 
