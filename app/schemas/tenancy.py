@@ -206,6 +206,30 @@ class PlatformSettingsPatch(InputModel):
     default_currency: Currency | None = None
 
 
+class LabTestAdminOut(ApiModel):
+    code: str
+    name: str
+    panel: str
+    clinical_types: list[str] | None
+
+    @classmethod
+    def of(cls, row) -> LabTestAdminOut:
+        return cls(code=row.code, name=row.name, panel=row.panel, clinical_types=row.clinical_types)
+
+
+class LabTestIn(InputModel):
+    code: str = Field(min_length=1, max_length=20)
+    name: str = Field(min_length=1, max_length=160)
+    panel: str = Field(default="", max_length=80)
+    clinical_types: list[str] | None = None
+
+
+class LabTestPatch(InputModel):
+    name: str | None = Field(default=None, min_length=1, max_length=160)
+    panel: str | None = Field(default=None, max_length=80)
+    clinical_types: list[str] | None = None
+
+
 class FieldDefinitionOut(ApiModel):
     id: str
     scope: FieldScope

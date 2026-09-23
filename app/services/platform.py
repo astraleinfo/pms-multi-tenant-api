@@ -24,7 +24,15 @@ from app.models.clinical import Appointment, Encounter, Patient
 from app.models.enums import AccountStatus, TenantFeatureStatus, TenantStatus
 from app.models.identity import PlatformUser, User
 from app.models.ops import Invoice, Payment
-from app.models.tenancy import ClinicalType, Feature, PlatformSettings, Tenant, TenantConfig, TenantFeature
+from app.models.tenancy import (
+    ClinicalType,
+    Feature,
+    LabTest,
+    PlatformSettings,
+    Tenant,
+    TenantConfig,
+    TenantFeature,
+)
 from app.schemas.tenancy import TenantCreateIn, TenantPatchIn
 from app.services.tenants import CORE_FEATURES
 
@@ -48,6 +56,36 @@ async def update_platform_settings(session: AsyncSession, changes: dict) -> Plat
         setattr(row, key, value)
     await session.flush()
     return row
+
+
+async def create_lab_test(
+    session: AsyncSession, code: str, name: str, panel: str, clinical_types: list[str] | None,
+) -> LabTest:
+    existing = await session.get(LabTest, code)
+    if existing is not None:
+        raise Conflict("A lab test with that code already exists.")
+    row = LabTest(code=code, name=name, panel=panel, clinical_types=clinical_types)
+    session.add(row)
+    await session.flush()
+    return row
+
+
+async def update_lab_test(session: AsyncSession, code: str, changes: dict) -> LabTest:
+    row = await session.get(LabTest, code)
+    if row is None:
+        raise NotFound("No such lab test.")
+    for key, value in changes.items():
+        setattr(row, key, value)
+    await session.flush()
+    return row
+
+
+async def delete_lab_test(session: AsyncSession, code: str) -> None:
+    row = await session.get(LabTest, code)
+    if row is None:
+        raise NotFound("No such lab test.")
+    await session.delete(row)
+    await session.flush()
 
 
 def initials_of(name: str) -> str:

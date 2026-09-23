@@ -31,7 +31,7 @@ from app.core.errors import NotFound
 from app.db.session import set_tenant
 from app.models.enums import AuthTokenPurpose
 from app.models.identity import PlatformUser
-from app.models.tenancy import ClinicalType, Feature, Tenant
+from app.models.tenancy import ClinicalType, Feature, LabTest, MedicineSuggestion, Tenant
 from app.schemas.common import zone
 from app.schemas.identity import PlatformUserOut, UserOut
 from app.schemas.support import SupportRequestOut
@@ -40,6 +40,9 @@ from app.schemas.tenancy import (
     FeatureOut,
     FeaturePriceIn,
     ImpersonationOut,
+    LabTestAdminOut,
+    LabTestIn,
+    LabTestPatch,
     PlatformSettingsOut,
     PlatformSettingsPatch,
     PlatformSnapshotOut,
@@ -476,6 +479,48 @@ async def update_platform_settings_route(
         meta={"changes": changes},
     )
     return PlatformSettingsOut.of(row)
+
+
+@router.get("/catalog/lab-tests", response_model=list[LabTestAdminOut])
+async def platform_lab_tests(
+    staff: PlatformUser = Depends(current_super_admin),
+    session: AsyncSession = Depends(db_session, scope="function"),
+) -> list[LabTestAdminOut]:
+    rows = (await session.execute(select(LabTest).order_by(LabTest.panel, LabTest.name))).scalars()
+    return [LabTestAdminOut.of(t) for t in rows]
+
+
+@router.post("/catalog/lab-tests", response_model=LabTestAdminOut, status_code=status.HTTP_201_CREATED)
+async def create_platform_lab_test(
+    payload: LabTestIn,
+    staff: PlatformUser = Depends(current_super_admin),
+    session: AsyncSession = Depends(db_session, scope="function"),
+) -> LabTestAdminOut:
+    row = await platform_service.create_lab_test(
+        session, payload.code, payload.name, payload.panel, payload.clinical_types
+    )
+    return LabTestAdminOut.of(row)
+
+
+@router.patch("/catalog/lab-tests/{code}", response_model=LabTestAdminOut)
+async def update_platform_lab_test(
+    code: str,
+    payload: LabTestPatch,
+    staff: PlatformUser = Depends(current_super_admin),
+    session: AsyncSession = Depends(db_session, scope="function"),
+) -> LabTestAdminOut:
+    changes = payload.model_dump(exclude_unset=True)
+    row = await platform_service.update_lab_test(session, code, changes)
+    return LabTestAdminOut.of(row)
+
+
+@router.delete("/catalog/lab-tests/{code}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_platform_lab_test(
+    code: str,
+    staff: PlatformUser = Depends(current_super_admin),
+    session: AsyncSession = Depends(db_session, scope="function"),
+) -> None:
+    await platform_service.delete_lab_test(session, code)
 
 
 @router.get("/catalog/clinical-types", response_model=list[ClinicalTypeOut])
