@@ -36,6 +36,7 @@ from app.schemas.common import zone
 from app.schemas.identity import PlatformUserOut, UserOut
 from app.schemas.support import SupportRequestOut
 from app.schemas.tenancy import (
+    ClinicalTypeCopyPatch,
     ClinicalTypeOut,
     FeatureOut,
     FeaturePriceIn,
@@ -576,6 +577,20 @@ async def clinical_types(
 ) -> list[ClinicalTypeOut]:
     rows = (await session.execute(select(ClinicalType).order_by(ClinicalType.label))).scalars()
     return [ClinicalTypeOut.of(c) for c in rows]
+
+
+@router.patch("/catalog/clinical-types/{key}", response_model=ClinicalTypeOut)
+async def update_platform_clinical_type(
+    key: str,
+    payload: ClinicalTypeCopyPatch,
+    staff: PlatformUser = Depends(current_super_admin),
+    session: AsyncSession = Depends(db_session, scope="function"),
+) -> ClinicalTypeOut:
+    """Copy only — `exam_label`, `blurb`, `label`, `complaint_example`.
+    Adding or removing a discipline is a bigger feature than this route."""
+    changes = payload.model_dump(exclude_unset=True)
+    row = await platform_service.update_clinical_type_copy(session, key, changes)
+    return ClinicalTypeOut.of(row)
 
 
 @router.get("/catalog/features", response_model=list[FeatureOut])

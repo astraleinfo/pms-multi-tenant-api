@@ -265,6 +265,13 @@ class MedicinePatch(InputModel):
     clinical_types: list[str] | None = None
 
 
+class ClinicalTypeCopyPatch(InputModel):
+    label: str | None = Field(default=None, min_length=1, max_length=80)
+    blurb: str | None = Field(default=None, max_length=2000)
+    exam_label: str | None = Field(default=None, max_length=120)
+    complaint_example: str | None = Field(default=None, max_length=200)
+
+
 class FieldDefinitionOut(ApiModel):
     id: str
     scope: FieldScope

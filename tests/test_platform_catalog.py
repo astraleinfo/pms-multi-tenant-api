@@ -106,3 +106,17 @@ async def test_the_support_desk_cannot_write_the_catalogue(console_support):
 async def test_a_malformed_medicine_id_is_a_404_not_a_crash(console):
     response = await console.patch("/v1/platform/catalog/medicines/not-a-uuid", json={"strength": "1mg"})
     assert response.status_code == 404
+
+
+async def test_a_super_admin_can_edit_clinical_type_copy(console):
+    updated = await console.patch("/v1/platform/catalog/clinical-types/dental", json={
+        "blurb": "A test blurb for dental.",
+    })
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["blurb"] == "A test blurb for dental."
+    assert updated.json()["key"] == "dental", "the key itself never changes"
+
+
+async def test_editing_an_unknown_clinical_type_is_404(console):
+    response = await console.patch("/v1/platform/catalog/clinical-types/not-a-real-one", json={"label": "X"})
+    assert response.status_code == 404

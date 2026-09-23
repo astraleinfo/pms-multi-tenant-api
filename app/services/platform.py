@@ -120,6 +120,16 @@ async def delete_medicine(session: AsyncSession, medicine_id: uuid.UUID) -> None
     await session.flush()
 
 
+async def update_clinical_type_copy(session: AsyncSession, key: str, changes: dict) -> ClinicalType:
+    row = await session.get(ClinicalType, key)
+    if row is None:
+        raise NotFound("No such clinical type.")
+    for field, value in changes.items():
+        setattr(row, field, value)
+    await session.flush()
+    return row
+
+
 def initials_of(name: str) -> str:
     parts = [p for p in name.split() if p]
     if not parts:
