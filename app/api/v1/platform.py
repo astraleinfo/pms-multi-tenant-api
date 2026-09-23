@@ -43,6 +43,9 @@ from app.schemas.tenancy import (
     LabTestAdminOut,
     LabTestIn,
     LabTestPatch,
+    MedicineAdminOut,
+    MedicineIn,
+    MedicinePatch,
     PlatformSettingsOut,
     PlatformSettingsPatch,
     PlatformSnapshotOut,
@@ -521,6 +524,49 @@ async def delete_platform_lab_test(
     session: AsyncSession = Depends(db_session, scope="function"),
 ) -> None:
     await platform_service.delete_lab_test(session, code)
+
+
+@router.get("/catalog/medicines", response_model=list[MedicineAdminOut])
+async def platform_medicines(
+    staff: PlatformUser = Depends(current_super_admin),
+    session: AsyncSession = Depends(db_session, scope="function"),
+) -> list[MedicineAdminOut]:
+    rows = (await session.execute(select(MedicineSuggestion).order_by(MedicineSuggestion.medicine))).scalars()
+    return [MedicineAdminOut.of(m) for m in rows]
+
+
+@router.post("/catalog/medicines", response_model=MedicineAdminOut, status_code=status.HTTP_201_CREATED)
+async def create_platform_medicine(
+    payload: MedicineIn,
+    staff: PlatformUser = Depends(current_super_admin),
+    session: AsyncSession = Depends(db_session, scope="function"),
+) -> MedicineAdminOut:
+    row = await platform_service.create_medicine(
+        session, payload.medicine, payload.strength, payload.dosage,
+        payload.frequency, payload.duration, payload.clinical_types,
+    )
+    return MedicineAdminOut.of(row)
+
+
+@router.patch("/catalog/medicines/{medicine_id}", response_model=MedicineAdminOut)
+async def update_platform_medicine(
+    medicine_id: str,
+    payload: MedicinePatch,
+    staff: PlatformUser = Depends(current_super_admin),
+    session: AsyncSession = Depends(db_session, scope="function"),
+) -> MedicineAdminOut:
+    changes = payload.model_dump(exclude_unset=True)
+    row = await platform_service.update_medicine(session, parse_uuid(medicine_id, what="medicine"), changes)
+    return MedicineAdminOut.of(row)
+
+
+@router.delete("/catalog/medicines/{medicine_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_platform_medicine(
+    medicine_id: str,
+    staff: PlatformUser = Depends(current_super_admin),
+    session: AsyncSession = Depends(db_session, scope="function"),
+) -> None:
+    await platform_service.delete_medicine(session, parse_uuid(medicine_id, what="medicine"))
 
 
 @router.get("/catalog/clinical-types", response_model=list[ClinicalTypeOut])

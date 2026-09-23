@@ -73,3 +73,36 @@ async def test_deleting_a_lab_test_does_not_touch_history_that_used_it(northgate
     assert still_there[0]["id"] == order_id
     assert still_there[0]["test_name"] == "Complete Blood Count"
     assert still_there[0]["test_code"] == "CBC-DEL-TEST"
+
+
+async def test_a_super_admin_can_add_edit_and_remove_a_medicine(console):
+    created = await console.post("/v1/platform/catalog/medicines", json={
+        "medicine": "Test Medicine", "strength": "500mg", "dosage": "1 tablet",
+        "frequency": "Twice daily", "duration": "5 days",
+    })
+    assert created.status_code == 201, created.text
+    medicine_id = created.json()["id"]
+    assert created.json()["medicine"] == "Test Medicine"
+
+    updated = await console.patch(f"/v1/platform/catalog/medicines/{medicine_id}", json={"strength": "250mg"})
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["strength"] == "250mg"
+
+    listed = await console.get("/v1/platform/catalog/medicines")
+    assert any(m["id"] == medicine_id for m in listed.json())
+
+    deleted = await console.delete(f"/v1/platform/catalog/medicines/{medicine_id}")
+    assert deleted.status_code == 204
+
+    listed_after = await console.get("/v1/platform/catalog/medicines")
+    assert not any(m["id"] == medicine_id for m in listed_after.json())
+
+
+async def test_the_support_desk_cannot_write_the_catalogue(console_support):
+    response = await console_support.post("/v1/platform/catalog/medicines", json={"medicine": "X"})
+    assert response.status_code == 403
+
+
+async def test_a_malformed_medicine_id_is_a_404_not_a_crash(console):
+    response = await console.patch("/v1/platform/catalog/medicines/not-a-uuid", json={"strength": "1mg"})
+    assert response.status_code == 404

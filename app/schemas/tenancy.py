@@ -230,6 +230,41 @@ class LabTestPatch(InputModel):
     clinical_types: list[str] | None = None
 
 
+class MedicineAdminOut(ApiModel):
+    id: str
+    medicine: str
+    strength: str
+    dosage: str
+    frequency: str
+    duration: str
+    clinical_types: list[str] | None
+
+    @classmethod
+    def of(cls, row) -> MedicineAdminOut:
+        return cls(
+            id=str(row.id), medicine=row.medicine, strength=row.strength, dosage=row.dosage,
+            frequency=row.frequency, duration=row.duration, clinical_types=row.clinical_types,
+        )
+
+
+class MedicineIn(InputModel):
+    medicine: str = Field(min_length=1, max_length=160)
+    strength: str = Field(default="", max_length=60)
+    dosage: str = Field(default="", max_length=80)
+    frequency: str = Field(default="", max_length=80)
+    duration: str = Field(default="", max_length=80)
+    clinical_types: list[str] | None = None
+
+
+class MedicinePatch(InputModel):
+    medicine: str | None = Field(default=None, min_length=1, max_length=160)
+    strength: str | None = Field(default=None, max_length=60)
+    dosage: str | None = Field(default=None, max_length=80)
+    frequency: str | None = Field(default=None, max_length=80)
+    duration: str | None = Field(default=None, max_length=80)
+    clinical_types: list[str] | None = None
+
+
 class FieldDefinitionOut(ApiModel):
     id: str
     scope: FieldScope

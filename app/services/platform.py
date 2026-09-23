@@ -28,6 +28,7 @@ from app.models.tenancy import (
     ClinicalType,
     Feature,
     LabTest,
+    MedicineSuggestion,
     PlatformSettings,
     Tenant,
     TenantConfig,
@@ -84,6 +85,37 @@ async def delete_lab_test(session: AsyncSession, code: str) -> None:
     row = await session.get(LabTest, code)
     if row is None:
         raise NotFound("No such lab test.")
+    await session.delete(row)
+    await session.flush()
+
+
+async def create_medicine(
+    session: AsyncSession, medicine: str, strength: str, dosage: str, frequency: str,
+    duration: str, clinical_types: list[str] | None,
+) -> MedicineSuggestion:
+    row = MedicineSuggestion(
+        medicine=medicine, strength=strength, dosage=dosage, frequency=frequency,
+        duration=duration, clinical_types=clinical_types,
+    )
+    session.add(row)
+    await session.flush()
+    return row
+
+
+async def update_medicine(session: AsyncSession, medicine_id: uuid.UUID, changes: dict) -> MedicineSuggestion:
+    row = await session.get(MedicineSuggestion, medicine_id)
+    if row is None:
+        raise NotFound("No such medicine suggestion.")
+    for key, value in changes.items():
+        setattr(row, key, value)
+    await session.flush()
+    return row
+
+
+async def delete_medicine(session: AsyncSession, medicine_id: uuid.UUID) -> None:
+    row = await session.get(MedicineSuggestion, medicine_id)
+    if row is None:
+        raise NotFound("No such medicine suggestion.")
     await session.delete(row)
     await session.flush()
 
