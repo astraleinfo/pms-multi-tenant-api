@@ -27,6 +27,7 @@ from app.models.ops import (  # noqa: F401
     Payment,
     ServicePrice,
 )
+from app.models.rent import SubscriptionInvoice  # noqa: F401
 from app.models.support import SupportRequest  # noqa: F401
 from app.models.tenancy import (  # noqa: F401
     AuditEvent,
@@ -46,6 +47,6 @@ __all__ = [
     "LabAttachment", "LabOrder", "LabTest", "LoginAttempt", "MedicineSuggestion", "Message",
     "MessagingConfig", "Patient", "Payment",
     "PlatformUser", "Prescription", "PrescriptionItem", "QueueEntry", "RefreshToken",
-    "ServicePrice", "SupportRequest", "Tenant",
+    "ServicePrice", "SubscriptionInvoice", "SupportRequest", "Tenant",
     "TenantConfig", "TenantFeature", "User",
 ]

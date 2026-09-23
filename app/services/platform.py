@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date
+from decimal import Decimal
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -202,6 +203,30 @@ async def set_tenant_feature(
     return row
 
 
+async def set_feature_price(
+    session: AsyncSession, feature_key: str, price_monthly: float
+) -> tuple[Feature, Decimal]:
+    """Change what a module costs, for every clinic at once.
+
+    The catalogue is the platform's, not a clinic's, so this is one row and no
+    tenant is bound. A core module carries no price — it is in every plan and
+    cannot be bought or dropped — so pricing one is refused rather than stored
+    and then contradicted by every screen that says "included".
+
+    Returns the row and the price it replaced, for the audit line.
+    """
+    feature = await session.get(Feature, feature_key)
+    if feature is None:
+        raise NotFound("No such module.")
+    if feature.is_core or feature_key in CORE_FEATURES:
+        raise Conflict("That module is part of the core product and carries no price.")
+
+    previous = Decimal(feature.price_monthly or 0)
+    feature.price_monthly = Decimal(str(price_monthly)).quantize(Decimal("0.01"))
+    await session.flush()
+    return feature, previous
+
+
 SUPPORT_EMAIL_DOMAIN = "platform.invalid"
 
 
@@ -273,7 +298,18 @@ async def snapshot(session: AsyncSession) -> dict:
     for tenant in tenants:
         await set_tenant(session, tenant.id)
         counts = {
-            "users": await _count(session, User, tenant.id),
+            # Staff only: the support account a console session works
+            # through is plumbing, and the clinic's own Team tab leaves it out.
+            "users": int(
+                (
+                    await session.execute(
+                        select(func.count(User.id)).where(
+                            User.tenant_id == tenant.id, User.is_support.is_(False)
+                        )
+                    )
+                ).scalar()
+                or 0
+            ),
             "patients": await _count(session, Patient, tenant.id),
             "appointments": await _count(session, Appointment, tenant.id),
             "encounters": await _count(session, Encounter, tenant.id),

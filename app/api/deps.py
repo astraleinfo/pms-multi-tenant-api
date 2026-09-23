@@ -23,7 +23,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import HTTPConnection
 
 from app.core.config import settings
-from app.core.errors import AuthError, FeatureNotEnabled, NotFound, PermissionDenied
+from app.core.errors import (
+    AccountOnHold,
+    AuthError,
+    FeatureNotEnabled,
+    NotFound,
+    PermissionDenied,
+)
 from app.core.permissions import Permission, role_has
 from app.core.security import TokenError, decode_access_token
 from app.core.tenancy import HostContext, resolve_host
@@ -224,6 +230,16 @@ async def current_tenant(
             tenant=tenant,
             user=user,
         )
+    if (
+        tenant.billing_hold_since is not None
+        and not claims.impersonated
+        and not _open_while_on_hold(request)
+    ):
+        raise AccountOnHold(
+            "This clinic is on hold until its subscription bill is paid.",
+            details={"hold_since": tenant.billing_hold_since.isoformat()},
+        )
+
     config = await tenant_service.get_config(session, tenant.id)
     active = await tenant_service.active_feature_keys(session, tenant.id)
 
@@ -238,6 +254,26 @@ async def current_tenant(
         session=session,
         active_features=active,
     )
+
+
+#: What a clinic on hold may still reach: signing in and out, who it is, the
+#: clinic record, and the bills — enough to see what is owed and nothing else.
+_OPEN_ON_HOLD_PREFIXES = ("/auth/", "/tenant/subscription")
+_OPEN_ON_HOLD_EXACT = {"/tenant"}
+
+
+def _open_while_on_hold(request: Request) -> bool:
+    """Decided on the matched route's template, not the raw URL — a path
+    parameter cannot be used to smuggle a request under an open prefix.
+
+    Depending on the FastAPI version the template carries the router's `/v1`
+    prefix or not, so it is compared without it.
+    """
+    route = request.scope.get("route")
+    path = getattr(route, "path", None) or request.url.path
+    if path.startswith("/v1/"):
+        path = path[3:]
+    return path in _OPEN_ON_HOLD_EXACT or path.startswith(_OPEN_ON_HOLD_PREFIXES)
 
 
 async def current_platform_user(
@@ -315,7 +351,7 @@ async def resolve_super_admin(
     if claims.subject_kind != "platform" or claims.impersonated:
         # Every clinic account lands here, whatever its role, and so does a
         # support session working inside one.
-        raise PermissionDenied("Background jobs belong to the platform, not to a clinic.")
+        raise PermissionDenied("That belongs to the platform console, not to a clinic.")
     if check_host and not host.is_admin:
         raise PermissionDenied("The console is served on the admin address only.")
 

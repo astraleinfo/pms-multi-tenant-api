@@ -17,6 +17,30 @@ class TenantStatus(StrEnum):
     SUSPENDED = "suspended"
 
 
+class SubscriptionInvoiceStatus(StrEnum):
+    """A clinic's monthly bill from the platform — the "app rent"."""
+
+    OPEN = "open"
+    PAID = "paid"
+    VOID = "void"
+
+
+class RentReminder(StrEnum):
+    """How far along the reminder ladder a bill has got. Each rung is emailed
+    once, in this order; `STAGE_ORDER` is what "further along" means."""
+
+    NONE = "none"
+    ISSUED = "issued"
+    DUE_SOON = "due_soon"
+    DUE = "due"
+    OVERDUE = "overdue"
+    FINAL = "final"
+    BLOCKED = "blocked"
+
+
+RENT_STAGE_ORDER: dict[str, int] = {stage.value: i for i, stage in enumerate(RentReminder)}
+
+
 class TenantFeatureStatus(StrEnum):
     ACTIVE = "active"
     INACTIVE = "inactive"

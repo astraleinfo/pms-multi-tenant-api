@@ -21,7 +21,7 @@ from app.models.enums import LAB_TRANSITIONS, LabOrderStatus
 from app.models.tenancy import LabTest
 from app.schemas.clinical import LabOrderIn, LabResultsIn
 from app.services import encounters as encounter_service
-from app.services import paging
+from app.services import paging, storage
 
 
 def _now() -> datetime:
@@ -238,7 +238,8 @@ async def list_attachments(
 async def get_attachment(
     session: AsyncSession, tenant_id: uuid.UUID, order_id: uuid.UUID, attachment_id: uuid.UUID
 ) -> LabAttachment:
-    """One file, bytes included — the only read that loads `data`."""
+    """One file's row, with `data` loaded — the only read that does. A file
+    held in S3 has no `data`; `attachment_bytes` fetches it from there."""
     row = (
         await session.execute(
             select(LabAttachment)
@@ -291,7 +292,20 @@ async def add_attachment(
             details={"content_type": kind},
         )
 
+    # The object goes up before the row goes in, so a row never names a file
+    # that is not there. If the row then fails, the object is taken back out;
+    # a commit that fails after this point leaves an unreachable object, which
+    # costs storage but never shows anybody anything.
+    attachment_id = uuid.uuid4()
+    key: str | None = None
+    if storage.uses_s3():
+        key = storage.object_key(
+            tenant_id=tenant_id, order_id=order.id, attachment_id=attachment_id
+        )
+        await storage.put(key, data, kind)
+
     attachment = LabAttachment(
+        id=attachment_id,
         tenant_id=tenant_id,
         lab_order_id=order.id,
         filename=_safe_filename(filename),
@@ -300,11 +314,31 @@ async def add_attachment(
         note=note,
         uploaded_at=_now(),
         uploaded_by=actor_id,
-        data=data,
+        data=None if key else data,
+        storage_key=key,
     )
     session.add(attachment)
-    await session.flush()
+    try:
+        await session.flush()
+    except Exception:
+        if key:
+            await storage.delete(key)
+        raise
     return attachment
+
+
+async def attachment_bytes(attachment: LabAttachment) -> bytes:
+    """The file itself, from wherever this row says it is.
+
+    Decided by the row rather than by `STORAGE_BACKEND`, so a file uploaded
+    before a deployment moved to S3 (or back) still opens.
+    """
+    if attachment.storage_key:
+        return await storage.get(attachment.storage_key)
+    if attachment.data is None:
+        # The check constraint makes this unreachable; say so loudly if not.
+        raise NotFound("That attachment has no file.")
+    return attachment.data
 
 
 async def delete_attachment(
@@ -314,8 +348,11 @@ async def delete_attachment(
     if order.status == LabOrderStatus.VERIFIED:
         raise Conflict("That order is verified — its report can no longer be changed.")
     attachment = await get_attachment(session, tenant_id, order_id, attachment_id)
+    key = attachment.storage_key
     await session.delete(attachment)
     await session.flush()
+    if key:
+        storage.delete_after_commit(session, key)
 
 
 def _safe_filename(name: str) -> str:

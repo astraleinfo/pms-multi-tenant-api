@@ -34,6 +34,12 @@ class TenantOut(ApiModel):
     #: the browser clock, so a practice and its screens never disagree about
     #: which day it is.
     today: str
+    #: on hold for an unpaid subscription bill — the clinic's staff see the
+    #: bill and nothing else until it is settled
+    billing_hold: bool = False
+    billing_hold_since: str | None = None
+    #: never billed by the platform
+    billing_exempt: bool = False
 
     @classmethod
     def of(cls, t) -> TenantOut:
@@ -41,6 +47,9 @@ class TenantOut(ApiModel):
             id=str(t.id), name=t.name, slug=t.slug, clinical_type=t.clinical_type,
             status=t.status, city=t.city, plan=t.plan, since=iso_date(t.since) or "",
             timezone=t.timezone, today=datetime.now(zone(t.timezone)).date().isoformat(),
+            billing_hold=t.billing_hold_since is not None,
+            billing_hold_since=t.billing_hold_since.isoformat() if t.billing_hold_since else None,
+            billing_exempt=bool(t.billing_exempt),
         )
 
 
@@ -73,6 +82,16 @@ class FeatureOut(ApiModel):
             key=f.key, name=f.name, is_core=f.is_core, summary=f.summary,
             price_monthly=money(f.price_monthly), unlocks=list(f.unlocks or []),
         )
+
+
+class FeaturePriceIn(InputModel):
+    """A module's list price, set from the console by a super admin.
+
+    `Numeric(10, 2)` holds eight whole digits; the bound is that column's, so
+    an absurd figure is a 422 here rather than a database error on flush.
+    """
+
+    price_monthly: float = Field(ge=0, le=99_999_999.99)
 
 
 class TenantFeatureOut(ApiModel):
@@ -244,6 +263,8 @@ class TenantPatchIn(InputModel):
     plan: str | None = Field(default=None, max_length=60)
     timezone: str | None = Field(default=None, max_length=60)
     clinical_type: str | None = Field(default=None, max_length=40)
+    #: never bill this clinic (and lift any hold it is under)
+    billing_exempt: bool | None = None
 
     @field_validator("timezone")
     @classmethod
@@ -323,3 +344,94 @@ def uuid_or_none(value: str | None) -> uuid.UUID | None:
         return uuid.UUID(value) if value else None
     except ValueError:
         return None
+
+
+# --- subscription rent ---------------------------------------------------------
+
+
+class SubscriptionLineOut(ApiModel):
+    feature_key: str
+    name: str
+    amount: float
+
+
+class SubscriptionInvoiceOut(ApiModel):
+    id: str
+    tenant_id: str
+    number: str
+    period_start: str
+    period_end: str
+    currency: str
+    amount: float
+    lines: list[SubscriptionLineOut]
+    issued_on: str
+    due_on: str
+    #: the first day the clinic is held if this is still open
+    hold_on: str
+    status: str
+    reminder_stage: str
+    reminders_sent: int
+    paid_at: str | None
+    payment_reference: str
+    settled_by: str
+
+    @classmethod
+    def of(cls, b, hold_on) -> SubscriptionInvoiceOut:
+        return cls(
+            id=str(b.id), tenant_id=str(b.tenant_id), number=b.number,
+            period_start=iso_date(b.period_start) or "", period_end=iso_date(b.period_end) or "",
+            currency=b.currency, amount=money(b.amount),
+            lines=[SubscriptionLineOut(**line) for line in (b.lines or [])],
+            issued_on=iso_date(b.issued_on) or "", due_on=iso_date(b.due_on) or "",
+            hold_on=iso_date(hold_on) or "", status=b.status.value,
+            reminder_stage=b.reminder_stage, reminders_sent=b.reminders_sent,
+            paid_at=b.paid_at.isoformat() if b.paid_at else None,
+            payment_reference=b.payment_reference, settled_by=b.settled_by,
+        )
+
+
+class SubscriptionSummaryOut(ApiModel):
+    on_hold: bool
+    hold_since: str | None
+    exempt: bool
+    currency: str
+    outstanding: float
+    open_count: int
+    next_due_on: str | None
+    next_hold_on: str | None
+    overdue: bool
+    due_days: int
+    grace_days: int
+
+
+class SubscriptionOut(ApiModel):
+    summary: SubscriptionSummaryOut
+    invoices: list[SubscriptionInvoiceOut]
+
+
+class SettleIn(InputModel):
+    reference: str = Field(default="", max_length=120)
+
+
+class BillingRunOut(ApiModel):
+    clinics: int
+    raised: list[str]
+    reminded: list[str]
+    held: list[str]
+    lifted: list[str]
+    failed: list[str]
+
+
+class PlatformBillingRowOut(ApiModel):
+    tenant: TenantOut
+    summary: SubscriptionSummaryOut
+    invoices: list[SubscriptionInvoiceOut]
+
+
+class PlatformBillingOut(ApiModel):
+    enabled: bool
+    currency: str
+    due_days: int
+    grace_days: int
+    reminder_days_before_due: int
+    clinics: list[PlatformBillingRowOut]

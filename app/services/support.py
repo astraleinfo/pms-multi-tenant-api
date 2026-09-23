@@ -160,7 +160,10 @@ async def _email_for(session: AsyncSession, row: SupportRequest) -> mailer.Email
     price = None
     if feature and feature.price_monthly:
         # The ISO code, not a symbol: it reads the same in every mail client.
-        price = f"{currency.value if currency else ''} {float(feature.price_monthly):,.0f}".strip()
+        # Whole figures print whole; a price the console set in paise keeps them.
+        amount = float(feature.price_monthly)
+        figure = f"{amount:,.0f}" if amount.is_integer() else f"{amount:,.2f}"
+        price = f"{currency.value if currency else ''} {figure}".strip()
     return mailer.support_request(
         to=settings.support_email,
         kind=row.kind.value,

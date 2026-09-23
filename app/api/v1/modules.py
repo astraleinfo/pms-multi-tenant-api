@@ -53,6 +53,7 @@ from app.services import inventory as inventory_service
 from app.services import lab as lab_service
 from app.services import patients as patient_service
 from app.services import pharmacy as pharmacy_service
+from app.services.documents import build_invoice_pdf
 
 # --- pharmacy (§3.9) ---------------------------------------------------------
 
@@ -256,7 +257,7 @@ async def download_attachment(
         parse_uuid(attachment_id, what="attachment"),
     )
     return Response(
-        content=attachment.data,
+        content=await lab_service.attachment_bytes(attachment),
         media_type=attachment.content_type,
         headers={
             # `inline` so a report opens in the tab it was asked for; the name
@@ -541,6 +542,43 @@ async def get_invoice(
         ctx.session, ctx.tenant_id, parse_uuid(invoice_id, what="invoice")
     )
     return InvoiceOut.of(invoice, ctx.tz, billing_service.totals_for(invoice))
+
+
+@billing_router.get("/invoices/{invoice_id}/pdf")
+async def invoice_pdf(
+    invoice_id: str,
+    ctx: TenantContext = Depends(require_feature("billing", Permission.BILLING_READ)),
+) -> Response:
+    """The invoice as a printable PDF, on the clinic's letterhead.
+
+    Built from the same row and the same `totals_for` the screen reads, so the
+    paper and the screen cannot disagree about what is owed. `inline`, so a
+    print button opens it in a tab rather than forcing a download.
+    """
+    invoice = await billing_service.get_invoice(
+        ctx.session, ctx.tenant_id, parse_uuid(invoice_id, what="invoice")
+    )
+    content = build_invoice_pdf(
+        invoice,
+        billing_service.totals_for(invoice),
+        clinic=ctx.tenant.name,
+        config=ctx.config,
+        currency=ctx.config.currency.value if ctx.config.currency else "",
+    )
+    return Response(
+        content=content,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'inline; filename="invoice-{_filename_safe(invoice.number)}.pdf"',
+            "Cache-Control": "private, no-store",
+        },
+    )
+
+
+def _filename_safe(text: str) -> str:
+    """An invoice number is the clinic's own prefix plus a sequence; this keeps
+    a header value to characters that cannot break out of the quotes."""
+    return "".join(ch for ch in text if ch.isalnum() or ch in "-_") or "invoice"
 
 
 @billing_router.post("/invoices/{invoice_id}/issue", response_model=InvoiceOut)

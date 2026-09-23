@@ -81,6 +81,13 @@ class Tenant(Base, TimestampMixin):
     plan: Mapped[str] = mapped_column(String(60), nullable=False, default="Trial")
     since: Mapped[date] = mapped_column(Date, nullable=False)
     timezone: Mapped[str] = mapped_column(String(60), nullable=False, default="Europe/London")
+    #: Set when the clinic is put on hold for an unpaid subscription bill, and
+    #: cleared the moment it is settled. Distinct from `status`: a suspension
+    #: is a decision somebody made, a hold is arithmetic, and paying must lift
+    #: the one without undoing the other.
+    billing_hold_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: Never billed — an internal or demo clinic, or one on a separate contract.
+    billing_exempt: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     __table_args__ = (
         CheckConstraint("slug ~ '^[a-z0-9][a-z0-9-]{1,39}$'", name="ck_tenants_slug_shape"),

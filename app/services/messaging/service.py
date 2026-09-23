@@ -27,7 +27,7 @@ from app.models.clinical import Appointment, Patient
 from app.models.enums import MessageChannel, MessageStatus, MessageTemplate
 from app.models.identity import User
 from app.models.messaging import Message, MessagingConfig
-from app.models.tenancy import Tenant
+from app.models.tenancy import Tenant, TenantConfig
 from app.schemas.common import zone
 from app.services.messaging import templates
 
@@ -54,10 +54,17 @@ async def _variables(
     if appointment is not None:
         doctor = await session.get(User, appointment.doctor_id)
         doctor_name = doctor.name if doctor else ""
+    phone = (
+        await session.execute(
+            select(TenantConfig.contact_phone).where(TenantConfig.tenant_id == tenant_id)
+        )
+    ).scalar_one_or_none()
     return {
         "patient_name": (patient.full_name or "").split(" ")[0],
         "clinic_name": tenant.name if tenant else "",
+        "clinic_phone": phone or "",
         "doctor_name": doctor_name,
+        "weekday": appointment.date.strftime("%a") if appointment else "",
         "date": appointment.date.strftime("%d %b %Y") if appointment else "",
         "time": appointment.time if appointment else "",
     }

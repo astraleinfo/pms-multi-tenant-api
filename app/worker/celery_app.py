@@ -67,6 +67,19 @@ celery_app.conf.update(
             "task": "pms.support.sweep",
             "schedule": float(settings.celery_sweep_seconds),
         },
+        # The monthly bills and their reminders. Only when switched on: with
+        # it off, the console's "Run billing now" is the only way a bill is
+        # raised — which is how a deployment tries the cycle before trusting it.
+        **(
+            {
+                "rent-cycle": {
+                    "task": "pms.rent.cycle",
+                    "schedule": float(settings.rent_cycle_seconds),
+                },
+            }
+            if settings.rent_billing_enabled
+            else {}
+        ),
     },
 )
 

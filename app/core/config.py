@@ -69,8 +69,9 @@ class Settings(BaseSettings):
     # Transactional mail — invitations and password resets. This is not the
     # patient-messaging outbox: that is per-clinic and provider-configured,
     # this is the platform speaking to a staff account. "console" writes the
-    # link to the log, which is what development wants.
-    mail_provider: Literal["console", "smtp"] = "console"
+    # link to the log, which is what development wants; "smtp" hands it to a
+    # mail server; "ses" sends it through Amazon SES with the AWS settings below.
+    mail_provider: Literal["console", "smtp", "ses"] = "console"
     mail_from: str = "Astrale PMS <no-reply@astrale.health>"
     smtp_host: str = "localhost"
     smtp_port: int = 587
@@ -78,6 +79,38 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     smtp_starttls: bool = True
     smtp_timeout_seconds: int = 15
+    #: SES region, when it differs from AWS_REGION — SES is not in every region
+    #: and a verified sending identity belongs to one.
+    ses_region: str = ""
+    #: An SES configuration set, for delivery, bounce and complaint events.
+    ses_configuration_set: str = ""
+
+    # ------------------------------------------------------------------- AWS
+    # Shared by S3 and SES. Leave the keys empty to use boto3's own chain — an
+    # instance or task role, `~/.aws`, or the standard environment variables —
+    # which is what a deployment on AWS should do rather than hold a key here.
+    aws_region: str = ""
+    aws_access_key_id: str = ""
+    aws_secret_access_key: str = ""
+    aws_session_token: str = ""
+
+    # --------------------------------------------------------------- storage
+    # Where uploaded files live — today, the reports a lab order collects.
+    #   database  the bytes sit in the row, under the same RLS as the order
+    #   s3        the bytes go to a bucket; the row keeps the key and metadata
+    # Reads follow the row, not this setting, so switching backend never
+    # strands a file that was stored under the other one.
+    storage_backend: Literal["database", "s3"] = "database"
+    s3_bucket: str = ""
+    #: defaults to AWS_REGION
+    s3_region: str = ""
+    #: for an S3-compatible store (MinIO, R2, ...). Empty means AWS itself.
+    s3_endpoint_url: str = ""
+    #: every key starts here, so one bucket can serve several deployments
+    s3_prefix: str = "pms"
+    #: "AES256", "aws:kms", or empty to leave it to the bucket's default
+    s3_server_side_encryption: str = "AES256"
+    s3_kms_key_id: str = ""
 
     # ----------------------------------------------------------------- outbox
     # Where queued patient messages wait for the worker. The database row is
@@ -107,6 +140,24 @@ class Settings(BaseSettings):
     # request they already made back, not a second email.
     support_request_dedupe_minutes: int = 10
     support_request_rate_limit: str = "20/hour"
+
+    # ------------------------------------------------------ subscription rent
+    # What each clinic pays the platform for the modules it has switched on.
+    # A bill is raised on the first run of each month, is due `RENT_DUE_DAYS`
+    # later, and a clinic that has not paid `RENT_GRACE_DAYS` after that is put
+    # on hold until it does. The admins are emailed at each step.
+    #
+    # Off by default: switched on, the beat raises real bills and emails real
+    # admins — including every seeded demo clinic. The console's "Run billing
+    # now" works either way, so the cycle can be tried by hand first.
+    rent_billing_enabled: bool = False
+    rent_currency: str = "INR"
+    rent_due_days: int = 7
+    rent_grace_days: int = 7
+    #: the "due soon" reminder goes this many days before the due date
+    rent_reminder_days_before_due: int = 3
+    #: how often the beat runs the cycle; every run is idempotent
+    rent_cycle_seconds: int = 3600
 
     # ----------------------------------------------------------------- celery
     # Background jobs (support emails today). Defaults to the same Redis as the
@@ -243,6 +294,13 @@ class Settings(BaseSettings):
             # Invitations and resets would be written to the log instead of
             # being delivered, and nobody would be able to sign in.
             problems.append("MAIL_PROVIDER must be a real transport, not 'console'")
+        if self.mail_provider == "ses" and not (self.ses_region or self.aws_region):
+            problems.append("MAIL_PROVIDER=ses needs SES_REGION or AWS_REGION")
+        if self.storage_backend == "s3":
+            if not self.s3_bucket:
+                problems.append("STORAGE_BACKEND=s3 needs S3_BUCKET")
+            if not (self.s3_region or self.aws_region or self.s3_endpoint_url):
+                problems.append("STORAGE_BACKEND=s3 needs S3_REGION or AWS_REGION")
         if self.public_scheme != "https":
             problems.append("PUBLIC_SCHEME must be https")
         if self.flower_enabled and not self.flower_basic_auth:

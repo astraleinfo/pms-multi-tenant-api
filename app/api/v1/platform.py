@@ -18,7 +18,14 @@ from fastapi import APIRouter, Depends, Query, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import client_ip, current_platform_user, db_session, parse_uuid, user_agent
+from app.api.deps import (
+    client_ip,
+    current_platform_user,
+    current_super_admin,
+    db_session,
+    parse_uuid,
+    user_agent,
+)
 from app.core.config import settings
 from app.core.errors import NotFound
 from app.db.session import set_tenant
@@ -31,6 +38,7 @@ from app.schemas.support import SupportRequestOut
 from app.schemas.tenancy import (
     ClinicalTypeOut,
     FeatureOut,
+    FeaturePriceIn,
     ImpersonationOut,
     PlatformSnapshotOut,
     PlatformTenantSummary,
@@ -46,6 +54,7 @@ from app.schemas.tenancy import (
 from app.services import audit, invitations, mailer
 from app.services import auth as auth_service
 from app.services import platform as platform_service
+from app.services import rent as rent_service
 from app.services import support as support_service
 from app.services import tenants as tenant_service
 from app.services.tenants import get_config
@@ -199,6 +208,13 @@ async def update_tenant(
         session, parse_uuid(tenant_id, what="clinic"), payload
     )
     changed = sorted(payload.model_dump(exclude_unset=True, exclude_none=True))
+    if "billing_exempt" in changed:
+        # Exempting a clinic lifts any hold at once; un-exempting it puts a
+        # clinic with an overdue bill straight back on hold. Either way the
+        # hold follows the bills, not the order the switches were thrown in.
+        await set_tenant(session, tenant.id)
+        await rent_service.reconcile_hold(session, tenant, rent_service.clinic_today(tenant))
+        await set_tenant(session, None)
     await audit.record_for_tenant(
         session, tenant.id, action="platform.tenant_update", actor_kind="platform",
         actor_id=staff.id, actor_label=f"{staff.name} <{staff.email}>", entity="tenant",
@@ -446,3 +462,35 @@ async def features(
 ) -> list[FeatureOut]:
     rows = (await session.execute(select(Feature).order_by(Feature.name))).scalars()
     return [FeatureOut.of(f) for f in rows]
+
+
+@router.patch("/catalog/features/{feature_key}", response_model=FeatureOut)
+async def set_feature_price(
+    feature_key: str,
+    payload: FeaturePriceIn,
+    request: Request,
+    staff: PlatformUser = Depends(current_super_admin),
+    session: AsyncSession = Depends(db_session, scope="function"),
+) -> FeatureOut:
+    """Set what a module costs per month.
+
+    A super admin's call, not the desk's: the price is what every clinic on
+    the platform is quoted and what the console counts revenue from, so the
+    `support` role is refused with a 403 — it can switch a module on for a
+    clinic, but not decide what that clinic will be charged for it.
+
+    The row is the catalogue's, not a clinic's, so the audit line names no
+    tenant. It records the old figure beside the new one, because "who changed
+    the price of Billing, and from what" is exactly the question it is for.
+    """
+    feature, previous = await platform_service.set_feature_price(
+        session, feature_key, payload.price_monthly
+    )
+    await audit.record(
+        session, action="platform.feature_price", actor_kind="platform",
+        actor_id=staff.id, actor_label=f"{staff.name} <{staff.email}>",
+        entity="feature", entity_id=feature.key, ip=client_ip(request),
+        user_agent=user_agent(request),
+        meta={"from": float(previous), "to": float(feature.price_monthly)},
+    )
+    return FeatureOut.of(feature)

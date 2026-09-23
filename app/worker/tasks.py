@@ -20,7 +20,7 @@ from sqlalchemy.pool import NullPool
 
 from app.core.config import settings
 from app.db import guard  # noqa: F401 - the ORM tenant guard applies to jobs too
-from app.services import support
+from app.services import rent, support
 from app.worker.celery_app import celery_app
 
 log = logging.getLogger("pms.worker")
@@ -68,6 +68,19 @@ def sweep() -> int:
     if pending:
         log.info("sweep re-queued %s support request(s)", len(pending))
     return len(pending)
+
+
+@celery_app.task(name="pms.rent.cycle")
+def rent_cycle() -> dict:
+    """Raise this month's bills, send due reminders, hold or release clinics.
+
+    Scheduled only when `RENT_BILLING_ENABLED` is on; idempotent, so the
+    schedule can be frequent and a missed run costs nothing but a delay.
+    """
+    summary = _run(lambda factory: rent.run_cycle(factory))
+    if summary["raised"] or summary["held"] or summary["lifted"] or summary["failed"]:
+        log.info("rent cycle: %s", summary)
+    return summary
 
 
 def enqueue_support_request(tenant_id: uuid.UUID, request_id: uuid.UUID) -> bool:
