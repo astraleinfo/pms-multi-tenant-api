@@ -3495,6 +3495,20 @@
    "group": "Clinical background"
   },
   {
+   "id": "fd-93",
+   "scope": "common",
+   "clinical_type": null,
+   "tenant_id": null,
+   "entity": "patient",
+   "field_key": "weight",
+   "label": "Weight (kg)",
+   "type": "number",
+   "required": false,
+   "order": 75,
+   "span": 1,
+   "group": "Clinical background"
+  },
+  {
    "id": "fd-20",
    "scope": "clinical_type",
    "clinical_type": "dental",
