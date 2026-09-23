@@ -156,6 +156,57 @@ class TenantConfig(Base, TenantScoped, TimestampMixin):
     )
 
 
+class PlatformSettings(Base, TimestampMixin):
+    """§ platform settings — how the platform itself is configured, as
+    opposed to how one clinic has set itself up (`TenantConfig`).
+
+    A singleton, as a database fact rather than an application convention:
+    the `ck_platform_settings_singleton` check constraint refuses any row
+    whose id is not this fixed value, and the id is the primary key, so no
+    second row can ever exist. Not tenant-scoped and carries no row-level
+    security — this table belongs to the platform, never to a clinic.
+    """
+
+    __tablename__ = "platform_settings"
+    __table_args__ = (
+        CheckConstraint(
+            "id = '00000000-0000-0000-0000-000000000001'", name="ck_platform_settings_singleton"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+
+    # support desk
+    support_email: Mapped[str] = mapped_column(String(200), nullable=False, default="support@astrale.health")
+    support_phone: Mapped[str] = mapped_column(String(40), nullable=False, default="")
+    support_hours: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+
+    # new-tenant defaults — read once, when a clinic's TenantConfig is first
+    # created (see `services/tenants.py::get_config`); never re-applied.
+    default_day_start: Mapped[str] = mapped_column(String(5), nullable=False, default="09:00")
+    default_day_end: Mapped[str] = mapped_column(String(5), nullable=False, default="17:30")
+    default_slot_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
+    default_duration: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
+    default_tax_pct: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False, default=0)
+    default_payment_terms_days: Mapped[int] = mapped_column(Integer, nullable=False, default=14)
+    default_expiry_alert_days: Mapped[int] = mapped_column(Integer, nullable=False, default=90)
+    default_currency: Mapped[Currency] = mapped_column(
+        Enum(Currency, name="currency", values_callable=lambda e: [m.value for m in e]),
+        nullable=False,
+        default=Currency.INR,
+    )
+
+    # timing knobs — columns exist for forward-compat; NOT read anywhere yet
+    # and NOT exposed on any schema. See the design spec's "Timing knobs —
+    # descoped" section before wiring these up.
+    invite_token_ttl_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=604800)
+    reset_token_ttl_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=7200)
+    reminder_lead_hours: Mapped[int] = mapped_column(Integer, nullable=False, default=24)
+    rent_due_days: Mapped[int] = mapped_column(Integer, nullable=False, default=7)
+    rent_grace_days: Mapped[int] = mapped_column(Integer, nullable=False, default=7)
+    rent_reminder_days_before_due: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+
+
 class FieldDefinition(Base, TimestampMixin):
     """§3.3 — the dynamic-form schema.
 

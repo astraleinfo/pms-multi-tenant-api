@@ -162,6 +162,50 @@ class TenantConfigPatch(InputModel):
     currency: Currency | None = None
 
 
+class PlatformSettingsOut(ApiModel):
+    support_email: str
+    support_phone: str
+    support_hours: str
+    default_day_start: str
+    default_day_end: str
+    default_slot_minutes: int
+    default_duration: int
+    default_tax_pct: float
+    default_payment_terms_days: int
+    default_expiry_alert_days: int
+    default_currency: Currency
+
+    @classmethod
+    def of(cls, row) -> PlatformSettingsOut:
+        return cls(
+            support_email=row.support_email,
+            support_phone=row.support_phone,
+            support_hours=row.support_hours,
+            default_day_start=row.default_day_start,
+            default_day_end=row.default_day_end,
+            default_slot_minutes=row.default_slot_minutes,
+            default_duration=row.default_duration,
+            default_tax_pct=money(row.default_tax_pct),
+            default_payment_terms_days=row.default_payment_terms_days,
+            default_expiry_alert_days=row.default_expiry_alert_days,
+            default_currency=row.default_currency,
+        )
+
+
+class PlatformSettingsPatch(InputModel):
+    support_email: str | None = Field(default=None, max_length=200)
+    support_phone: str | None = Field(default=None, max_length=40)
+    support_hours: str | None = Field(default=None, max_length=200)
+    default_day_start: str | None = Field(default=None, pattern=_HHMM)
+    default_day_end: str | None = Field(default=None, pattern=_HHMM)
+    default_slot_minutes: Literal[15, 20, 30] | None = None
+    default_duration: int | None = Field(default=None, ge=5, le=240)
+    default_tax_pct: float | None = Field(default=None, ge=0, le=100)
+    default_payment_terms_days: int | None = Field(default=None, ge=0, le=365)
+    default_expiry_alert_days: int | None = Field(default=None, ge=1, le=730)
+    default_currency: Currency | None = None
+
+
 class FieldDefinitionOut(ApiModel):
     id: str
     scope: FieldScope

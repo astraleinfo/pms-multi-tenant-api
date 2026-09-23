@@ -40,6 +40,8 @@ from app.schemas.tenancy import (
     FeatureOut,
     FeaturePriceIn,
     ImpersonationOut,
+    PlatformSettingsOut,
+    PlatformSettingsPatch,
     PlatformSnapshotOut,
     PlatformTenantSummary,
     SlugCheckOut,
@@ -444,6 +446,36 @@ async def snapshot(
         ],
         totals=data["totals"],
     )
+
+
+@router.get("/settings", response_model=PlatformSettingsOut)
+async def get_platform_settings_route(
+    staff: PlatformUser = Depends(current_super_admin),
+    session: AsyncSession = Depends(db_session, scope="function"),
+) -> PlatformSettingsOut:
+    row = await platform_service.get_platform_settings(session)
+    return PlatformSettingsOut.of(row)
+
+
+@router.patch("/settings", response_model=PlatformSettingsOut)
+async def update_platform_settings_route(
+    payload: PlatformSettingsPatch,
+    request: Request,
+    staff: PlatformUser = Depends(current_super_admin),
+    session: AsyncSession = Depends(db_session, scope="function"),
+) -> PlatformSettingsOut:
+    """What every new clinic starts with, and where a clinic that can't
+    self-serve is told to write. Super-admin only, like every other write
+    in this file that shapes what the whole platform does next."""
+    changes = payload.model_dump(exclude_unset=True, exclude_none=True)
+    row = await platform_service.update_platform_settings(session, changes)
+    await audit.record(
+        session, action="platform_settings.update", actor_kind="platform",
+        actor_id=staff.id, actor_label=staff.name, entity="platform_settings",
+        entity_id=str(row.id), ip=client_ip(request), user_agent=user_agent(request),
+        meta={"changes": changes},
+    )
+    return PlatformSettingsOut.of(row)
 
 
 @router.get("/catalog/clinical-types", response_model=list[ClinicalTypeOut])

@@ -24,9 +24,30 @@ from app.models.clinical import Appointment, Encounter, Patient
 from app.models.enums import AccountStatus, TenantFeatureStatus, TenantStatus
 from app.models.identity import PlatformUser, User
 from app.models.ops import Invoice, Payment
-from app.models.tenancy import ClinicalType, Feature, Tenant, TenantConfig, TenantFeature
+from app.models.tenancy import ClinicalType, Feature, PlatformSettings, Tenant, TenantConfig, TenantFeature
 from app.schemas.tenancy import TenantCreateIn, TenantPatchIn
 from app.services.tenants import CORE_FEATURES
+
+PLATFORM_SETTINGS_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+
+
+async def get_platform_settings(session: AsyncSession) -> PlatformSettings:
+    """The one row. Created on first read if the migration's seed somehow
+    hasn't run yet — belt to that braces, never expected to fire in practice."""
+    row = await session.get(PlatformSettings, PLATFORM_SETTINGS_ID)
+    if row is None:
+        row = PlatformSettings(id=PLATFORM_SETTINGS_ID)
+        session.add(row)
+        await session.flush()
+    return row
+
+
+async def update_platform_settings(session: AsyncSession, changes: dict) -> PlatformSettings:
+    row = await get_platform_settings(session)
+    for key, value in changes.items():
+        setattr(row, key, value)
+    await session.flush()
+    return row
 
 
 def initials_of(name: str) -> str:
