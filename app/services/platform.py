@@ -94,12 +94,21 @@ async def create_tenant(
     # below is written *as* that tenant and checked by the same policies.
     await set_tenant(session, tenant.id)
 
+    defaults = await get_platform_settings(session)
     session.add(
         TenantConfig(
             tenant_id=tenant.id,
             mrn_prefix=prefix,
             token_prefix=prefix[:1],
             invoice_prefix=f"{prefix}-INV",
+            day_start=defaults.default_day_start,
+            day_end=defaults.default_day_end,
+            slot_minutes=defaults.default_slot_minutes,
+            default_duration=defaults.default_duration,
+            tax_pct=defaults.default_tax_pct,
+            payment_terms_days=defaults.default_payment_terms_days,
+            expiry_alert_days=defaults.default_expiry_alert_days,
+            currency=defaults.default_currency,
         )
     )
 

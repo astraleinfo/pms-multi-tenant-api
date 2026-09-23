@@ -95,3 +95,46 @@ async def test_public_settings_needs_no_session(client, console):
     body = response.json()
     assert body == {"support_email": "help@astrale.health", "support_phone": "", "support_hours": ""}
     assert "default_currency" not in body, "only the support fields are public"
+
+
+async def test_a_new_tenants_config_follows_the_platform_default(console):
+    import uuid as _uuid
+
+    from app.db.session import tenant_session
+    from app.services.tenants import get_config
+
+    await console.patch("/v1/platform/settings", json={"default_day_start": "08:00", "default_currency": "USD"})
+
+    created = await console.post("/v1/platform/tenants", json={
+        "name": "Platform Defaults Test Clinic",
+        "slug": "platform-defaults-test",
+        "clinical_type": "dental",
+        "admin_name": "Test Admin",
+        "admin_email": "admin@platform-defaults-test.example",
+    })
+    assert created.status_code == 201, created.text
+    tenant_id = _uuid.UUID(created.json()["tenant"]["id"])
+
+    async with tenant_session(tenant_id) as session:
+        config = await get_config(session, tenant_id)
+        assert config.day_start == "08:00"
+        assert config.currency.value == "USD"
+
+
+async def test_an_earlier_tenant_keeps_its_own_config_after_the_default_changes(console, northgate):
+    """northgate already exists (seeded), with day_start "08:30" per
+    seed_data.json. Changing the platform default must not retroactively
+    touch it."""
+    import uuid as _uuid
+
+    from app.db.session import tenant_session
+    from app.services.tenants import get_config
+
+    me = (await northgate.get("/v1/auth/me")).json()
+    tenant_id = _uuid.UUID(me["tenant_id"])
+
+    await console.patch("/v1/platform/settings", json={"default_day_start": "11:00"})
+
+    async with tenant_session(tenant_id) as session:
+        config = await get_config(session, tenant_id)
+        assert config.day_start != "11:00"

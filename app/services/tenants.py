@@ -107,7 +107,20 @@ async def get_config(session: AsyncSession, tenant_id: uuid.UUID) -> TenantConfi
         await session.execute(select(TenantConfig).where(TenantConfig.tenant_id == tenant_id))
     ).scalar_one_or_none()
     if row is None:
-        row = TenantConfig(tenant_id=tenant_id)
+        from app.services import platform as platform_service  # deferred: platform.py imports this module too
+
+        defaults = await platform_service.get_platform_settings(session)
+        row = TenantConfig(
+            tenant_id=tenant_id,
+            day_start=defaults.default_day_start,
+            day_end=defaults.default_day_end,
+            slot_minutes=defaults.default_slot_minutes,
+            default_duration=defaults.default_duration,
+            tax_pct=defaults.default_tax_pct,
+            payment_terms_days=defaults.default_payment_terms_days,
+            expiry_alert_days=defaults.default_expiry_alert_days,
+            currency=defaults.default_currency,
+        )
         session.add(row)
         await session.flush()
     return row
