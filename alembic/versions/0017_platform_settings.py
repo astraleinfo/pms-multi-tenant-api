@@ -38,8 +38,8 @@ def upgrade() -> None:
         "platform_settings",
         sa.Column("id", sa.dialects.postgresql.UUID(as_uuid=True), primary_key=True),
         sa.Column("support_email", sa.String(200), nullable=False, server_default="support@astrale.health"),
-        sa.Column("support_phone", sa.String(40), nullable=False, server_default=""),
-        sa.Column("support_hours", sa.String(200), nullable=False, server_default=""),
+        sa.Column("support_phone", sa.String(40), nullable=False, server_default="+91 80 4718 2200"),
+        sa.Column("support_hours", sa.String(200), nullable=False, server_default="Monday to Saturday, 9am – 7pm IST"),
         sa.Column("default_day_start", sa.String(5), nullable=False, server_default="09:00"),
         sa.Column("default_day_end", sa.String(5), nullable=False, server_default="17:30"),
         sa.Column("default_slot_minutes", sa.Integer(), nullable=False, server_default="30"),
@@ -62,6 +62,17 @@ def upgrade() -> None:
     )
     op.execute(
         sa.text("INSERT INTO platform_settings (id) VALUES (:id)").bindparams(id=PLATFORM_SETTINGS_ID)
+    )
+    op.execute(
+        """
+        DO $$
+        BEGIN
+            IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'pms_app') THEN
+                GRANT SELECT, INSERT, UPDATE, DELETE ON platform_settings TO pms_app;
+            END IF;
+        END
+        $$;
+        """
     )
 
 

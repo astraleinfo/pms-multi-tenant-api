@@ -39,6 +39,23 @@ async def test_the_support_desk_cannot_write_lab_tests(console_support):
     })
     assert create.status_code == 403
 
+    patch = await console_support.patch("/v1/platform/catalog/lab-tests/CBC", json={"name": "X"})
+    assert patch.status_code == 403
+
+    delete = await console_support.delete("/v1/platform/catalog/lab-tests/CBC")
+    assert delete.status_code == 403
+
+
+async def test_lab_test_writes_need_a_console_session(client):
+    from tests.conftest import CONSOLE
+
+    create = await client.post(
+        "/v1/platform/catalog/lab-tests",
+        json={"code": "SHOULD-FAIL", "name": "X", "panel": "General"},
+        headers={"Host": CONSOLE},
+    )
+    assert create.status_code == 401
+
 
 async def test_deleting_a_lab_test_does_not_touch_history_that_used_it(northgate, console):
     """A lab order copies the test's code, name and panel onto itself —
@@ -102,6 +119,16 @@ async def test_the_support_desk_cannot_write_the_catalogue(console_support):
     response = await console_support.post("/v1/platform/catalog/medicines", json={"medicine": "X"})
     assert response.status_code == 403
 
+    patch = await console_support.patch(
+        "/v1/platform/catalog/medicines/00000000-0000-0000-0000-000000000000", json={"medicine": "X"}
+    )
+    assert patch.status_code == 403
+
+    delete = await console_support.delete(
+        "/v1/platform/catalog/medicines/00000000-0000-0000-0000-000000000000"
+    )
+    assert delete.status_code == 403
+
 
 async def test_a_malformed_medicine_id_is_a_404_not_a_crash(console):
     response = await console.patch("/v1/platform/catalog/medicines/not-a-uuid", json={"strength": "1mg"})
@@ -120,3 +147,18 @@ async def test_a_super_admin_can_edit_clinical_type_copy(console):
 async def test_editing_an_unknown_clinical_type_is_404(console):
     response = await console.patch("/v1/platform/catalog/clinical-types/not-a-real-one", json={"label": "X"})
     assert response.status_code == 404
+
+
+async def test_the_support_desk_cannot_edit_clinical_type_copy(console_support):
+    response = await console_support.patch(
+        "/v1/platform/catalog/clinical-types/dental", json={"label": "X"}
+    )
+    assert response.status_code == 403
+
+
+async def test_an_explicit_null_is_rejected_not_written(console):
+    """`name: null` would violate the NOT NULL column if it reached the
+    database — it must be treated as `field not provided`, matching every
+    other patch endpoint, rather than surfacing a raw constraint 409."""
+    response = await console.patch("/v1/platform/catalog/lab-tests/CBC", json={"name": None})
+    assert response.status_code == 404, "unset, so the route falls through to its normal not-found path"
