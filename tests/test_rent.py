@@ -12,17 +12,23 @@ from datetime import date, timedelta
 import pytest
 from sqlalchemy import delete, select, update
 
-from app.core.config import settings
 from app.db.session import session_factory, tenant_session
 from app.models.rent import SubscriptionInvoice
 from app.models.tenancy import Tenant
 from app.services import mailer, rent
+from app.services.platform import Timings, get_timings
 from tests.conftest import NORTHGATE, sign_in
 
 
 @pytest.fixture
 async def northgate_id(northgate) -> uuid.UUID:
     return uuid.UUID(northgate.tenant_id)
+
+
+@pytest.fixture
+async def timings() -> Timings:
+    async with tenant_session(None) as session:
+        return await get_timings(session)
 
 
 @pytest.fixture(autouse=True)
@@ -83,7 +89,7 @@ def _stages(outbox: list[mailer.Email]) -> list[str]:
 # --- raising ------------------------------------------------------------------------------
 
 
-async def test_a_bill_charges_every_paid_module_that_is_on(northgate, console, northgate_id, outbox):
+async def test_a_bill_charges_every_paid_module_that_is_on(northgate, console, northgate_id, outbox, timings):
     today = date(2026, 10, 1)
     await _cycle(northgate_id, today)
 
@@ -98,7 +104,7 @@ async def test_a_bill_charges_every_paid_module_that_is_on(northgate, console, n
     assert {line["feature_key"] for line in bill.lines} == expected
     assert float(bill.amount) == pytest.approx(sum(features[k]["price_monthly"] for k in expected))
     assert bill.period_start == date(2026, 10, 1) and bill.period_end == date(2026, 10, 31)
-    assert bill.due_on == today + timedelta(days=settings.rent_due_days)
+    assert bill.due_on == today + timedelta(days=timings.rent_due_days)
     # The admins are told a bill exists.
     assert outbox and all("October 2026 bill" in e.subject for e in outbox)
 
@@ -144,14 +150,14 @@ async def test_an_exempt_clinic_is_never_billed(console, northgate_id, outbox):
 
 
 async def test_each_rung_is_emailed_once_and_the_hold_lands_after_the_grace_period(
-    northgate_id, outbox
+    northgate_id, outbox, timings
 ):
     issued = date(2026, 10, 1)
-    due = issued + timedelta(days=settings.rent_due_days)
-    grace = settings.rent_grace_days
+    due = issued + timedelta(days=timings.rent_due_days)
+    grace = timings.rent_grace_days
 
     seen: list[str] = []
-    for offset in range(0, settings.rent_due_days + grace + 3):
+    for offset in range(0, timings.rent_due_days + grace + 3):
         day = issued + timedelta(days=offset)
         before = len(outbox)
         await _cycle(northgate_id, day)
@@ -164,12 +170,12 @@ async def test_each_rung_is_emailed_once_and_the_hold_lands_after_the_grace_peri
     assert seen == ["issued", "due_soon", "due", "overdue", "final", "blocked"]
 
 
-async def test_a_missed_week_sends_only_the_rung_the_bill_is_on_now(northgate_id, outbox):
+async def test_a_missed_week_sends_only_the_rung_the_bill_is_on_now(northgate_id, outbox, timings):
     issued = date(2026, 10, 1)
     await _cycle(northgate_id, issued)
     outbox.clear()
 
-    late = issued + timedelta(days=settings.rent_due_days + 2)
+    late = issued + timedelta(days=timings.rent_due_days + 2)
     await _cycle(northgate_id, late)
 
     assert len({e.to for e in outbox}) == len(outbox)  # one message per admin
@@ -182,8 +188,10 @@ async def test_a_missed_week_sends_only_the_rung_the_bill_is_on_now(northgate_id
 async def _put_on_hold(tenant_id: uuid.UUID) -> SubscriptionInvoice:
     issued = date(2026, 10, 1)
     await _cycle(tenant_id, issued)
+    async with tenant_session(None) as session:
+        timings = await get_timings(session)
     await _cycle(
-        tenant_id, issued + timedelta(days=settings.rent_due_days + settings.rent_grace_days + 1)
+        tenant_id, issued + timedelta(days=timings.rent_due_days + timings.rent_grace_days + 1)
     )
     assert await _held(tenant_id)
     [bill] = await _bills(tenant_id)
@@ -299,10 +307,10 @@ async def test_a_clinic_cannot_reach_another_clinics_bill(clearview, northgate_i
     assert response.status_code == 404
 
 
-async def test_the_console_overview_lists_every_clinic(console, northgate_id, outbox):
+async def test_the_console_overview_lists_every_clinic(console, northgate_id, outbox, timings):
     await _cycle(northgate_id, date(2026, 10, 1))
     overview = (await console.get("/v1/platform/billing")).json()
-    assert overview["grace_days"] == settings.rent_grace_days
+    assert overview["grace_days"] == timings.rent_grace_days
     row = next(r for r in overview["clinics"] if r["tenant"]["id"] == str(northgate_id))
     assert row["summary"]["open_count"] == 1
 
@@ -314,13 +322,13 @@ async def test_run_now_is_a_super_admins_and_is_idempotent(console, outbox):
     assert second["raised"] == []
 
 
-def test_the_ladder_rungs_in_order():
+async def test_the_ladder_rungs_in_order(timings):
     bill = SubscriptionInvoice(due_on=date(2026, 10, 8))
-    grace = settings.rent_grace_days
-    before = settings.rent_reminder_days_before_due
-    assert rent.stage_for(bill, date(2026, 10, 8) - timedelta(days=before + 1)).value == "issued"
-    assert rent.stage_for(bill, date(2026, 10, 8) - timedelta(days=before)).value == "due_soon"
-    assert rent.stage_for(bill, date(2026, 10, 8)).value == "due"
-    assert rent.stage_for(bill, date(2026, 10, 9)).value == "overdue"
-    assert rent.stage_for(bill, date(2026, 10, 8) + timedelta(days=grace)).value == "final"
-    assert rent.stage_for(bill, date(2026, 10, 8) + timedelta(days=grace + 1)).value == "blocked"
+    grace = timings.rent_grace_days
+    before = timings.rent_reminder_days_before_due
+    assert rent.stage_for(bill, date(2026, 10, 8) - timedelta(days=before + 1), timings).value == "issued"
+    assert rent.stage_for(bill, date(2026, 10, 8) - timedelta(days=before), timings).value == "due_soon"
+    assert rent.stage_for(bill, date(2026, 10, 8), timings).value == "due"
+    assert rent.stage_for(bill, date(2026, 10, 9), timings).value == "overdue"
+    assert rent.stage_for(bill, date(2026, 10, 8) + timedelta(days=grace), timings).value == "final"
+    assert rent.stage_for(bill, date(2026, 10, 8) + timedelta(days=grace + 1), timings).value == "blocked"

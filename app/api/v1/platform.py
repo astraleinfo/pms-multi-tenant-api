@@ -222,7 +222,8 @@ async def update_tenant(
         # clinic with an overdue bill straight back on hold. Either way the
         # hold follows the bills, not the order the switches were thrown in.
         await set_tenant(session, tenant.id)
-        await rent_service.reconcile_hold(session, tenant, rent_service.clinic_today(tenant))
+        timings = await platform_service.get_timings(session)
+        await rent_service.reconcile_hold(session, tenant, rent_service.clinic_today(tenant), timings)
         await set_tenant(session, None)
     await audit.record_for_tenant(
         session, tenant.id, action="platform.tenant_update", actor_kind="platform",

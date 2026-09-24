@@ -44,8 +44,10 @@ from app.schemas.tenancy import (
     TenantOut,
 )
 from app.services import audit
+from app.services import platform as platform_service
 from app.services import rent as rent_service
 from app.services.documents import build_subscription_invoice_pdf
+from app.services.platform import Timings
 
 clinic_router = APIRouter(prefix="/tenant/subscription", tags=["subscription"])
 console_router = APIRouter(prefix="/platform", tags=["platform"])
@@ -54,15 +56,16 @@ console_router = APIRouter(prefix="/platform", tags=["platform"])
 async def _subscription(session: AsyncSession, tenant: Tenant) -> SubscriptionOut:
     bills = await rent_service.list_bills(session, tenant.id)
     today = rent_service.clinic_today(tenant)
+    timings = await platform_service.get_timings(session)
     return SubscriptionOut(
-        summary=SubscriptionSummaryOut(**rent_service.summary_for(tenant, bills, today)),
-        invoices=[SubscriptionInvoiceOut.of(b, rent_service.hold_date(b)) for b in bills],
+        summary=SubscriptionSummaryOut(**rent_service.summary_for(tenant, bills, today, timings)),
+        invoices=[SubscriptionInvoiceOut.of(b, rent_service.hold_date(b, timings)) for b in bills],
     )
 
 
-def _pdf(bill, tenant: Tenant) -> Response:
+def _pdf(bill, tenant: Tenant, timings: Timings) -> Response:
     content = build_subscription_invoice_pdf(
-        bill, clinic=tenant.name, hold_on=rent_service.hold_date(bill)
+        bill, clinic=tenant.name, hold_on=rent_service.hold_date(bill, timings)
     )
     safe = "".join(ch for ch in bill.number if ch.isalnum() or ch in "-_") or "bill"
     return Response(
@@ -92,7 +95,8 @@ async def my_bill_pdf(
     ctx: TenantContext = Depends(require_permission(Permission.TENANT_FEATURE_MANAGE)),
 ) -> Response:
     bill = await rent_service.get_bill(ctx.session, ctx.tenant_id, parse_uuid(bill_id, what="bill"))
-    return _pdf(bill, ctx.tenant)
+    timings = await platform_service.get_timings(ctx.session)
+    return _pdf(bill, ctx.tenant, timings)
 
 
 # --- the console ------------------------------------------------------------------------
@@ -121,12 +125,13 @@ async def platform_billing(
             PlatformBillingRowOut(tenant=TenantOut.of(clinic), summary=sub.summary, invoices=sub.invoices)
         )
     await set_tenant(session, None)
+    timings = await platform_service.get_timings(session)
     return PlatformBillingOut(
         enabled=settings.rent_billing_enabled,
         currency=settings.rent_currency,
-        due_days=settings.rent_due_days,
-        grace_days=settings.rent_grace_days,
-        reminder_days_before_due=settings.rent_reminder_days_before_due,
+        due_days=timings.rent_due_days,
+        grace_days=timings.rent_grace_days,
+        reminder_days_before_due=timings.rent_reminder_days_before_due,
         clinics=rows,
     )
 
@@ -172,7 +177,8 @@ async def tenant_bill_pdf(
 ) -> Response:
     clinic = await _clinic(session, tenant_id)
     bill = await rent_service.get_bill(session, clinic.id, parse_uuid(bill_id, what="bill"))
-    return _pdf(bill, clinic)
+    timings = await platform_service.get_timings(session)
+    return _pdf(bill, clinic, timings)
 
 
 @console_router.post(
