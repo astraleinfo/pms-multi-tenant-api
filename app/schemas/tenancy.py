@@ -174,6 +174,12 @@ class PlatformSettingsOut(ApiModel):
     default_payment_terms_days: int
     default_expiry_alert_days: int
     default_currency: Currency
+    invite_token_ttl_seconds: int
+    reset_token_ttl_seconds: int
+    reminder_lead_hours: int
+    rent_due_days: int
+    rent_grace_days: int
+    rent_reminder_days_before_due: int
 
     @classmethod
     def of(cls, row) -> PlatformSettingsOut:
@@ -189,6 +195,12 @@ class PlatformSettingsOut(ApiModel):
             default_payment_terms_days=row.default_payment_terms_days,
             default_expiry_alert_days=row.default_expiry_alert_days,
             default_currency=row.default_currency,
+            invite_token_ttl_seconds=row.invite_token_ttl_seconds,
+            reset_token_ttl_seconds=row.reset_token_ttl_seconds,
+            reminder_lead_hours=row.reminder_lead_hours,
+            rent_due_days=row.rent_due_days,
+            rent_grace_days=row.rent_grace_days,
+            rent_reminder_days_before_due=row.rent_reminder_days_before_due,
         )
 
 
@@ -204,6 +216,12 @@ class PlatformSettingsPatch(InputModel):
     default_payment_terms_days: int | None = Field(default=None, ge=0, le=365)
     default_expiry_alert_days: int | None = Field(default=None, ge=1, le=730)
     default_currency: Currency | None = None
+    invite_token_ttl_seconds: int | None = Field(default=None, ge=86400, le=2592000)
+    reset_token_ttl_seconds: int | None = Field(default=None, ge=3600, le=259200)
+    reminder_lead_hours: int | None = Field(default=None, ge=1, le=72)
+    rent_due_days: int | None = Field(default=None, ge=1, le=60)
+    rent_grace_days: int | None = Field(default=None, ge=0, le=60)
+    rent_reminder_days_before_due: int | None = Field(default=None, ge=0, le=30)
 
 
 class LabTestAdminOut(ApiModel):

@@ -29,6 +29,12 @@ async def _reset_platform_settings() -> None:
             row.default_payment_terms_days = 14
             row.default_expiry_alert_days = 90
             row.default_currency = Currency.INR
+            row.invite_token_ttl_seconds = 604800
+            row.reset_token_ttl_seconds = 7200
+            row.reminder_lead_hours = 24
+            row.rent_due_days = 7
+            row.rent_grace_days = 7
+            row.rent_reminder_days_before_due = 3
 
 
 @pytest.fixture(autouse=True)
@@ -149,3 +155,32 @@ async def test_an_earlier_tenant_keeps_its_own_config_after_the_default_changes(
     async with tenant_session(tenant_id) as session:
         config = await get_config(session, tenant_id)
         assert config.day_start != "11:00"
+
+
+async def test_the_timing_fields_are_readable_and_writable(console):
+    read = await console.get("/v1/platform/settings")
+    assert read.status_code == 200
+    body = read.json()
+    assert body["invite_token_ttl_seconds"] == 604800
+    assert body["reset_token_ttl_seconds"] == 7200
+    assert body["reminder_lead_hours"] == 24
+    assert body["rent_due_days"] == 7
+    assert body["rent_grace_days"] == 7
+    assert body["rent_reminder_days_before_due"] == 3
+
+    changed = await console.patch("/v1/platform/settings", json={
+        "rent_grace_days": 10, "reminder_lead_hours": 12,
+    })
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["rent_grace_days"] == 10
+    assert changed.json()["reminder_lead_hours"] == 12
+    # untouched fields keep their value
+    assert changed.json()["rent_due_days"] == 7
+
+
+async def test_a_bad_timing_value_is_refused(console):
+    response = await console.patch("/v1/platform/settings", json={"rent_grace_days": -1})
+    assert response.status_code == 422
+
+    response = await console.patch("/v1/platform/settings", json={"invite_token_ttl_seconds": 30})
+    assert response.status_code == 422, "a few seconds is not a usable invitation link"

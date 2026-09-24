@@ -196,9 +196,10 @@ class PlatformSettings(Base, TimestampMixin):
         default=Currency.INR,
     )
 
-    # timing knobs — columns exist for forward-compat; NOT read anywhere yet
-    # and NOT exposed on any schema. See the design spec's "Timing knobs —
-    # descoped" section before wiring these up.
+    # timing knobs — read via `services/platform.py::get_timings`, resolved
+    # once per unit of work and passed down as a `Timings` value. See
+    # docs/superpowers/specs/2026-09-24-console-commercial-pages-design.md's
+    # Decisions section for why this is a value, not a re-read per call.
     invite_token_ttl_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=604800)
     reset_token_ttl_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=7200)
     reminder_lead_hours: Mapped[int] = mapped_column(Integer, nullable=False, default=24)

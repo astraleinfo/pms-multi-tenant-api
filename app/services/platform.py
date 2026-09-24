@@ -10,6 +10,7 @@ is no RLS bypass role anywhere in this application.
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 
@@ -40,6 +41,22 @@ from app.services.tenants import CORE_FEATURES
 PLATFORM_SETTINGS_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
 
+@dataclass(frozen=True)
+class Timings:
+    """The six operational knobs `platform_settings` carries, resolved once
+    per unit of work (one billing run, one invitation, one queued reminder)
+    and passed down as a plain value from there — never read from a
+    module-level global inside a pure function, so a run already in
+    progress cannot see two different configs partway through."""
+
+    invite_token_ttl_seconds: int
+    reset_token_ttl_seconds: int
+    reminder_lead_hours: int
+    rent_due_days: int
+    rent_grace_days: int
+    rent_reminder_days_before_due: int
+
+
 async def get_platform_settings(session: AsyncSession) -> PlatformSettings:
     """The one row. Created on first read if the migration's seed somehow
     hasn't run yet — belt to that braces, never expected to fire in practice."""
@@ -49,6 +66,18 @@ async def get_platform_settings(session: AsyncSession) -> PlatformSettings:
         session.add(row)
         await session.flush()
     return row
+
+
+async def get_timings(session: AsyncSession) -> Timings:
+    row = await get_platform_settings(session)
+    return Timings(
+        invite_token_ttl_seconds=row.invite_token_ttl_seconds,
+        reset_token_ttl_seconds=row.reset_token_ttl_seconds,
+        reminder_lead_hours=row.reminder_lead_hours,
+        rent_due_days=row.rent_due_days,
+        rent_grace_days=row.rent_grace_days,
+        rent_reminder_days_before_due=row.rent_reminder_days_before_due,
+    )
 
 
 async def update_platform_settings(session: AsyncSession, changes: dict) -> PlatformSettings:
