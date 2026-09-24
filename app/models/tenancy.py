@@ -29,6 +29,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.core.config import settings
 from app.db.base import Base, TenantScoped, TimestampMixin, uuid_pk
 from app.models.enums import (
     Currency,
@@ -80,7 +81,7 @@ class Tenant(Base, TimestampMixin):
     city: Mapped[str] = mapped_column(String(120), nullable=False, default="")
     plan: Mapped[str] = mapped_column(String(60), nullable=False, default="Trial")
     since: Mapped[date] = mapped_column(Date, nullable=False)
-    timezone: Mapped[str] = mapped_column(String(60), nullable=False, default="Europe/London")
+    timezone: Mapped[str] = mapped_column(String(60), nullable=False, default=lambda: settings.pms_timezone)
     #: Set when the clinic is put on hold for an unpaid subscription bill, and
     #: cleared the moment it is settled. Distinct from `status`: a suspension
     #: is a decision somebody made, a hold is arithmetic, and paying must lift
@@ -140,6 +141,10 @@ class TenantConfig(Base, TenantScoped, TimestampMixin):
     day_end: Mapped[str] = mapped_column(String(5), nullable=False, default="17:30")
     slot_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
     default_duration: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
+    #: The kinds of visit this clinic books — ``[{"id", "name", "minutes"}]``.
+    #: A booking of a type is that long and its slots step at that interval;
+    #: ``slot_minutes`` is only the fallback for a clinic that has defined none.
+    appointment_types: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
 
     token_prefix: Mapped[str] = mapped_column(String(4), nullable=False, default="A")
     urgent_first: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)

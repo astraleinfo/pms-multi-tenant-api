@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import csv
 import io
+import logging
 import re
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -35,6 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ValidationFailed
 from app.core.permissions import Role
+from app.db.session import set_tenant
 from app.models.clinical import Patient
 from app.models.enums import FieldEntity, FieldType, Sex
 from app.models.identity import User
@@ -42,8 +44,14 @@ from app.models.tenancy import FieldDefinition, Tenant
 from app.schemas.clinical import PatientIn
 from app.services import tenants as tenant_service
 
+log = logging.getLogger("pms.imports")
+
 MAX_FILE_BYTES = 5 * 1024 * 1024
-MAX_ROWS = {"users": 300, "patients": 3000}
+MAX_ROWS = {"users": 300, "patients": 3000, "inventory": 2000}
+
+#: the first sheet's name, and what a row of it is, for each kind of import
+SHEET_TITLE = {"users": "Staff", "patients": "Patients", "inventory": "Items"}
+WHAT = {"users": "staff accounts", "patients": "patient records", "inventory": "stock items"}
 
 ROLE_LABELS = {
     Role.TENANT_ADMIN.value: "Practice admin",
@@ -124,9 +132,20 @@ def patient_columns(schema: list[FieldDefinition]) -> tuple[Column, ...]:
 # --- the sample sheet ----------------------------------------------------------------
 
 
-def build_template(kind: str, columns: tuple[Column, ...], *, clinic: str) -> bytes:
-    """An .xlsx with the columns in row 1, one worked example in row 2, a
-    dropdown on every column with fixed choices, and a sheet explaining each."""
+def build_template(
+    kind: str,
+    columns: tuple[Column, ...],
+    *,
+    clinic: str,
+    examples: list[dict[str, Any]] | None = None,
+    notes: tuple[str, ...] = (),
+) -> bytes:
+    """An .xlsx with the columns in row 1, worked examples under it, a
+    dropdown on every column with fixed choices, and a sheet explaining each.
+
+    The examples are each column's own `example` unless `examples` is given —
+    one row per dict, keyed by column — for a sheet where one row cannot show
+    every way of filling it in. `notes` are extra lines for the guide."""
     from openpyxl import Workbook
     from openpyxl.comments import Comment
     from openpyxl.styles import Alignment, Font, PatternFill
@@ -134,7 +153,8 @@ def build_template(kind: str, columns: tuple[Column, ...], *, clinic: str) -> by
 
     book = Workbook()
     sheet = book.active
-    sheet.title = "Staff" if kind == "users" else "Patients"
+    sheet.title = SHEET_TITLE[kind]
+    examples = examples or [{c.key: c.example for c in columns}]
 
     head_fill = PatternFill("solid", fgColor="2F6BF3")
     required_fill = PatternFill("solid", fgColor="1A4FCC")
@@ -147,9 +167,11 @@ def build_template(kind: str, columns: tuple[Column, ...], *, clinic: str) -> by
         cell.alignment = Alignment(vertical="center")
         if column.help:
             cell.comment = Comment(column.help, "Astrale")
-        example = sheet.cell(row=2, column=i, value=column.example)
-        example.font = example_font
-        width = max(len(column.label) + 4, len(str(column.example)) + 2, 14)
+        for offset, values in enumerate(examples):
+            example = sheet.cell(row=2 + offset, column=i, value=values.get(column.key, ""))
+            example.font = example_font
+        longest = max(len(str(values.get(column.key, ""))) for values in examples)
+        width = max(len(column.label) + 4, longest + 2, 14)
         sheet.column_dimensions[cell.column_letter].width = min(width, 40)
 
         if column.options:
@@ -168,16 +190,20 @@ def build_template(kind: str, columns: tuple[Column, ...], *, clinic: str) -> by
     guide.column_dimensions["A"].width = 26
     guide.column_dimensions["B"].width = 12
     guide.column_dimensions["C"].width = 80
-    what = "staff accounts" if kind == "users" else "patient records"
+    grey = (
+        "row 2 (the grey example)" if len(examples) == 1
+        else f"rows 2–{len(examples) + 1} (the grey examples)"
+    )
     lines = [
-        (f"Import {what} into {clinic}", "", ""),
+        (f"Import {WHAT[kind]} into {clinic}", "", ""),
         ("", "", ""),
-        ("Replace row 2 (the grey example) with your own, one per row, on the first sheet.", "", ""),
+        (f"Replace {grey} with your own, one per row, on the first sheet.", "", ""),
         ("Columns marked * are required. Keep the header row as it is.", "", ""),
         (f"Up to {MAX_ROWS[kind]} rows per file. Nothing is saved until every row passes.", "", ""),
     ]
     if kind == "users":
         lines.append(("Each person is emailed an invitation to choose their own password.", "", ""))
+    lines += [(note, "", "") for note in notes]
     lines += [("", "", ""), ("Column", "Required", "What goes in it")]
     lines += [(c.label, "yes" if c.required else "", c.help or "") for c in columns]
     for row in lines:
@@ -344,6 +370,9 @@ async def check_users(
             result.errors.append("Full name is too long.")
 
         email = _text(values.get("email")).lower()
+        #: the account or row this one repeats, for the screens that list
+        #: duplicates on their own
+        duplicate_of: str | None = None
         if not email:
             result.errors.append("Email is required.")
         else:
@@ -352,8 +381,10 @@ async def check_users(
             except EmailNotValidError:
                 result.errors.append(f"'{email}' is not an email address.")
             if email in existing:
+                duplicate_of = email
                 result.errors.append(f"{email} already has an account in this clinic.")
             elif email in seen:
+                duplicate_of = f"row {seen[email]}"
                 result.errors.append(f"{email} is also on row {seen[email]}.")
             seen.setdefault(email, number)
 
@@ -367,7 +398,10 @@ async def check_users(
             )
 
         speciality = _text(values.get("speciality"))[:120] or None
-        result.data = {"name": name, "email": email, "role": role, "speciality": speciality}
+        result.data = {
+            "name": name, "email": email, "role": role, "speciality": speciality,
+            "duplicate_of": duplicate_of,
+        }
         results.append(result)
     return results
 
@@ -477,3 +511,48 @@ async def check_patients(
         result.data = payload
         results.append(result)
     return results
+
+
+# --- writing staff ------------------------------------------------------------------------
+
+
+async def create_users(
+    session: AsyncSession, clinic: Tenant, results: list[RowResult], *, issued_by: str
+) -> tuple[int, int]:
+    """Open an invited account for every row and email each person their link.
+
+    Returns (created, invited). A send that fails is logged, not raised: the
+    account exists, and "resend" is on the clinic's staff list for exactly
+    this. The caller has the clinic bound and has checked every row.
+    """
+    from app.models.enums import AccountStatus
+    from app.services import invitations, mailer
+    from app.services.platform import initials_of
+
+    users = []
+    for r in results:
+        user = User(
+            tenant_id=clinic.id,
+            name=r.data["name"],
+            role=r.data["role"],
+            email=r.data["email"],
+            password_hash=None,
+            initials=initials_of(r.data["name"]),
+            speciality=r.data["speciality"],
+            status=AccountStatus.INVITED,
+        )
+        session.add(user)
+        users.append(user)
+    await session.flush()
+
+    invited = 0
+    for user in users:
+        # Bound again each time: an invitation writes a token row under the
+        # clinic's policy, and an earlier audit write may have released it.
+        await set_tenant(session, clinic.id)
+        try:
+            await invitations.invite_user(session, user=user, tenant=clinic, issued_by_label=issued_by)
+            invited += 1
+        except mailer.MailError as exc:
+            log.error("could not send invitation to %s: %s", user.email, exc)
+    return len(users), invited

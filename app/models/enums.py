@@ -366,8 +366,13 @@ class MessageTemplate(StrEnum):
 class MessageStatus(StrEnum):
     """`queued` is the only state the worker picks up. `failed` is terminal
     until someone retries it; `cancelled` is what a scrapped appointment does
-    to a reminder that had not gone out yet."""
+    to a reminder that had not gone out yet.
 
+    `scheduled` is a reminder whose day has not come: it has no job yet, and
+    the midnight run queues it when its day arrives. See
+    `app/services/messaging/reminders.py`."""
+
+    SCHEDULED = "scheduled"
     QUEUED = "queued"
     SENDING = "sending"
     SENT = "sent"
@@ -389,6 +394,17 @@ class SupportRequestKind(StrEnum):
     ACTIVATION = "activation"
     WALKTHROUGH = "walkthrough"
     GENERAL = "general"
+
+
+class ImportJobStatus(StrEnum):
+    """Where a spreadsheet import has got to. `queued` and `running` are the
+    states the worker picks up; `done` and `failed` are final, and by then the
+    uploaded file is gone."""
+
+    QUEUED = "queued"
+    RUNNING = "running"
+    DONE = "done"
+    FAILED = "failed"
 
 
 class SupportRequestStatus(StrEnum):

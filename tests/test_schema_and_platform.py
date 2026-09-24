@@ -127,6 +127,33 @@ async def test_configuration_is_per_clinic_and_validated(northgate, clearview):
     await northgate.patch("/v1/tenant/config", json={"slot_minutes": ours["slot_minutes"], "tax_pct": ours["tax_pct"]})
 
 
+async def test_appointment_types_are_the_clinics_own_and_validated(northgate, clearview):
+    ours = (await northgate.get("/v1/tenant/config")).json()
+    assert [t["id"] for t in ours["appointment_types"]]  # every clinic starts with some
+
+    types = [
+        {"id": "consultation", "name": "Consultation", "minutes": 30},
+        {"id": "root-canal", "name": "Root canal", "minutes": 90},
+    ]
+    saved = await northgate.patch("/v1/tenant/config", json={"appointment_types": types})
+    assert saved.status_code == 200
+    assert saved.json()["appointment_types"] == types
+
+    # another clinic's list is untouched
+    theirs = (await clearview.get("/v1/tenant/config")).json()
+    assert theirs["appointment_types"] != types
+
+    for bad in (
+        [{"id": "x", "name": "Odd length", "minutes": 17}],            # not a 5-minute step
+        [{"id": "x", "name": "Too long", "minutes": 300}],
+        [{"id": "a", "name": "Review", "minutes": 15}, {"id": "b", "name": "review", "minutes": 20}],
+        [{"id": "x", "name": "   ", "minutes": 15}],
+    ):
+        assert (await northgate.patch("/v1/tenant/config", json={"appointment_types": bad})).status_code == 422
+
+    await northgate.patch("/v1/tenant/config", json={"appointment_types": ours["appointment_types"]})
+
+
 # --- §3.1 the console --------------------------------------------------------
 
 

@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import Conflict, NotFound
 from app.models.enums import InventoryCategory, InventoryRefType, InventoryTxType, PricingMode
 from app.models.ops import InventoryBatch, InventoryItem, InventoryTransaction
+from app.schemas.common import local_today
 
 CENTS = Decimal("0.01")
 
@@ -363,7 +364,7 @@ async def record_movement(
             tenant_id=tenant_id,
             item_id=item.id,
             batch_no=batch_no,
-            expiry=expiry or (date.today() + timedelta(days=365 * 2)),
+            expiry=expiry or (local_today() + timedelta(days=365 * 2)),
             qty=0,
         )
         session.add(batch)

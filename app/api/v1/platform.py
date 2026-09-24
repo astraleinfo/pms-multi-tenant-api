@@ -12,7 +12,7 @@ emailed a single-use link.
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query, Request, status
 from sqlalchemy import select
@@ -32,7 +32,7 @@ from app.db.session import set_tenant
 from app.models.enums import AuthTokenPurpose
 from app.models.identity import PlatformUser
 from app.models.tenancy import ClinicalType, Feature, Tenant
-from app.schemas.common import zone
+from app.schemas.common import local_today, zone
 from app.schemas.identity import PlatformUserOut, UserOut
 from app.schemas.support import SupportRequestOut
 from app.schemas.tenancy import (
@@ -117,7 +117,7 @@ async def create_tenant(
     response says so plainly, because a clinic nobody can sign into is not a
     finished job.
     """
-    tenant, admin = await platform_service.create_tenant(session, payload, today=date.today())
+    tenant, admin = await platform_service.create_tenant(session, payload, today=local_today())
     await get_config(session, tenant.id)
     await audit.record_for_tenant(
         session, tenant.id, action="platform.tenant_create", actor_kind="platform",

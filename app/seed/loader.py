@@ -22,6 +22,7 @@ from typing import Any
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.security import hash_password
 from app.db.session import set_tenant
 from app.models.clinical import (
@@ -60,7 +61,7 @@ from app.seed.history import seed_history
 DATA_FILE = Path(__file__).with_name("seed_data.json")
 NAMESPACE = uuid.UUID("5f0f4d3a-6a6f-4c1e-9d2f-0f3c7b1a9e10")
 
-TZ = "Europe/London"
+TZ = settings.pms_timezone
 
 # The web app pins "today" so its server and client render identically. Here the
 # whole dataset is shifted so that pinned day lands on the real one: the demo
@@ -69,6 +70,14 @@ TZ = "Europe/London"
 # obvious reason.
 PINNED_TODAY = date(2026, 8, 19)
 
+
+
+def default_appointment_types(default_duration: int) -> list[dict]:
+    """What a clinic starts with: an ordinary visit and a short review."""
+    return [
+        {"id": "consultation", "name": "Consultation", "minutes": default_duration},
+        {"id": "follow-up", "name": "Follow-up", "minutes": 15},
+    ]
 
 def _offset() -> timedelta:
     return date.today() - PINNED_TODAY
@@ -372,6 +381,9 @@ async def seed_tenant(session: AsyncSession, data: dict, tenant_row: dict) -> No
             day_end=config_row["day_end"],
             slot_minutes=config_row["slot_minutes"],
             default_duration=config_row["default_duration"],
+            appointment_types=config_row.get("appointment_types") or default_appointment_types(
+                config_row["default_duration"]
+            ),
             token_prefix=config_row["token_prefix"],
             urgent_first=config_row["urgent_first"],
             invoice_prefix=config_row["invoice_prefix"],

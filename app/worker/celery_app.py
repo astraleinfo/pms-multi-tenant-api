@@ -32,6 +32,7 @@ A broker wiped clean delays delivery by one sweep; it loses nothing.
 from __future__ import annotations
 
 from celery import Celery
+from celery.schedules import crontab
 
 from app.core.config import settings
 from app.core.logging import configure_logging
@@ -53,7 +54,9 @@ celery_app.conf.update(
     task_send_sent_event=True,
     task_serializer="json",
     accept_content=["json"],
-    timezone="UTC",
+    # Messages carry UTC; crontab schedules are read on the PMS's clock, so
+    # "0 0" is midnight in PMS_TIMEZONE.
+    timezone=settings.pms_timezone,
     enable_utc=True,
     broker_connection_retry_on_startup=True,
     broker_transport_options={"visibility_timeout": settings.celery_visibility_timeout_seconds},
@@ -65,6 +68,20 @@ celery_app.conf.update(
     beat_schedule={
         "sweep-support-requests": {
             "task": "pms.support.sweep",
+            "schedule": float(settings.celery_sweep_seconds),
+        },
+        "sweep-imports": {
+            "task": "pms.imports.sweep",
+            "schedule": float(settings.celery_sweep_seconds),
+        },
+        # Appointment reminders due today move to the queue at midnight, on
+        # the PMS's clock (see `timezone` above).
+        "reminders-midnight": {
+            "task": "pms.reminders.promote",
+            "schedule": crontab(hour=0, minute=0),
+        },
+        "sweep-reminders": {
+            "task": "pms.reminders.sweep",
             "schedule": float(settings.celery_sweep_seconds),
         },
         # The monthly bills and their reminders. Only when switched on: with

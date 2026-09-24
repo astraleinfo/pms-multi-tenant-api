@@ -136,6 +136,16 @@ class UserCreateIn(InputModel):
     password: str | None = Field(default=None, min_length=12, max_length=200)
 
 
+class UserUpdateIn(InputModel):
+    """What a practice admin may change about a colleague. Everything is
+    optional; what is sent is what changes. A speciality sent as "" clears it."""
+
+    name: str | None = Field(default=None, min_length=2, max_length=160)
+    email: EmailStr | None = None
+    role: str | None = Field(default=None, max_length=40)
+    speciality: str | None = Field(default=None, max_length=120)
+
+
 class PasswordSetIn(InputModel):
     """What a practice admin sends to give a colleague a password.
 

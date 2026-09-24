@@ -8,6 +8,9 @@ Every path into the outbox comes through here, so the guards live in one place:
 *   a reminder for a slot that has already passed is pointless, so it is not
     queued at all rather than queued and immediately stale.
 
+Reminders are then handed to `reminders`, which decides whether one waits as
+`scheduled` or goes to a Celery job now.
+
 `config_for` creates the row on first use, so a clinic is never missing one —
 disabled and unconfigured, which is the safe shape.
 """
@@ -29,7 +32,7 @@ from app.models.identity import User
 from app.models.messaging import Message, MessagingConfig
 from app.models.tenancy import Tenant, TenantConfig
 from app.schemas.common import zone
-from app.services.messaging import templates
+from app.services.messaging import reminders, templates
 
 log = logging.getLogger("pms.messaging")
 
@@ -117,7 +120,8 @@ async def queue_message(
         text = templates.render(template, variables)
 
     when = send_after or datetime.now(timezone.utc)
-    if template == MessageTemplate.APPOINTMENT_REMINDER and appointment is not None:
+    reminder = template == MessageTemplate.APPOINTMENT_REMINDER and appointment is not None
+    if reminder:
         when = _reminder_send_after(appointment, (await session.get(Tenant, tenant_id)).timezone)
         # A slot inside the lead window - or already gone - gets no reminder.
         if when <= datetime.now(timezone.utc):
@@ -136,25 +140,80 @@ async def queue_message(
     )
     session.add(message)
     await session.flush()
+    if reminder:
+        reminders.place(session, message)
     return message
 
 
-async def cancel_pending_for_appointment(
-    session: AsyncSession, appointment_id: uuid.UUID
-) -> int:
-    """A cancelled slot must not still send a reminder tomorrow morning."""
+async def retime_reminder(
+    session: AsyncSession, *, tenant_id: uuid.UUID, patient: Patient, appointment: Appointment
+) -> Message | None:
+    """The appointment moved: move its reminder with it.
+
+    The reminder still waiting is re-timed in place — its job revoked, its
+    text re-rendered for the new slot, and then scheduled or queued afresh with
+    a new job id. With none waiting (the old slot was too close for one, or it
+    was cancelled) a new one is queued. One that has already gone out is left
+    as the record of what was sent, and the new slot gets no second reminder.
+    """
     rows = (
         (
             await session.execute(
                 select(Message).where(
-                    Message.appointment_id == appointment_id,
-                    Message.status == MessageStatus.QUEUED,
+                    Message.appointment_id == appointment.id,
+                    Message.template == MessageTemplate.APPOINTMENT_REMINDER,
+                    Message.status != MessageStatus.CANCELLED,
                 )
             )
         )
         .scalars()
         .all()
     )
+    live = next((m for m in rows if m.status in reminders.LIVE), None)
+    if live is None:
+        if rows:  # sending, sent or failed: the unique index allows no other
+            return None
+        return await queue_message(
+            session,
+            tenant_id=tenant_id,
+            patient=patient,
+            template=MessageTemplate.APPOINTMENT_REMINDER,
+            appointment=appointment,
+        )
+
+    reminders.stop(session, live)
+    config = await config_for(session, tenant_id)
+    when = _reminder_send_after(appointment, (await session.get(Tenant, tenant_id)).timezone)
+    if not (config.enabled and config.send_appointment_reminder and patient.phone) or (
+        when <= datetime.now(timezone.utc)
+    ):
+        live.status = MessageStatus.CANCELLED
+        return None
+
+    live.body = templates.render(
+        MessageTemplate.APPOINTMENT_REMINDER,
+        await _variables(session, tenant_id, patient, appointment),
+    )
+    live.send_after = when
+    reminders.place(session, live)
+    return live
+
+
+async def cancel_pending_for_appointment(
+    session: AsyncSession,
+    appointment_id: uuid.UUID,
+    *,
+    keep: tuple[MessageTemplate, ...] = (),
+) -> int:
+    """A cancelled slot must not still send a reminder tomorrow morning.
+
+    Scheduled and queued alike are cancelled, and a queued reminder's job is
+    revoked once this commits. `keep` names templates to leave alone.
+    """
+    where = [Message.appointment_id == appointment_id, Message.status.in_(reminders.LIVE)]
+    if keep:
+        where.append(Message.template.not_in(keep))
+    rows = (await session.execute(select(Message).where(*where))).scalars().all()
     for row in rows:
-        row.status = MessageStatus.CANCELLED
+        reminders.cancel(session, row)
     return len(rows)
