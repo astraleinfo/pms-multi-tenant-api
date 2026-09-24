@@ -101,6 +101,32 @@ async def dashboard(
     }
 
 
+def without_revenue(data: dict) -> dict:
+    """The read model with the clinic's takings taken out, for a role that
+    does not hold `revenue:read`.
+
+    Counts stay — how many invoices are unpaid is the front desk's work list —
+    and every money figure goes: removed, not zeroed, so no screen can show a
+    ₹0 that reads as a real number.
+    """
+    core = {k: v for k, v in data["core"].items() if k != "revenue"}
+    modules = dict(data["modules"])
+    if "billing" in modules:
+        modules["billing"] = {
+            k: v for k, v in modules["billing"].items()
+            if k not in {"billed", "paid", "outstanding", "revenue_mix"}
+        }
+    if "pharmacy" in modules:
+        modules["pharmacy"] = {k: v for k, v in modules["pharmacy"].items() if k != "dispensed_value"}
+    if "advanced_reports" in modules:
+        reports = dict(modules["advanced_reports"])
+        reports["clinicians"] = [
+            {k: v for k, v in row.items() if k != "revenue"} for row in reports.get("clinicians", [])
+        ]
+        modules["advanced_reports"] = reports
+    return {**data, "core": core, "modules": modules, "revenue_visible": False}
+
+
 # --- core --------------------------------------------------------------------
 
 

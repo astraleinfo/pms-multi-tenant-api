@@ -312,3 +312,36 @@ def _coerce(definition: FieldDefinition, raw: Any, problems: list[dict[str, str]
         problems.append({"field": definition.field_key, "message": f"{label} is too long."})
         return None
     return text
+
+
+# --- what an account has put its name to ---------------------------------------------
+
+
+async def records_by(session: AsyncSession, user_id: uuid.UUID) -> dict[str, int]:
+    """Every table row that names this account, counted by table.
+
+    Read off the schema rather than listed by hand: any column with a foreign
+    key to `users.id` is somewhere this person's name is on the record, and a
+    table added next year is covered without anyone remembering to add it
+    here. The caller has the clinic bound, so the counts are this clinic's.
+    """
+    from sqlalchemy import func, or_
+
+    from app.db.base import Base
+
+    counts: dict[str, int] = {}
+    for table in Base.metadata.sorted_tables:
+        columns = [
+            fk.parent for fk in table.foreign_keys
+            if fk.column.table.name == "users" and fk.column.name == "id"
+        ]
+        if not columns:
+            continue
+        found = (
+            await session.execute(
+                select(func.count()).select_from(table).where(or_(*(c == user_id for c in columns)))
+            )
+        ).scalar() or 0
+        if found:
+            counts[table.name] = int(found)
+    return counts

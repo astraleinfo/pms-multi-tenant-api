@@ -58,6 +58,11 @@ class Permission(str, Enum):
     BILLING_WRITE = "billing:write"
 
     ANALYTICS_READ = "analytics:read"
+    #: the clinic's takings — revenue, collections, what is outstanding, what
+    #: each clinician brings in. The practice admin's alone: every role sees
+    #: the dashboard, and a colleague's billings are not everyone's business.
+    #: A single invoice's amount is not this; the counter needs that to work.
+    REVENUE_READ = "revenue:read"
 
     # Patient messaging. Reading history and sending are separate so a role can
     # see what went out without being able to send anything new.

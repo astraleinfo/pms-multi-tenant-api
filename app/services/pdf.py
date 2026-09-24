@@ -13,7 +13,7 @@ clinician's free-text turns out to be.
 from __future__ import annotations
 
 import io
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -30,6 +30,7 @@ from reportlab.platypus import (
 )
 
 from app.models.clinical import Encounter, Patient, Prescription
+from app.schemas.common import local_now
 
 # --- palette -----------------------------------------------------------------
 # One accent, used sparingly — a document meant to be printed and filed, not a
@@ -130,6 +131,7 @@ def build_consultation_pdf(
     *,
     tenant_name: str,
     doctor_name: str,
+    tz: str | None = None,
 ) -> bytes:
     """Render one consultation as a PDF and return its bytes.
 
@@ -149,7 +151,7 @@ def build_consultation_pdf(
         [[
             Paragraph((tenant_name or "Clinic").upper(), _CLINIC),
             Paragraph(
-                f"Issued {datetime.now().strftime('%d %b %Y, %H:%M')}<br/>"
+                f"Issued {local_now(tz).strftime('%d %b %Y, %H:%M')}<br/>"
                 f"Visit date {encounter.date.strftime('%d %b %Y')}",
                 _DATE_RIGHT,
             ),

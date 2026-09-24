@@ -17,6 +17,7 @@ from app.models.identity import (  # noqa: F401
     RefreshToken,
     User,
 )
+from app.models.imports import ImportJob  # noqa: F401
 from app.models.messaging import Message, MessagingConfig  # noqa: F401
 from app.models.ops import (  # noqa: F401
     InventoryBatch,

@@ -262,8 +262,10 @@ async def test_a_reminder_is_not_sent_before_it_is_due(northgate):
         m for m in messages["items"]
         if m["appointment_id"] == booking["id"] and m["template"] == "appointment_reminder"
     )
-    # Still waiting, a year out - the sweep must not have sent it early.
-    assert reminder["status"] == "queued"
+    # Still waiting, a year out - scheduled, with no job, and the sweep must
+    # not have sent it early.
+    assert reminder["status"] == "scheduled"
+    assert reminder["job_id"] is None
 
 
 async def test_a_refused_send_is_parked_not_retried(northgate, monkeypatch):
@@ -384,11 +386,12 @@ async def test_moving_an_appointment_re_times_the_reminder(northgate):
         m for m in messages
         if m["appointment_id"] == booking["id"] and m["template"] == "appointment_reminder"
     ]
-    live = [m for m in reminders if m["status"] == "queued"]
-    dead = [m for m in reminders if m["status"] == "cancelled"]
-    # Exactly one live reminder, for the new date; the old one is stood down.
-    assert len(live) == 1
-    assert len(dead) >= 1
+    # One reminder, moved with the appointment rather than replaced: still
+    # waiting for its day, and now naming the new slot.
+    assert len(reminders) == 1
+    assert reminders[0]["status"] == "scheduled"
+    assert "20 Jan 2028" in reminders[0]["body"]
+    assert reminders[0]["send_after"].startswith("2028-01-19")
 
 
 async def test_an_appointment_can_be_moved_twice(northgate):

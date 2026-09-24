@@ -37,7 +37,7 @@ from app.db.session import session_factory, set_tenant
 from app.models.enums import AccountStatus, FieldEntity, PlatformRole, TenantStatus
 from app.models.identity import PlatformUser, User
 from app.models.tenancy import Tenant, TenantConfig
-from app.schemas.common import zone
+from app.schemas.common import local_iso, zone
 from app.services import tenants as tenant_service
 from app.services.auth import Principal
 
@@ -237,7 +237,7 @@ async def current_tenant(
     ):
         raise AccountOnHold(
             "This clinic is on hold until its subscription bill is paid.",
-            details={"hold_since": tenant.billing_hold_since.isoformat()},
+            details={"hold_since": local_iso(tenant.billing_hold_since, tenant.timezone)},
         )
 
     config = await tenant_service.get_config(session, tenant.id)

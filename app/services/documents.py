@@ -11,7 +11,7 @@ printer and in every language.
 from __future__ import annotations
 
 import io
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal
 
 from reportlab.graphics.charts.barcharts import VerticalBarChart
@@ -33,6 +33,7 @@ from reportlab.platypus import (
 from app.models.enums import InvoiceStatus
 from app.models.ops import Invoice
 from app.models.tenancy import TenantConfig
+from app.schemas.common import local_now
 from app.services.pdf import (
     _ACCENT,
     _ACCENT_SOFT,
@@ -401,6 +402,7 @@ def build_report_pdf(
     config: TenantConfig | None,
     currency: str,
     generated_by: str,
+    tz: str | None = None,
 ) -> bytes:
     """The practice report for one window — the figures the reports page shows,
     in a form that can be filed, emailed to an owner, or printed for a meeting."""
@@ -414,13 +416,15 @@ def build_report_pdf(
     start, end = date.fromisoformat(rng["from"]), date.fromisoformat(rng["to"])
     core = data["core"]
     modules = data.get("modules") or {}
+    #: false for a role without `revenue:read` — see `analytics.without_revenue`
+    money_shown = data.get("revenue_visible", True)
     cash = lambda v: money(v, currency)  # noqa: E731 - a one-line formatter
 
     story: list = []
     period = _plain(Table([
         [Paragraph(
             f"{start.strftime('%d %b %Y')} – {end.strftime('%d %b %Y')}<br/>"
-            f"{rng['days']} days · generated {datetime.now().strftime('%d %b %Y, %H:%M')}",
+            f"{rng['days']} days · generated {local_now(tz).strftime('%d %b %Y, %H:%M')}",
             ParagraphStyle("Period", parent=_BODY_SM, alignment=2, textColor=_INK_2),
         )],
     ], colWidths=[doc.width * 0.42]))
@@ -436,7 +440,9 @@ def build_report_pdf(
         ("Patients", f"{core.get('patients', 0):,}", f"{core.get('new_patients', 0)} new this month"),
         ("Encounters", f"{core.get('encounters', 0):,}", "recorded in the period"),
         ("Prescriptions", f"{core.get('prescriptions', 0):,}", "written in the period"),
-        ("Collected", cash(core.get("revenue", 0)), "payments received"),
+        # the takings are the practice admin's; anyone else's report has the day instead
+        ("Collected", cash(core.get("revenue", 0)), "payments received") if money_shown
+        else ("Seen today", f"{core.get('seen_today', 0):,}", "patients"),
         ("No-shows", f"{core.get('no_shows', 0):,}", "booked and missed"),
         ("Average wait", f"{core.get('avg_wait_minutes', 0):g} min",
          f"longest {core.get('max_wait_minutes', 0):g} min"),
@@ -460,6 +466,10 @@ def build_report_pdf(
             ("Paid", cash(billing["paid"]), "against those invoices"),
             ("Outstanding", cash(billing["outstanding"]), f"{billing['unpaid']} unpaid"),
             ("Drafts", f"{billing['drafts']}", "not yet issued"),
+        ] if money_shown else [
+            ("Invoices", f"{billing['count']}", "live"),
+            ("Unpaid", f"{billing['unpaid']}", "issued or part paid"),
+            ("Drafts", f"{billing['drafts']}", "not yet issued"),
         ]))
         if billing.get("revenue_mix"):
             story.append(Spacer(1, 8))
@@ -471,7 +481,10 @@ def build_report_pdf(
         story.append(Paragraph("PHARMACY", _SECTION))
         story.append(_kpis(doc, [
             ("Units dispensed", f"{pharmacy['dispensed_units']:,}", "in the period"),
-            ("Dispensed value", cash(pharmacy["dispensed_value"]), "at selling price"),
+            *(
+                [("Dispensed value", cash(pharmacy["dispensed_value"]), "at selling price")]
+                if money_shown else []
+            ),
             ("Waiting", f"{pharmacy['prescriptions_waiting']}", "prescriptions at the counter"),
             ("Fully dispensed", f"{pharmacy['fully_dispensed']}", "prescriptions"),
         ]))
@@ -506,14 +519,19 @@ def build_report_pdf(
     advanced = modules.get("advanced_reports")
     if advanced and advanced.get("clinicians"):
         story.append(Paragraph("CLINICIANS", _SECTION))
-        rows = [[Paragraph("Clinician", _TH), Paragraph("Encounters", _TH_RIGHT),
-                 Paragraph("Prescriptions", _TH_RIGHT), Paragraph("Billed", _TH_RIGHT)]]
-        rows += [
-            [Paragraph(_esc(c["name"]), _TD), Paragraph(str(c["encounters"]), _TD_RIGHT),
-             Paragraph(str(c["prescriptions"]), _TD_RIGHT), Paragraph(cash(c["revenue"]), _TD_RIGHT)]
-            for c in advanced["clinicians"]
-        ]
-        story.append(_grid(rows, [doc.width * w for w in (0.4, 0.18, 0.2, 0.22)]))
+        head = [Paragraph("Clinician", _TH), Paragraph("Encounters", _TH_RIGHT),
+                Paragraph("Prescriptions", _TH_RIGHT)]
+        if money_shown:
+            head.append(Paragraph("Billed", _TH_RIGHT))
+        rows = [head]
+        for c in advanced["clinicians"]:
+            row = [Paragraph(_esc(c["name"]), _TD), Paragraph(str(c["encounters"]), _TD_RIGHT),
+                   Paragraph(str(c["prescriptions"]), _TD_RIGHT)]
+            if money_shown:
+                row.append(Paragraph(cash(c["revenue"]), _TD_RIGHT))
+            rows.append(row)
+        widths = (0.4, 0.18, 0.2, 0.22) if money_shown else (0.5, 0.25, 0.25)
+        story.append(_grid(rows, [doc.width * w for w in widths]))
 
     story.append(Spacer(1, 16))
     story.append(Paragraph(

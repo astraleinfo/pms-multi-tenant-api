@@ -149,5 +149,10 @@ class Message(Base, TenantScoped, TimestampMixin):
     provider_message_id: Mapped[str] = mapped_column(String(120), nullable=False, default="")
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    job_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    """The Celery job that sends this message, when one does — today, the
+    appointment reminders. A row with a job belongs to that job and the outbox
+    sweep leaves it alone; a job acts only while the row still names it."""
+
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"<Message {self.template} {self.status} -> {self.to_address}>"

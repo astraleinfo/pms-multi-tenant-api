@@ -40,6 +40,7 @@ from app.schemas.tenancy import (
     SettleIn,
     SubscriptionInvoiceOut,
     SubscriptionOut,
+    SubscriptionPlanOut,
     SubscriptionSummaryOut,
     TenantOut,
 )
@@ -57,6 +58,7 @@ async def _subscription(session: AsyncSession, tenant: Tenant) -> SubscriptionOu
     return SubscriptionOut(
         summary=SubscriptionSummaryOut(**rent_service.summary_for(tenant, bills, today)),
         invoices=[SubscriptionInvoiceOut.of(b, rent_service.hold_date(b)) for b in bills],
+        plan=SubscriptionPlanOut(**await rent_service.plan_for(session, tenant)),
     )
 
 

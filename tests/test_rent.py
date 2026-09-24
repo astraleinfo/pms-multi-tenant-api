@@ -140,6 +140,38 @@ async def test_an_exempt_clinic_is_never_billed(console, northgate_id, outbox):
     assert outbox == []
 
 
+async def test_the_plan_lists_what_is_on_and_totals_what_the_next_bill_will_charge(
+    northgate, console, northgate_id, outbox
+):
+    plan = (await northgate.get("/v1/tenant/subscription")).json()["plan"]
+    features = {f["key"]: f for f in (await console.get("/v1/platform/catalog/features")).json()}
+    statuses = {row["feature_key"]: row["status"] for row in (await northgate.get("/v1/tenant/features")).json()}
+
+    listed = {m["feature_key"]: m for m in plan["modules"]}
+    assert set(listed) == {k for k, s in statuses.items() if s in ("active", "trial")}
+    for key, module in listed.items():
+        assert module["price_monthly"] == pytest.approx(features[key]["price_monthly"])
+        assert module["billed"] == (
+            statuses[key] == "active" and not features[key]["is_core"] and features[key]["price_monthly"] > 0
+        )
+    assert plan["monthly_total"] == pytest.approx(
+        sum(m["price_monthly"] for m in plan["modules"] if m["billed"])
+    )
+    assert plan["modules"][0]["is_core"], "core modules are listed first"
+
+    # the total is exactly what the next bill charges
+    await _cycle(northgate_id, date(2026, 10, 1))
+    [bill] = await _bills(northgate_id)
+    assert float(bill.amount) == pytest.approx(plan["monthly_total"])
+
+
+async def test_an_exempt_clinic_keeps_its_modules_but_pays_nothing(northgate, console, northgate_id, outbox):
+    await console.patch(f"/v1/platform/tenants/{northgate_id}", json={"billing_exempt": True})
+    plan = (await northgate.get("/v1/tenant/subscription")).json()["plan"]
+    assert plan["modules"] and plan["monthly_total"] == 0
+    assert not any(m["billed"] for m in plan["modules"])
+
+
 # --- the ladder ------------------------------------------------------------------------------
 
 

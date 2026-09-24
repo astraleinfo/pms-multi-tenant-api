@@ -9,3 +9,6 @@ venv/
 *.egg-info/
 .coverage
 htmlcov/
+
+# Celery beat keeps its last-run times here; local to each machine.
+celerybeat-schedule*

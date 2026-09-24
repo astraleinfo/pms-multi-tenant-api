@@ -225,3 +225,18 @@ async def test_the_application_role_does_not_bypass_rls():
         ).scalar()
     assert bypasses is False
     await engine.dispose()
+
+
+async def test_one_appointment_is_read_by_id_and_only_in_its_own_clinic(northgate, clearview):
+    page = (await northgate.get("/v1/appointments", params={"limit": 1})).json()
+    assert page["items"], "the seed books appointments"
+    booking = page["items"][0]
+
+    mine = await northgate.get(f"/v1/appointments/{booking['id']}")
+    assert mine.status_code == 200, mine.text
+    assert mine.json()["id"] == booking["id"] and mine.json()["patient_name"] == booking["patient_name"]
+
+    assert (await clearview.get(f"/v1/appointments/{booking['id']}")).status_code == 404
+    assert (await northgate.get("/v1/appointments/not-a-uuid")).status_code in (404, 422)
+    # the route above it still answers as itself, not as an id
+    assert (await northgate.get("/v1/appointments/availability")).status_code == 422

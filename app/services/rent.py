@@ -126,6 +126,40 @@ async def billable_lines(session: AsyncSession, tenant_id: uuid.UUID) -> list[di
     ]
 
 
+async def plan_for(session: AsyncSession, tenant: Tenant) -> dict:
+    """Every module the clinic has on, what each costs a month, and whether it
+    is on the bill — the same rule `billable_lines` bills by, so the clinic's
+    plan and its next bill cannot disagree. The caller has the clinic bound."""
+    billed = {line["feature_key"]: line["amount"] for line in await billable_lines(session, tenant.id)}
+    if tenant.billing_exempt:
+        billed = {}
+    rows = (
+        await session.execute(
+            select(Feature, TenantFeature)
+            .join(TenantFeature, TenantFeature.feature_key == Feature.key)
+            .where(
+                TenantFeature.tenant_id == tenant.id,
+                TenantFeature.status.in_([TenantFeatureStatus.ACTIVE, TenantFeatureStatus.TRIAL]),
+            )
+            .order_by(Feature.is_core.desc(), Feature.name)
+        )
+    ).all()
+    modules = [
+        {
+            "feature_key": f.key,
+            "name": f.name,
+            "is_core": f.is_core,
+            "status": tf.status.value,
+            "activated_at": tf.activated_at.isoformat() if tf.activated_at else None,
+            "price_monthly": float(Decimal(f.price_monthly).quantize(CENTS)),
+            "billed": f.key in billed,
+        }
+        for f, tf in rows
+    ]
+    total = sum((Decimal(str(amount)) for amount in billed.values()), Decimal("0"))
+    return {"modules": modules, "monthly_total": float(total.quantize(CENTS))}
+
+
 async def raise_bill(
     session: AsyncSession, tenant: Tenant, today: date
 ) -> SubscriptionInvoice | None:

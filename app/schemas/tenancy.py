@@ -17,7 +17,7 @@ from app.models.enums import (
     TenantFeatureStatus,
     TenantStatus,
 )
-from app.schemas.common import ApiModel, InputModel, iso_date, money, zone
+from app.schemas.common import ApiModel, InputModel, iso_date, local_iso, money, zone
 
 
 class TenantOut(ApiModel):
@@ -48,7 +48,7 @@ class TenantOut(ApiModel):
             status=t.status, city=t.city, plan=t.plan, since=iso_date(t.since) or "",
             timezone=t.timezone, today=datetime.now(zone(t.timezone)).date().isoformat(),
             billing_hold=t.billing_hold_since is not None,
-            billing_hold_since=t.billing_hold_since.isoformat() if t.billing_hold_since else None,
+            billing_hold_since=local_iso(t.billing_hold_since, t.timezone),
             billing_exempt=bool(t.billing_exempt),
         )
 
@@ -108,6 +108,26 @@ class TenantFeatureOut(ApiModel):
         )
 
 
+class AppointmentType(InputModel):
+    """One kind of visit a clinic books, and how long it takes.
+
+    The length is also the slot interval for that type: a 45-minute root canal
+    is offered at 45-minute steps, a 15-minute review at 15-minute ones.
+    """
+
+    id: str = Field(pattern=r"^[a-z0-9_-]{1,40}$")
+    name: str = Field(min_length=1, max_length=60)
+    minutes: int = Field(ge=5, le=240, multiple_of=5)
+
+    @field_validator("name")
+    @classmethod
+    def _trimmed(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("an appointment type needs a name")
+        return value
+
+
 class TenantConfigOut(ApiModel):
     tenant_id: str
     contact_phone: str
@@ -118,6 +138,7 @@ class TenantConfigOut(ApiModel):
     day_end: str
     slot_minutes: int
     default_duration: int
+    appointment_types: list[dict]
     token_prefix: str
     urgent_first: bool
     invoice_prefix: str
@@ -134,6 +155,7 @@ class TenantConfigOut(ApiModel):
             contact_phone=c.contact_phone, contact_email=c.contact_email, address=c.address,
             mrn_prefix=c.mrn_prefix, day_start=c.day_start, day_end=c.day_end,
             slot_minutes=c.slot_minutes, default_duration=c.default_duration,
+            appointment_types=list(c.appointment_types or []),
             token_prefix=c.token_prefix, urgent_first=c.urgent_first,
             invoice_prefix=c.invoice_prefix, tax_pct=money(c.tax_pct),
             payment_terms_days=c.payment_terms_days, expiry_alert_days=c.expiry_alert_days,
@@ -153,6 +175,8 @@ class TenantConfigPatch(InputModel):
     day_end: str | None = Field(default=None, pattern=_HHMM)
     slot_minutes: Literal[15, 20, 30] | None = None
     default_duration: int | None = Field(default=None, ge=5, le=240)
+    #: the whole list, replaced as one — order is the order the diary offers them
+    appointment_types: list[AppointmentType] | None = Field(default=None, max_length=20)
     token_prefix: str | None = Field(default=None, pattern=r"^[A-Z0-9]{1,4}$")
     urgent_first: bool | None = None
     invoice_prefix: str | None = Field(default=None, pattern=r"^[A-Z0-9-]{1,12}$")
@@ -160,6 +184,17 @@ class TenantConfigPatch(InputModel):
     payment_terms_days: int | None = Field(default=None, ge=0, le=365)
     expiry_alert_days: int | None = Field(default=None, ge=1, le=730)
     currency: Currency | None = None
+
+    @field_validator("appointment_types")
+    @classmethod
+    def _distinct(cls, value: list[AppointmentType] | None) -> list[AppointmentType] | None:
+        if value is None:
+            return value
+        ids = [t.id for t in value]
+        names = [t.name.casefold() for t in value]
+        if len(set(ids)) != len(ids) or len(set(names)) != len(names):
+            raise ValueError("appointment types must have distinct names")
+        return value
 
 
 class FieldDefinitionOut(ApiModel):
@@ -385,7 +420,7 @@ class SubscriptionInvoiceOut(ApiModel):
             issued_on=iso_date(b.issued_on) or "", due_on=iso_date(b.due_on) or "",
             hold_on=iso_date(hold_on) or "", status=b.status.value,
             reminder_stage=b.reminder_stage, reminders_sent=b.reminders_sent,
-            paid_at=b.paid_at.isoformat() if b.paid_at else None,
+            paid_at=local_iso(b.paid_at),
             payment_reference=b.payment_reference, settled_by=b.settled_by,
         )
 
@@ -404,9 +439,31 @@ class SubscriptionSummaryOut(ApiModel):
     grace_days: int
 
 
+class SubscribedModuleOut(ApiModel):
+    feature_key: str
+    name: str
+    is_core: bool
+    #: `active`, or `trial` — a trial is on but not billed
+    status: str
+    activated_at: str | None = None
+    #: the catalogue's monthly price today; 0 for a core module
+    price_monthly: float
+    #: whether next month's bill charges for it
+    billed: bool
+
+
+class SubscriptionPlanOut(ApiModel):
+    """What the clinic has switched on, and what that comes to a month."""
+
+    modules: list[SubscribedModuleOut]
+    #: the sum of the billed modules — what the next bill will be, at today's prices
+    monthly_total: float
+
+
 class SubscriptionOut(ApiModel):
     summary: SubscriptionSummaryOut
     invoices: list[SubscriptionInvoiceOut]
+    plan: SubscriptionPlanOut | None = None
 
 
 class SettleIn(InputModel):

@@ -149,6 +149,7 @@ async def consultation_pdf(
         encounter.patient,
         tenant_name=ctx.tenant.name,
         doctor_name=doctor.name if doctor else "",
+        tz=ctx.tz,
     )
     return Response(
         content=pdf_bytes,

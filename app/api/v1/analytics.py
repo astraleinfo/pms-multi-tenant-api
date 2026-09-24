@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import Response
 
 from app.api.deps import TenantContext, require_permission
-from app.core.permissions import Permission
+from app.core.permissions import Permission, role_has
 from app.schemas.ops import AnalyticsOut
 from app.services import analytics as analytics_service
 from app.services.documents import build_report_pdf
@@ -34,6 +34,10 @@ async def dashboard(
         active_features=ctx.active_features,
         clinical_type=ctx.tenant.clinical_type,
     )
+    # The takings are the practice admin's. Taken out here, on the server, so
+    # a role without them is never sent the figures to hide.
+    if not role_has(ctx.user.role, Permission.REVENUE_READ):
+        data = analytics_service.without_revenue(data)
     return AnalyticsOut(**data)
 
 
@@ -53,12 +57,15 @@ async def report_pdf(
         active_features=ctx.active_features,
         clinical_type=ctx.tenant.clinical_type,
     )
+    if not role_has(ctx.user.role, Permission.REVENUE_READ):
+        data = analytics_service.without_revenue(data)
     content = build_report_pdf(
         data,
         clinic=ctx.tenant.name,
         config=ctx.config,
         currency=ctx.config.currency.value if ctx.config.currency else "",
         generated_by=ctx.principal.label,
+        tz=ctx.tz,
     )
     return Response(
         content=content,

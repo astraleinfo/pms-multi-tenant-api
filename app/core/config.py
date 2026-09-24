@@ -19,6 +19,11 @@ class Settings(BaseSettings):
     debug: bool = False
     log_level: str = "INFO"
 
+    # The PMS's own clock. New clinics start on it, a clinic with no valid
+    # timezone falls back to it, and the scheduled jobs keep it: "midnight" for
+    # the reminder run is midnight here.
+    pms_timezone: str = "Asia/Kolkata"
+
     database_url: str = "postgresql+asyncpg://pms_app:app@localhost:5432/pms"
     migration_database_url: str = "postgresql+asyncpg://pms_owner:owner@localhost:5432/pms"
     db_pool_size: int = 10

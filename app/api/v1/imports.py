@@ -20,16 +20,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import client_ip, current_platform_user, db_session, parse_uuid, user_agent
 from app.core.errors import NotFound, ValidationFailed
 from app.db.session import set_tenant
-from app.models.enums import AccountStatus, FieldEntity
-from app.models.identity import PlatformUser, User
+from app.models.enums import FieldEntity
+from app.models.identity import PlatformUser
 from app.models.tenancy import Tenant
 from app.schemas.clinical import PatientIn
 from app.schemas.common import ApiModel, zone
-from app.services import audit, invitations, mailer
+from app.services import audit
 from app.services import imports as import_service
 from app.services import patients as patient_service
 from app.services import tenants as tenant_service
-from app.services.platform import initials_of
 
 log = logging.getLogger("pms.imports")
 
@@ -131,7 +130,7 @@ async def run_import(
 
     label = f"{staff.name} <{staff.email}>"
     if kind == "users":
-        created, invited = await _create_users(session, clinic, results, issued_by=label)
+        created, invited = await import_service.create_users(session, clinic, results, issued_by=label)
     else:
         created, invited = await _create_patients(session, clinic, results), 0
 
@@ -142,36 +141,6 @@ async def run_import(
         meta={"rows": report.total, "created": created, "invited": invited},
     )
     return report.model_copy(update={"committed": True, "created": created, "invited": invited})
-
-
-async def _create_users(session, clinic: Tenant, results, *, issued_by: str) -> tuple[int, int]:
-    users = []
-    for r in results:
-        user = User(
-            tenant_id=clinic.id,
-            name=r.data["name"],
-            role=r.data["role"],
-            email=r.data["email"],
-            password_hash=None,
-            initials=initials_of(r.data["name"]),
-            speciality=r.data["speciality"],
-            status=AccountStatus.INVITED,
-        )
-        session.add(user)
-        users.append(user)
-    await session.flush()
-
-    invited = 0
-    for user in users:
-        # Bound again each time: an invitation writes a token row under the
-        # clinic's policy, and an earlier audit write may have released it.
-        await set_tenant(session, clinic.id)
-        try:
-            await invitations.invite_user(session, user=user, tenant=clinic, issued_by_label=issued_by)
-            invited += 1
-        except mailer.MailError as exc:
-            log.error("could not send invitation to %s: %s", user.email, exc)
-    return len(users), invited
 
 
 async def _create_patients(session, clinic: Tenant, results) -> int:

@@ -6,7 +6,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Request, Response, UploadFile, status
 from sqlalchemy import func, select
 
 from app.api.deps import (
@@ -25,7 +25,8 @@ from app.core.security import hash_password
 from app.models.enums import AccountStatus, AuthTokenPurpose, FieldEntity, FieldScope
 from app.models.identity import User
 from app.models.tenancy import Feature, FieldDefinition
-from app.schemas.identity import PasswordSetIn, UserCreateIn, UserOut, UserStatusIn
+from app.schemas.identity import PasswordSetIn, UserCreateIn, UserOut, UserStatusIn, UserUpdateIn
+from app.schemas.ops import ImportJobOut
 from app.schemas.support import SupportRequestIn, SupportRequestOut
 from app.schemas.tenancy import (
     FeatureOut,
@@ -37,8 +38,9 @@ from app.schemas.tenancy import (
     TenantFeatureOut,
     TenantOut,
 )
-from app.services import audit, invitations, mailer
+from app.services import audit, import_jobs, invitations, mailer, staff_io
 from app.services import auth as auth_service
+from app.services import imports as import_service
 from app.services import support as support_service
 from app.services import tenants as tenant_service
 
@@ -310,6 +312,97 @@ async def list_doctors(
     return [UserOut.of(u, ctx.tz) for u in rows]
 
 
+# --- the staff list as a spreadsheet ----------------------------------------------------
+
+_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def _spreadsheet(content: bytes, name: str) -> Response:
+    return Response(
+        content=content,
+        media_type=_XLSX,
+        headers={"Content-Disposition": f'attachment; filename="{name}"', "Cache-Control": "no-store"},
+    )
+
+
+@router.get("/users/export")
+async def export_users(
+    ctx: TenantContext = Depends(require_permission(Permission.USER_MANAGE)),
+) -> Response:
+    """Everyone on the Team tab, in the import's own layout. Admin-only: it is
+    every colleague's email address in one file."""
+    rows = list(
+        (
+            await ctx.session.execute(
+                select(User)
+                .where(User.tenant_id == ctx.tenant_id, User.is_support.is_(False))
+                .order_by(User.name)
+            )
+        ).scalars()
+    )
+    content = staff_io.export(rows, tz=ctx.tz)
+    return _spreadsheet(content, f"{ctx.tenant.slug}-staff-{ctx.today.isoformat()}.xlsx")
+
+
+@router.get("/users/import/template")
+async def staff_import_template(
+    ctx: TenantContext = Depends(require_permission(Permission.USER_MANAGE)),
+) -> Response:
+    """The sample sheet: name, email, role (as a dropdown) and speciality."""
+    return _spreadsheet(staff_io.template(clinic=ctx.tenant.name), f"{ctx.tenant.slug}-staff-import.xlsx")
+
+
+@router.post("/users/import", response_model=ImportJobOut, status_code=status.HTTP_202_ACCEPTED)
+async def import_users(
+    tasks: BackgroundTasks,
+    file: UploadFile = File(..., description="The filled-in sample sheet (.xlsx), or a .csv."),
+    ctx: TenantContext = Depends(require_permission(Permission.USER_MANAGE)),
+) -> ImportJobOut:
+    """Hand a sheet of people to the worker, and answer at once.
+
+    Every row is checked the way "Add person" checks it; then everyone is
+    opened as an invited account and emailed their link — or, with one bad row
+    or one email the clinic already has, nobody is. The upload is deleted
+    either way. Poll the job for the outcome.
+    """
+    content = await file.read(import_service.MAX_FILE_BYTES + 1)
+    job = await import_jobs.queue(
+        ctx.session,
+        ctx.tenant_id,
+        staff_io.KIND,
+        filename=file.filename or "",
+        content=content,
+        actor=import_jobs.Actor(ctx.actor_id, ctx.principal.label, ctx.actor_kind),
+    )
+    # after the response, so the session has committed and the worker finds the row
+    from app.worker.tasks import enqueue_import
+
+    tasks.add_task(enqueue_import, ctx.tenant_id, job.id)
+    return ImportJobOut.of(job, ctx.tz)
+
+
+@router.get("/users/import/jobs/latest", response_model=ImportJobOut | None)
+async def latest_staff_import(
+    ctx: TenantContext = Depends(require_permission(Permission.USER_MANAGE)),
+) -> ImportJobOut | None:
+    """The clinic's most recent staff import, so a page opened mid-import can pick it up."""
+    job = await import_jobs.latest(ctx.session, ctx.tenant_id, staff_io.KIND)
+    return ImportJobOut.of(job, ctx.tz) if job else None
+
+
+@router.get("/users/import/jobs/{job_id}", response_model=ImportJobOut)
+async def staff_import_job(
+    job_id: str,
+    ctx: TenantContext = Depends(require_permission(Permission.USER_MANAGE)),
+) -> ImportJobOut:
+    job = await import_jobs.get_job(
+        ctx.session, ctx.tenant_id, parse_uuid(job_id, what="import"), staff_io.KIND
+    )
+    if job is None:
+        raise NotFound("No such import.")
+    return ImportJobOut.of(job, ctx.tz)
+
+
 @router.post("/users", response_model=UserOut, status_code=status.HTTP_201_CREATED)
 async def create_user(
     payload: UserCreateIn,
@@ -430,6 +523,141 @@ async def _staff_member(ctx: TenantContext, user_id: str) -> User:
     if user is None:
         raise NotFound("No such account.")
     return user
+
+
+async def _other_admins(ctx: TenantContext, user: User) -> int:
+    """Active practice admins besides this one — the clinic must keep one."""
+    return (
+        await ctx.session.execute(
+            select(func.count(User.id)).where(
+                User.tenant_id == ctx.tenant_id,
+                User.id != user.id,
+                User.role == Role.TENANT_ADMIN.value,
+                User.status == AccountStatus.ACTIVE,
+                User.is_support.is_(False),
+            )
+        )
+    ).scalar() or 0
+
+
+@router.patch("/users/{user_id}", response_model=UserOut)
+async def update_user(
+    user_id: str,
+    payload: UserUpdateIn,
+    ctx: TenantContext = Depends(require_permission(Permission.USER_MANAGE)),
+) -> UserOut:
+    """Correct a colleague's name, sign-in email, role or speciality.
+
+    A role takes effect on their next request — the guards read it from the
+    account, not from their session. Two changes are refused because they
+    cannot be undone from inside the clinic: an admin changing their own role,
+    and the last practice admin being made something else.
+
+    A new email is a new username. Any link already sent to the old address
+    is spent, and someone still invited is sent a fresh one at the new one.
+    """
+    user = await _staff_member(ctx, user_id)
+    changes = payload.model_dump(exclude_unset=True)
+    before = {"name": user.name, "email": user.email, "role": user.role, "speciality": user.speciality}
+
+    role = changes.get("role")
+    if role is not None and role != user.role:
+        if role not in {r.value for r in Role}:
+            raise Conflict("That is not a role this product has.")
+        if user.id == ctx.actor_id:
+            raise Conflict("You cannot change your own role — ask another practice admin.")
+        if user.role == Role.TENANT_ADMIN.value and not await _other_admins(ctx, user):
+            raise Conflict("This is the clinic's only practice admin. Make someone else an admin first.")
+        user.role = role
+
+    email_changed = False
+    if changes.get("email") is not None:
+        email = str(changes["email"]).lower()
+        if email != user.email.lower():
+            clash = (
+                await ctx.session.execute(
+                    select(func.count(User.id)).where(
+                        User.tenant_id == ctx.tenant_id, User.id != user.id, func.lower(User.email) == email
+                    )
+                )
+            ).scalar()
+            if clash:
+                raise Conflict("Someone here already uses that email.")
+            user.email = email
+            email_changed = True
+
+    if changes.get("name") is not None:
+        user.name = changes["name"].strip()
+        user.initials = "".join(p[0] for p in user.name.split()[:2]).upper()
+    if "speciality" in changes:
+        user.speciality = (changes["speciality"] or "").strip() or None
+
+    await ctx.session.flush()
+    invited = False
+    if email_changed:
+        # A link to the old address is a way in for whoever reads that inbox.
+        await invitations.revoke_all_for_user(ctx.session, user_id=user.id)
+        if user.status == AccountStatus.INVITED:
+            try:
+                await invitations.invite_user(
+                    ctx.session, user=user, tenant=ctx.tenant, issued_by_label=ctx.principal.label
+                )
+                invited = True
+            except mailer.MailError as exc:
+                log.error("could not send invitation to %s: %s", user.email, exc)
+
+    after = {"name": user.name, "email": user.email, "role": user.role, "speciality": user.speciality}
+    await audit.record(
+        ctx.session, action="user.update", tenant_id=ctx.tenant_id, actor_kind=ctx.actor_kind,
+        actor_id=ctx.actor_id, actor_label=ctx.principal.label, entity="user", entity_id=str(user.id),
+        meta={
+            "changed": {k: {"from": before[k], "to": after[k]} for k in after if before[k] != after[k]},
+            "reinvited": invited,
+        },
+    )
+    return UserOut.of(user, ctx.tz)
+
+
+@router.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_user(
+    user_id: str,
+    ctx: TenantContext = Depends(require_permission(Permission.USER_MANAGE)),
+) -> Response:
+    """Remove an account that never recorded anything — an invitation sent to
+    the wrong person, a duplicate.
+
+    Anyone whose name is on a record stays: a consultation, a prescription, a
+    verified result has to keep saying who did it. For them the answer is to
+    lock the account, which stops the sign-in and keeps the history, and the
+    refusal says so and counts what they recorded.
+    """
+    user = await _staff_member(ctx, user_id)
+    if user.id == ctx.actor_id:
+        raise Conflict("You cannot delete your own account.")
+    only_admin = user.role == Role.TENANT_ADMIN.value and user.status == AccountStatus.ACTIVE
+    if only_admin and not await _other_admins(ctx, user):
+        raise Conflict("This is the clinic's only practice admin. Make someone else an admin first.")
+
+    used = await tenant_service.records_by(ctx.session, user.id)
+    if used:
+        total = sum(used.values())
+        raise Conflict(
+            f"{user.name} has {total} record{'s' if total != 1 else ''} here, which must keep their name. "
+            "Lock the account instead — it stops the sign-in and keeps the history.",
+            details={"records": used},
+        )
+
+    await auth_service.revoke_all_for_subject(ctx.session, subject_id=user.id)
+    await invitations.revoke_all_for_user(ctx.session, user_id=user.id)
+    label = f"{user.name} <{user.email}>"
+    await ctx.session.delete(user)
+    await ctx.session.flush()
+    await audit.record(
+        ctx.session, action="user.delete", tenant_id=ctx.tenant_id, actor_kind=ctx.actor_kind,
+        actor_id=ctx.actor_id, actor_label=ctx.principal.label, entity="user", entity_id=user_id,
+        meta={"who": label, "role": user.role},
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.patch("/users/{user_id}/status", response_model=UserOut)
