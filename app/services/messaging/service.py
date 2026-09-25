@@ -22,7 +22,6 @@ from datetime import time as time_t
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
 from app.models.clinical import Appointment, Patient
 from app.models.enums import MessageChannel, MessageStatus, MessageTemplate
 from app.models.identity import User
