@@ -171,11 +171,13 @@ async def _invite(
     # the console gets no special path through row-level security either.
     await set_tenant(session, tenant.id)
 
+    timings = await platform_service.get_timings(session)
     _, raw = await invitations.issue_for_user(
         session,
         user=user,
         tenant=tenant,
         purpose=purpose,
+        timings=timings,
         issued_by_label=f"{staff.name} <{staff.email}>",
         ip=client_ip(request),
         user_agent=user_agent(request),
@@ -184,7 +186,7 @@ async def _invite(
 
     sent = True
     try:
-        await invitations.send_link(user=user, tenant=tenant, purpose=purpose, raw_token=raw)
+        await invitations.send_link(user=user, tenant=tenant, purpose=purpose, raw_token=raw, timings=timings)
     except mailer.MailError as exc:
         sent = False
         log.error("could not send %s to %s: %s", purpose.value, user.email, exc)

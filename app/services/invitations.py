@@ -37,6 +37,7 @@ from app.models.enums import AuthTokenPurpose, SubjectKind
 from app.models.identity import AuthToken, User
 from app.models.tenancy import Tenant
 from app.services import mailer
+from app.services.platform import Timings, get_timings
 
 log = logging.getLogger("pms.invitations")
 
@@ -49,11 +50,11 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _ttl(purpose: AuthTokenPurpose) -> int:
+def _ttl(purpose: AuthTokenPurpose, timings: Timings) -> int:
     return (
-        settings.invite_token_ttl_seconds
+        timings.invite_token_ttl_seconds
         if purpose == AuthTokenPurpose.INVITE
-        else settings.reset_token_ttl_seconds
+        else timings.reset_token_ttl_seconds
     )
 
 
@@ -69,6 +70,7 @@ async def issue_for_user(
     user: User,
     tenant: Tenant,
     purpose: AuthTokenPurpose,
+    timings: Timings,
     issued_by_label: str = "",
     ip: str = "",
     user_agent: str = "",
@@ -95,7 +97,7 @@ async def issue_for_user(
         subject_kind=SubjectKind.USER,
         subject_id=user.id,
         tenant_id=tenant.id,
-        expires_at=_now() + timedelta(seconds=_ttl(purpose)),
+        expires_at=_now() + timedelta(seconds=_ttl(purpose, timings)),
         issued_by_label=issued_by_label[:160],
         ip=ip[:64],
         user_agent=user_agent[:300],
@@ -106,7 +108,7 @@ async def issue_for_user(
 
 
 async def send_link(
-    *, user: User, tenant: Tenant, purpose: AuthTokenPurpose, raw_token: str
+    *, user: User, tenant: Tenant, purpose: AuthTokenPurpose, raw_token: str, timings: Timings
 ) -> str:
     """Email the link and return it, so a caller that may show it (the console,
     in development) does not have to rebuild it."""
@@ -117,7 +119,7 @@ async def send_link(
             name=user.name,
             clinic=tenant.name,
             url=url,
-            expires_in_days=max(1, settings.invite_token_ttl_seconds // 86400),
+            expires_in_days=max(1, timings.invite_token_ttl_seconds // 86400),
         )
     else:
         email = mailer.password_reset(
@@ -125,7 +127,7 @@ async def send_link(
             name=user.name,
             clinic=tenant.name,
             url=url,
-            expires_in_hours=max(1, settings.reset_token_ttl_seconds // 3600),
+            expires_in_hours=max(1, timings.reset_token_ttl_seconds // 3600),
         )
     await mailer.send(email)
     return url
@@ -142,16 +144,18 @@ async def invite_user(
     user_agent: str = "",
 ) -> str:
     """Mint and send in one step. Returns the URL."""
+    timings = await get_timings(session)
     _, raw = await issue_for_user(
         session,
         user=user,
         tenant=tenant,
         purpose=purpose,
+        timings=timings,
         issued_by_label=issued_by_label,
         ip=ip,
         user_agent=user_agent,
     )
-    return await send_link(user=user, tenant=tenant, purpose=purpose, raw_token=raw)
+    return await send_link(user=user, tenant=tenant, purpose=purpose, raw_token=raw, timings=timings)
 
 
 async def resolve(
