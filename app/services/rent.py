@@ -4,12 +4,13 @@ The cycle, run by the beat (and by hand from the console):
 
 1.  **Raise.** On the first run in a month, a clinic that has paid modules
     switched on gets a bill for that month: one line per module at today's
-    catalogue price, due `RENT_DUE_DAYS` later. Nothing on, nothing billed.
+    catalogue price, due `rent_due_days` days later (see `platform_settings`). Nothing on, nothing billed.
 2.  **Remind.** The clinic's admins are emailed as the bill moves along the
     ladder — raised, due soon, due today, overdue, last day — each rung once.
-3.  **Hold.** A bill still open `RENT_GRACE_DAYS` after its due date puts the
-    clinic on hold: its staff can sign in and see what is owed, and nothing
-    else, until it is settled. Support sessions are never held.
+3.  **Hold.** A bill still open `rent_grace_days` days after its due date (see
+    `platform_settings`) puts the clinic on hold: its staff can sign in and see
+    what is owed, and nothing else, until it is settled. Support sessions are
+    never held.
 4.  **Lift.** Settling (or voiding) the last overdue bill lifts the hold at
     once, from the console, without waiting for the next run.
 
