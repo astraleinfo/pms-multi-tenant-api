@@ -30,6 +30,7 @@ from app.models.messaging import Message, MessagingConfig
 from app.models.tenancy import Tenant, TenantConfig
 from app.schemas.common import zone
 from app.services.messaging import templates
+from app.services.platform import Timings, get_timings
 
 log = logging.getLogger("pms.messaging")
 
@@ -70,11 +71,11 @@ async def _variables(
     }
 
 
-def _reminder_send_after(appointment: Appointment, tz_name: str) -> datetime:
+def _reminder_send_after(appointment: Appointment, tz_name: str, timings: Timings) -> datetime:
     """`reminder_lead_hours` before the slot, in the clinic's own timezone."""
     hour, minute = (int(p) for p in appointment.time.split(":"))
     local = datetime.combine(appointment.date, time_t(hour, minute), tzinfo=zone(tz_name))
-    return local.astimezone(timezone.utc) - timedelta(hours=settings.reminder_lead_hours)
+    return local.astimezone(timezone.utc) - timedelta(hours=timings.reminder_lead_hours)
 
 
 async def queue_message(
@@ -118,7 +119,9 @@ async def queue_message(
 
     when = send_after or datetime.now(timezone.utc)
     if template == MessageTemplate.APPOINTMENT_REMINDER and appointment is not None:
-        when = _reminder_send_after(appointment, (await session.get(Tenant, tenant_id)).timezone)
+        timings = await get_timings(session)
+        tenant = await session.get(Tenant, tenant_id)
+        when = _reminder_send_after(appointment, tenant.timezone, timings)
         # A slot inside the lead window - or already gone - gets no reminder.
         if when <= datetime.now(timezone.utc):
             return None

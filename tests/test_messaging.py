@@ -467,3 +467,52 @@ async def test_another_clinic_cannot_move_our_appointment(northgate, clearview):
     booking = await _book(northgate, "2028-07-19", "09:40", "isolation")
     response = await clearview.patch(f"/v1/appointments/{booking['id']}", json={"time": "10:40"})
     assert response.status_code == 404
+
+
+async def test_a_shorter_reminder_lead_time_moves_the_send_after(console, northgate):
+    """`queue_message` must read the patched setting, not the old 24-hour
+    default it used to reach for as a module-level global."""
+    import uuid
+    from datetime import date, datetime, timedelta, time as time_t, timezone
+
+    from sqlalchemy import select
+
+    from app.db.session import tenant_session
+    from app.models.enums import MessageTemplate
+    from app.models.messaging import Message
+    from app.models.tenancy import Tenant
+    from app.schemas.common import zone
+
+    await console.patch("/v1/platform/settings", json={"reminder_lead_hours": 2})
+
+    await _enable_console(northgate)
+    patient = await _patient_with_phone(northgate)
+    doctors = (await northgate.get("/v1/users/doctors")).json()
+    booking = (
+        await northgate.post(
+            "/v1/appointments",
+            json={
+                "patient_id": patient["id"], "doctor_id": doctors[0]["id"],
+                "date": "2027-11-02", "time": "14:00", "duration_min": 20,
+                "reason": "timing knob test", "created_via": "front_desk",
+            },
+        )
+    ).json()
+
+    tenant_id = uuid.UUID((await northgate.get("/v1/auth/me")).json()["tenant_id"])
+    async with tenant_session(tenant_id) as session:
+        tenant = await session.get(Tenant, tenant_id)
+        reminder = (
+            await session.execute(
+                select(Message).where(
+                    Message.appointment_id == uuid.UUID(booking["id"]),
+                    Message.template == MessageTemplate.APPOINTMENT_REMINDER,
+                )
+            )
+        ).scalar_one()
+
+    slot = datetime.combine(date(2027, 11, 2), time_t(14, 0), tzinfo=zone(tenant.timezone))
+    expected = slot.astimezone(timezone.utc) - timedelta(hours=2)
+    assert abs((reminder.send_after - expected).total_seconds()) < 1, (
+        "reminder should now lead the slot by 2 hours (the patched setting), not the 24-hour default"
+    )
