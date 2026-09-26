@@ -31,15 +31,24 @@ from app.core.errors import NotFound
 from app.db.session import set_tenant
 from app.models.enums import AuthTokenPurpose
 from app.models.identity import PlatformUser
-from app.models.tenancy import ClinicalType, Feature, Tenant
-from app.schemas.common import local_today, zone
+from app.models.tenancy import ClinicalType, Feature, LabTest, MedicineSuggestion, Tenant
+from app.schemas.common import zone
 from app.schemas.identity import PlatformUserOut, UserOut
 from app.schemas.support import SupportRequestOut
 from app.schemas.tenancy import (
+    ClinicalTypeCopyPatch,
     ClinicalTypeOut,
     FeatureOut,
     FeaturePriceIn,
     ImpersonationOut,
+    LabTestAdminOut,
+    LabTestIn,
+    LabTestPatch,
+    MedicineAdminOut,
+    MedicineIn,
+    MedicinePatch,
+    PlatformSettingsOut,
+    PlatformSettingsPatch,
     PlatformSnapshotOut,
     PlatformTenantSummary,
     SlugCheckOut,
@@ -162,11 +171,13 @@ async def _invite(
     # the console gets no special path through row-level security either.
     await set_tenant(session, tenant.id)
 
+    timings = await platform_service.get_timings(session)
     _, raw = await invitations.issue_for_user(
         session,
         user=user,
         tenant=tenant,
         purpose=purpose,
+        timings=timings,
         issued_by_label=f"{staff.name} <{staff.email}>",
         ip=client_ip(request),
         user_agent=user_agent(request),
@@ -175,7 +186,7 @@ async def _invite(
 
     sent = True
     try:
-        await invitations.send_link(user=user, tenant=tenant, purpose=purpose, raw_token=raw)
+        await invitations.send_link(user=user, tenant=tenant, purpose=purpose, raw_token=raw, timings=timings)
     except mailer.MailError as exc:
         sent = False
         log.error("could not send %s to %s: %s", purpose.value, user.email, exc)
@@ -213,7 +224,8 @@ async def update_tenant(
         # clinic with an overdue bill straight back on hold. Either way the
         # hold follows the bills, not the order the switches were thrown in.
         await set_tenant(session, tenant.id)
-        await rent_service.reconcile_hold(session, tenant, rent_service.clinic_today(tenant))
+        timings = await platform_service.get_timings(session)
+        await rent_service.reconcile_hold(session, tenant, rent_service.clinic_today(tenant), timings)
         await set_tenant(session, None)
     await audit.record_for_tenant(
         session, tenant.id, action="platform.tenant_update", actor_kind="platform",
@@ -446,6 +458,157 @@ async def snapshot(
     )
 
 
+@router.get("/settings", response_model=PlatformSettingsOut)
+async def get_platform_settings_route(
+    staff: PlatformUser = Depends(current_super_admin),
+    session: AsyncSession = Depends(db_session, scope="function"),
+) -> PlatformSettingsOut:
+    row = await platform_service.get_platform_settings(session)
+    return PlatformSettingsOut.of(row)
+
+
+@router.patch("/settings", response_model=PlatformSettingsOut)
+async def update_platform_settings_route(
+    payload: PlatformSettingsPatch,
+    request: Request,
+    staff: PlatformUser = Depends(current_super_admin),
+    session: AsyncSession = Depends(db_session, scope="function"),
+) -> PlatformSettingsOut:
+    """What every new clinic starts with, and where a clinic that can't
+    self-serve is told to write. Super-admin only, like every other write
+    in this file that shapes what the whole platform does next."""
+    changes = payload.model_dump(exclude_unset=True, exclude_none=True)
+    row = await platform_service.update_platform_settings(session, changes)
+    await audit.record(
+        session, action="platform_settings.update", actor_kind="platform",
+        actor_id=staff.id, actor_label=staff.name, entity="platform_settings",
+        entity_id=str(row.id), ip=client_ip(request), user_agent=user_agent(request),
+        meta={"changes": changes},
+    )
+    return PlatformSettingsOut.of(row)
+
+
+@router.get("/catalog/lab-tests", response_model=list[LabTestAdminOut])
+async def platform_lab_tests(
+    staff: PlatformUser = Depends(current_super_admin),
+    session: AsyncSession = Depends(db_session, scope="function"),
+) -> list[LabTestAdminOut]:
+    rows = (await session.execute(select(LabTest).order_by(LabTest.panel, LabTest.name))).scalars()
+    return [LabTestAdminOut.of(t) for t in rows]
+
+
+@router.post("/catalog/lab-tests", response_model=LabTestAdminOut, status_code=status.HTTP_201_CREATED)
+async def create_platform_lab_test(
+    payload: LabTestIn,
+    request: Request,
+    staff: PlatformUser = Depends(current_super_admin),
+    session: AsyncSession = Depends(db_session, scope="function"),
+) -> LabTestAdminOut:
+    row = await platform_service.create_lab_test(
+        session, payload.code, payload.name, payload.panel, payload.clinical_types
+    )
+    await audit.record(
+        session, action="platform.catalog.lab_test_create", actor_kind="platform",
+        actor_id=staff.id, actor_label=staff.name, entity="lab_test", entity_id=row.code,
+        ip=client_ip(request), user_agent=user_agent(request), meta={"name": row.name},
+    )
+    return LabTestAdminOut.of(row)
+
+
+@router.patch("/catalog/lab-tests/{code}", response_model=LabTestAdminOut)
+async def update_platform_lab_test(
+    code: str,
+    payload: LabTestPatch,
+    request: Request,
+    staff: PlatformUser = Depends(current_super_admin),
+    session: AsyncSession = Depends(db_session, scope="function"),
+) -> LabTestAdminOut:
+    changes = payload.model_dump(exclude_unset=True, exclude_none=True)
+    row = await platform_service.update_lab_test(session, code, changes)
+    await audit.record(
+        session, action="platform.catalog.lab_test_update", actor_kind="platform",
+        actor_id=staff.id, actor_label=staff.name, entity="lab_test", entity_id=row.code,
+        ip=client_ip(request), user_agent=user_agent(request), meta={"changes": changes},
+    )
+    return LabTestAdminOut.of(row)
+
+
+@router.delete("/catalog/lab-tests/{code}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_platform_lab_test(
+    code: str,
+    request: Request,
+    staff: PlatformUser = Depends(current_super_admin),
+    session: AsyncSession = Depends(db_session, scope="function"),
+) -> None:
+    await platform_service.delete_lab_test(session, code)
+    await audit.record(
+        session, action="platform.catalog.lab_test_delete", actor_kind="platform",
+        actor_id=staff.id, actor_label=staff.name, entity="lab_test", entity_id=code,
+        ip=client_ip(request), user_agent=user_agent(request),
+    )
+
+
+@router.get("/catalog/medicines", response_model=list[MedicineAdminOut])
+async def platform_medicines(
+    staff: PlatformUser = Depends(current_super_admin),
+    session: AsyncSession = Depends(db_session, scope="function"),
+) -> list[MedicineAdminOut]:
+    rows = (await session.execute(select(MedicineSuggestion).order_by(MedicineSuggestion.medicine))).scalars()
+    return [MedicineAdminOut.of(m) for m in rows]
+
+
+@router.post("/catalog/medicines", response_model=MedicineAdminOut, status_code=status.HTTP_201_CREATED)
+async def create_platform_medicine(
+    payload: MedicineIn,
+    request: Request,
+    staff: PlatformUser = Depends(current_super_admin),
+    session: AsyncSession = Depends(db_session, scope="function"),
+) -> MedicineAdminOut:
+    row = await platform_service.create_medicine(
+        session, payload.medicine, payload.strength, payload.dosage,
+        payload.frequency, payload.duration, payload.clinical_types,
+    )
+    await audit.record(
+        session, action="platform.catalog.medicine_create", actor_kind="platform",
+        actor_id=staff.id, actor_label=staff.name, entity="medicine", entity_id=str(row.id),
+        ip=client_ip(request), user_agent=user_agent(request), meta={"medicine": row.medicine},
+    )
+    return MedicineAdminOut.of(row)
+
+
+@router.patch("/catalog/medicines/{medicine_id}", response_model=MedicineAdminOut)
+async def update_platform_medicine(
+    medicine_id: str,
+    payload: MedicinePatch,
+    request: Request,
+    staff: PlatformUser = Depends(current_super_admin),
+    session: AsyncSession = Depends(db_session, scope="function"),
+) -> MedicineAdminOut:
+    changes = payload.model_dump(exclude_unset=True, exclude_none=True)
+    row = await platform_service.update_medicine(session, parse_uuid(medicine_id, what="medicine"), changes)
+    await audit.record(
+        session, action="platform.catalog.medicine_update", actor_kind="platform",
+        actor_id=staff.id, actor_label=staff.name, entity="medicine", entity_id=str(row.id),
+        ip=client_ip(request), user_agent=user_agent(request), meta={"changes": changes},
+    )
+    return MedicineAdminOut.of(row)
+
+
+@router.delete("/catalog/medicines/{medicine_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_platform_medicine(
+    medicine_id: str,
+    request: Request,
+    staff: PlatformUser = Depends(current_super_admin),
+    session: AsyncSession = Depends(db_session, scope="function"),
+) -> None:
+    await platform_service.delete_medicine(session, parse_uuid(medicine_id, what="medicine"))
+    await audit.record(
+        session, action="platform.catalog.medicine_delete", actor_kind="platform",
+        actor_id=staff.id, actor_label=staff.name, entity="medicine", entity_id=medicine_id,
+        ip=client_ip(request), user_agent=user_agent(request),
+    )
+
+
 @router.get("/catalog/clinical-types", response_model=list[ClinicalTypeOut])
 async def clinical_types(
     staff: PlatformUser = Depends(current_platform_user),
@@ -453,6 +616,26 @@ async def clinical_types(
 ) -> list[ClinicalTypeOut]:
     rows = (await session.execute(select(ClinicalType).order_by(ClinicalType.label))).scalars()
     return [ClinicalTypeOut.of(c) for c in rows]
+
+
+@router.patch("/catalog/clinical-types/{key}", response_model=ClinicalTypeOut)
+async def update_platform_clinical_type(
+    key: str,
+    payload: ClinicalTypeCopyPatch,
+    request: Request,
+    staff: PlatformUser = Depends(current_super_admin),
+    session: AsyncSession = Depends(db_session, scope="function"),
+) -> ClinicalTypeOut:
+    """Copy only — `exam_label`, `blurb`, `label`, `complaint_example`.
+    Adding or removing a discipline is a bigger feature than this route."""
+    changes = payload.model_dump(exclude_unset=True, exclude_none=True)
+    row = await platform_service.update_clinical_type_copy(session, key, changes)
+    await audit.record(
+        session, action="platform.catalog.clinical_type_update", actor_kind="platform",
+        actor_id=staff.id, actor_label=staff.name, entity="clinical_type", entity_id=key,
+        ip=client_ip(request), user_agent=user_agent(request), meta={"changes": changes},
+    )
+    return ClinicalTypeOut.of(row)
 
 
 @router.get("/catalog/features", response_model=list[FeatureOut])

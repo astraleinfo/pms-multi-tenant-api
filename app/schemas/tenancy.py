@@ -147,6 +147,7 @@ class TenantConfigOut(ApiModel):
     expiry_alert_days: int
     currency: Currency
     timezone: str
+    has_logo: bool
 
     @classmethod
     def of(cls, c, tz: str) -> TenantConfigOut:
@@ -159,7 +160,7 @@ class TenantConfigOut(ApiModel):
             token_prefix=c.token_prefix, urgent_first=c.urgent_first,
             invoice_prefix=c.invoice_prefix, tax_pct=money(c.tax_pct),
             payment_terms_days=c.payment_terms_days, expiry_alert_days=c.expiry_alert_days,
-            currency=c.currency, timezone=tz,
+            currency=c.currency, timezone=tz, has_logo=c.logo_filename is not None,
         )
 
 
@@ -195,6 +196,134 @@ class TenantConfigPatch(InputModel):
         if len(set(ids)) != len(ids) or len(set(names)) != len(names):
             raise ValueError("appointment types must have distinct names")
         return value
+
+
+class PlatformSettingsOut(ApiModel):
+    support_email: str
+    support_phone: str
+    support_hours: str
+    default_day_start: str
+    default_day_end: str
+    default_slot_minutes: int
+    default_duration: int
+    default_tax_pct: float
+    default_payment_terms_days: int
+    default_expiry_alert_days: int
+    default_currency: Currency
+    invite_token_ttl_seconds: int
+    reset_token_ttl_seconds: int
+    reminder_lead_hours: int
+    rent_due_days: int
+    rent_grace_days: int
+    rent_reminder_days_before_due: int
+
+    @classmethod
+    def of(cls, row) -> PlatformSettingsOut:
+        return cls(
+            support_email=row.support_email,
+            support_phone=row.support_phone,
+            support_hours=row.support_hours,
+            default_day_start=row.default_day_start,
+            default_day_end=row.default_day_end,
+            default_slot_minutes=row.default_slot_minutes,
+            default_duration=row.default_duration,
+            default_tax_pct=money(row.default_tax_pct),
+            default_payment_terms_days=row.default_payment_terms_days,
+            default_expiry_alert_days=row.default_expiry_alert_days,
+            default_currency=row.default_currency,
+            invite_token_ttl_seconds=row.invite_token_ttl_seconds,
+            reset_token_ttl_seconds=row.reset_token_ttl_seconds,
+            reminder_lead_hours=row.reminder_lead_hours,
+            rent_due_days=row.rent_due_days,
+            rent_grace_days=row.rent_grace_days,
+            rent_reminder_days_before_due=row.rent_reminder_days_before_due,
+        )
+
+
+class PlatformSettingsPatch(InputModel):
+    support_email: str | None = Field(default=None, max_length=200)
+    support_phone: str | None = Field(default=None, max_length=40)
+    support_hours: str | None = Field(default=None, max_length=200)
+    default_day_start: str | None = Field(default=None, pattern=_HHMM)
+    default_day_end: str | None = Field(default=None, pattern=_HHMM)
+    default_slot_minutes: Literal[15, 20, 30] | None = None
+    default_duration: int | None = Field(default=None, ge=5, le=240)
+    default_tax_pct: float | None = Field(default=None, ge=0, le=100)
+    default_payment_terms_days: int | None = Field(default=None, ge=0, le=365)
+    default_expiry_alert_days: int | None = Field(default=None, ge=1, le=730)
+    default_currency: Currency | None = None
+    invite_token_ttl_seconds: int | None = Field(default=None, ge=86400, le=2592000)
+    reset_token_ttl_seconds: int | None = Field(default=None, ge=3600, le=259200)
+    reminder_lead_hours: int | None = Field(default=None, ge=1, le=72)
+    rent_due_days: int | None = Field(default=None, ge=1, le=60)
+    rent_grace_days: int | None = Field(default=None, ge=0, le=60)
+    rent_reminder_days_before_due: int | None = Field(default=None, ge=0, le=30)
+
+
+class LabTestAdminOut(ApiModel):
+    code: str
+    name: str
+    panel: str
+    clinical_types: list[str] | None
+
+    @classmethod
+    def of(cls, row) -> LabTestAdminOut:
+        return cls(code=row.code, name=row.name, panel=row.panel, clinical_types=row.clinical_types)
+
+
+class LabTestIn(InputModel):
+    code: str = Field(min_length=1, max_length=20)
+    name: str = Field(min_length=1, max_length=160)
+    panel: str = Field(default="", max_length=80)
+    clinical_types: list[str] | None = None
+
+
+class LabTestPatch(InputModel):
+    name: str | None = Field(default=None, min_length=1, max_length=160)
+    panel: str | None = Field(default=None, max_length=80)
+    clinical_types: list[str] | None = None
+
+
+class MedicineAdminOut(ApiModel):
+    id: str
+    medicine: str
+    strength: str
+    dosage: str
+    frequency: str
+    duration: str
+    clinical_types: list[str] | None
+
+    @classmethod
+    def of(cls, row) -> MedicineAdminOut:
+        return cls(
+            id=str(row.id), medicine=row.medicine, strength=row.strength, dosage=row.dosage,
+            frequency=row.frequency, duration=row.duration, clinical_types=row.clinical_types,
+        )
+
+
+class MedicineIn(InputModel):
+    medicine: str = Field(min_length=1, max_length=160)
+    strength: str = Field(default="", max_length=60)
+    dosage: str = Field(default="", max_length=80)
+    frequency: str = Field(default="", max_length=80)
+    duration: str = Field(default="", max_length=80)
+    clinical_types: list[str] | None = None
+
+
+class MedicinePatch(InputModel):
+    medicine: str | None = Field(default=None, min_length=1, max_length=160)
+    strength: str | None = Field(default=None, max_length=60)
+    dosage: str | None = Field(default=None, max_length=80)
+    frequency: str | None = Field(default=None, max_length=80)
+    duration: str | None = Field(default=None, max_length=80)
+    clinical_types: list[str] | None = None
+
+
+class ClinicalTypeCopyPatch(InputModel):
+    label: str | None = Field(default=None, min_length=1, max_length=80)
+    blurb: str | None = Field(default=None, max_length=2000)
+    exam_label: str | None = Field(default=None, max_length=120)
+    complaint_example: str | None = Field(default=None, max_length=200)
 
 
 class FieldDefinitionOut(ApiModel):

@@ -13,6 +13,7 @@ from app.models.enums import TenantStatus
 from app.models.tenancy import ClinicalType, Feature, LabTest, MedicineSuggestion
 from app.schemas.common import ApiModel
 from app.schemas.tenancy import ClinicalTypeOut, FeatureOut
+from app.services import platform as platform_service
 
 router = APIRouter(tags=["catalog"])
 
@@ -25,6 +26,15 @@ class PublicTenantOut(ApiModel):
     slug: str
     clinical_type: str
     status: TenantStatus
+
+
+class PublicSettingsOut(ApiModel):
+    """Only what a clinic that can't self-serve needs to know: who to ask.
+    Nothing else on `platform_settings` is public."""
+
+    support_email: str
+    support_phone: str
+    support_hours: str
 
 
 class LabTestOut(ApiModel):
@@ -45,6 +55,16 @@ class MedicineOut(ApiModel):
 async def public_tenant(tenant=Depends(host_tenant)) -> PublicTenantOut:
     return PublicTenantOut(
         name=tenant.name, slug=tenant.slug, clinical_type=tenant.clinical_type, status=tenant.status
+    )
+
+
+@router.get("/public/settings", response_model=PublicSettingsOut)
+async def public_settings(
+    session: AsyncSession = Depends(db_session, scope="function"),
+) -> PublicSettingsOut:
+    row = await platform_service.get_platform_settings(session)
+    return PublicSettingsOut(
+        support_email=row.support_email, support_phone=row.support_phone, support_hours=row.support_hours,
     )
 
 

@@ -12,10 +12,12 @@ from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import undefer
 
 from app.core.errors import Conflict, NotFound, ValidationFailed
 from app.models.enums import FieldEntity, FieldScope, FieldType, TenantFeatureStatus, TenantStatus
 from app.models.tenancy import Feature, FieldDefinition, Tenant, TenantConfig, TenantFeature
+from app.services import storage
 
 CORE_FEATURES = ("patient", "appointment", "queue", "consultation", "prescription")
 
@@ -107,7 +109,20 @@ async def get_config(session: AsyncSession, tenant_id: uuid.UUID) -> TenantConfi
         await session.execute(select(TenantConfig).where(TenantConfig.tenant_id == tenant_id))
     ).scalar_one_or_none()
     if row is None:
-        row = TenantConfig(tenant_id=tenant_id)
+        from app.services import platform as platform_service  # deferred: platform.py imports this module too
+
+        defaults = await platform_service.get_platform_settings(session)
+        row = TenantConfig(
+            tenant_id=tenant_id,
+            day_start=defaults.default_day_start,
+            day_end=defaults.default_day_end,
+            slot_minutes=defaults.default_slot_minutes,
+            default_duration=defaults.default_duration,
+            tax_pct=defaults.default_tax_pct,
+            payment_terms_days=defaults.default_payment_terms_days,
+            expiry_alert_days=defaults.default_expiry_alert_days,
+            currency=defaults.default_currency,
+        )
         session.add(row)
         await session.flush()
     return row
@@ -135,6 +150,96 @@ async def next_invoice_number(session: AsyncSession, tenant_id: uuid.UUID) -> st
     config = await lock_config(session, tenant_id)
     config.invoice_sequence += 1
     return f"{config.invoice_prefix}-{config.invoice_sequence}"
+
+
+# --- the clinic's logo (§3.3) ------------------------------------------------
+#
+# One image, not a collection — a clinic has at most one logo, so there is no
+# id to name it by and no listing to page through. Same two-places-to-live
+# split as a lab attachment (`app/services/storage.py`), except a fixed key
+# rather than a minted one: each upload overwrites the object already there
+# instead of leaving the old one to be cleaned up.
+
+#: 2 MB. A clinic mark, not a scanned document — plenty for a crisp PNG or
+#: JPEG wordmark, small enough that a mistaken upload cannot dent storage.
+MAX_LOGO_BYTES = 2 * 1024 * 1024
+
+ALLOWED_LOGO_CONTENT_TYPES = {"image/png", "image/jpeg", "image/webp"}
+
+
+async def set_logo(
+    session: AsyncSession, tenant_id: uuid.UUID, *, filename: str, content_type: str, data: bytes
+) -> TenantConfig:
+    if not data:
+        raise ValidationFailed("That file is empty.")
+    if len(data) > MAX_LOGO_BYTES:
+        raise ValidationFailed(
+            f"Logos are limited to {MAX_LOGO_BYTES // (1024 * 1024)} MB.",
+            details={"size_bytes": len(data), "limit_bytes": MAX_LOGO_BYTES},
+        )
+
+    kind = (content_type or "").split(";")[0].strip().lower()
+    if kind not in ALLOWED_LOGO_CONTENT_TYPES:
+        raise ValidationFailed(
+            "A logo has to be a PNG, JPEG or WebP image.", details={"content_type": kind}
+        )
+
+    config = await lock_config(session, tenant_id)
+    old_key = config.logo_storage_key
+
+    key: str | None = None
+    if storage.uses_s3():
+        key = storage.logo_object_key(tenant_id=tenant_id)
+        await storage.put(key, data, kind)
+
+    config.logo_filename = filename.strip() or "logo"
+    config.logo_content_type = kind
+    config.logo_data = None if key else data
+    config.logo_storage_key = key
+    await session.flush()
+
+    # The old object lives at the same key when both uploads used S3 — the
+    # `put` above already overwrote it — but a clinic that just moved off S3
+    # (or onto it) can leave one behind at a key the row no longer names.
+    if old_key and old_key != key:
+        storage.delete_after_commit(session, old_key)
+    return config
+
+
+async def config_with_logo(session: AsyncSession, tenant_id: uuid.UUID) -> TenantConfig:
+    """The clinic's config with its logo's bytes loaded — the only read that
+    does. `ctx.config`, loaded on every tenant request, leaves `logo_data`
+    deferred so an unrelated call never drags an image across the wire."""
+    row = (
+        await session.execute(
+            select(TenantConfig)
+            .options(undefer(TenantConfig.logo_data))
+            .where(TenantConfig.tenant_id == tenant_id)
+        )
+    ).scalar_one_or_none()
+    return row if row is not None else await get_config(session, tenant_id)
+
+
+async def logo_bytes(config: TenantConfig) -> bytes | None:
+    """The clinic's logo, from wherever this row says it is — or `None` when
+    it has not set one. `config` must come from `config_with_logo`, or a read
+    held in `data` triggers a lazy load outside any greenlet."""
+    if config.logo_filename is None:
+        return None
+    if config.logo_storage_key:
+        return await storage.get(config.logo_storage_key)
+    return config.logo_data
+
+
+async def remove_logo(session: AsyncSession, config: TenantConfig) -> None:
+    key = config.logo_storage_key
+    config.logo_filename = None
+    config.logo_content_type = None
+    config.logo_data = None
+    config.logo_storage_key = None
+    await session.flush()
+    if key:
+        storage.delete_after_commit(session, key)
 
 
 # --- field resolution (§3.3) ------------------------------------------------

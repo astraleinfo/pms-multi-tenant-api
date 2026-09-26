@@ -4,12 +4,13 @@ The cycle, run by the beat (and by hand from the console):
 
 1.  **Raise.** On the first run in a month, a clinic that has paid modules
     switched on gets a bill for that month: one line per module at today's
-    catalogue price, due `RENT_DUE_DAYS` later. Nothing on, nothing billed.
+    catalogue price, due `rent_due_days` days later (see `platform_settings`). Nothing on, nothing billed.
 2.  **Remind.** The clinic's admins are emailed as the bill moves along the
     ladder — raised, due soon, due today, overdue, last day — each rung once.
-3.  **Hold.** A bill still open `RENT_GRACE_DAYS` after its due date puts the
-    clinic on hold: its staff can sign in and see what is owed, and nothing
-    else, until it is settled. Support sessions are never held.
+3.  **Hold.** A bill still open `rent_grace_days` days after its due date (see
+    `platform_settings`) puts the clinic on hold: its staff can sign in and see
+    what is owed, and nothing else, until it is settled. Support sessions are
+    never held.
 4.  **Lift.** Settling (or voiding) the last overdue bill lifts the hold at
     once, from the console, without waiting for the next run.
 
@@ -51,6 +52,7 @@ from app.models.rent import SubscriptionInvoice
 from app.models.tenancy import Feature, Tenant, TenantConfig, TenantFeature
 from app.schemas.common import zone
 from app.services import mailer
+from app.services.platform import Timings, get_timings
 
 log = logging.getLogger("pms.rent")
 
@@ -71,15 +73,15 @@ def month_bounds(day: date) -> tuple[date, date]:
     return first, last
 
 
-def hold_date(invoice: SubscriptionInvoice) -> date:
+def hold_date(invoice: SubscriptionInvoice, timings: Timings) -> date:
     """The first day the clinic is on hold if this bill is still open."""
-    return invoice.due_on + timedelta(days=settings.rent_grace_days + 1)
+    return invoice.due_on + timedelta(days=timings.rent_grace_days + 1)
 
 
-def stage_for(invoice: SubscriptionInvoice, today: date) -> RentReminder:
+def stage_for(invoice: SubscriptionInvoice, today: date, timings: Timings) -> RentReminder:
     """Which rung of the ladder an open bill is on today."""
     late = (today - invoice.due_on).days
-    grace = settings.rent_grace_days
+    grace = timings.rent_grace_days
     if late > grace:
         return RentReminder.BLOCKED
     if late > 0 and late == grace:
@@ -88,7 +90,7 @@ def stage_for(invoice: SubscriptionInvoice, today: date) -> RentReminder:
         return RentReminder.OVERDUE
     if late == 0:
         return RentReminder.DUE
-    if -late <= settings.rent_reminder_days_before_due:
+    if -late <= timings.rent_reminder_days_before_due:
         return RentReminder.DUE_SOON
     return RentReminder.ISSUED
 
@@ -161,7 +163,7 @@ async def plan_for(session: AsyncSession, tenant: Tenant) -> dict:
 
 
 async def raise_bill(
-    session: AsyncSession, tenant: Tenant, today: date
+    session: AsyncSession, tenant: Tenant, today: date, timings: Timings
 ) -> SubscriptionInvoice | None:
     """This month's bill for one clinic — the existing one, a new one, or None
     when there is nothing to bill. The caller has the clinic bound."""
@@ -190,7 +192,7 @@ async def raise_bill(
         amount=total,
         lines=lines,
         issued_on=today,
-        due_on=today + timedelta(days=settings.rent_due_days),
+        due_on=today + timedelta(days=timings.rent_due_days),
         status=SubscriptionInvoiceStatus.OPEN,
         reminder_stage=RentReminder.NONE.value,
     )
@@ -251,7 +253,7 @@ def billing_url(tenant: Tenant) -> str:
 
 
 async def notices(
-    session: AsyncSession, tenant: Tenant, bill: SubscriptionInvoice, stage: str
+    session: AsyncSession, tenant: Tenant, bill: SubscriptionInvoice, stage: str, timings: Timings
 ) -> list[mailer.Email]:
     """The messages one rung of the ladder sends: one per admin, built now
     (the data is read inside the caller's transaction) and sent by whoever
@@ -281,7 +283,7 @@ async def notices(
             amount=f"{bill.currency} {float(bill.amount):,.2f}",
             lines=[(line["name"], f"{bill.currency} {float(line['amount']):,.2f}") for line in bill.lines],
             due_on=bill.due_on,
-            hold_on=hold_date(bill),
+            hold_on=hold_date(bill, timings),
             reference=bill.payment_reference,
             url=billing_url(tenant),
         )
@@ -306,17 +308,17 @@ async def deliver(emails: list[mailer.Email], *, what: str) -> int:
 
 
 async def _email(
-    session: AsyncSession, tenant: Tenant, bill: SubscriptionInvoice, stage: str
+    session: AsyncSession, tenant: Tenant, bill: SubscriptionInvoice, stage: str, timings: Timings
 ) -> bool:
     """Email every admin about one bill. True if at least one message left."""
-    emails = await notices(session, tenant, bill, stage)
+    emails = await notices(session, tenant, bill, stage, timings)
     return bool(emails) and await deliver(emails, what=f"{stage} notice for {bill.number}") > 0
 
 
 # --- the hold -----------------------------------------------------------------------
 
 
-async def _overdue_past_grace(session: AsyncSession, tenant: Tenant, today: date) -> bool:
+async def _overdue_past_grace(session: AsyncSession, tenant: Tenant, today: date, timings: Timings) -> bool:
     bills = (
         await session.execute(
             select(SubscriptionInvoice).where(
@@ -325,16 +327,16 @@ async def _overdue_past_grace(session: AsyncSession, tenant: Tenant, today: date
             )
         )
     ).scalars()
-    return any(today >= hold_date(b) for b in bills)
+    return any(today >= hold_date(b, timings) for b in bills)
 
 
-async def reconcile_hold(session: AsyncSession, tenant: Tenant, today: date) -> str | None:
+async def reconcile_hold(session: AsyncSession, tenant: Tenant, today: date, timings: Timings) -> str | None:
     """Put the clinic on hold, or lift it, to match its bills. Returns what
     changed: "held", "lifted" or None. The caller has the clinic bound."""
     should = (
         not tenant.billing_exempt
         and tenant.status != TenantStatus.SUSPENDED
-        and await _overdue_past_grace(session, tenant, today)
+        and await _overdue_past_grace(session, tenant, today, timings)
     )
     if should and tenant.billing_hold_since is None:
         tenant.billing_hold_since = _now()
@@ -357,13 +359,13 @@ class ClinicOutcome:
     hold: str | None = None
 
 
-async def cycle_for_tenant(session: AsyncSession, tenant: Tenant, today: date) -> ClinicOutcome:
+async def cycle_for_tenant(session: AsyncSession, tenant: Tenant, today: date, timings: Timings) -> ClinicOutcome:
     """Raise, remind and hold for one clinic. The caller has the clinic bound
     and commits."""
     outcome = ClinicOutcome()
     if tenant.billing_exempt or tenant.status == TenantStatus.SUSPENDED:
         # An exempt clinic is never held; a suspended one is offline already.
-        outcome.hold = await reconcile_hold(session, tenant, today)
+        outcome.hold = await reconcile_hold(session, tenant, today, timings)
         return outcome
 
     existing_period = month_bounds(today)[0]
@@ -375,7 +377,7 @@ async def cycle_for_tenant(session: AsyncSession, tenant: Tenant, today: date) -
             )
         )
     ).scalar_one_or_none()
-    bill = await raise_bill(session, tenant, today)
+    bill = await raise_bill(session, tenant, today, timings)
     if bill is not None and before is None:
         outcome.raised = bill.number
 
@@ -391,12 +393,12 @@ async def cycle_for_tenant(session: AsyncSession, tenant: Tenant, today: date) -
     ).scalars().all()
 
     for open_bill in open_bills:
-        target = stage_for(open_bill, today)
+        target = stage_for(open_bill, today, timings)
         if not _further(target, open_bill.reminder_stage):
             continue
         # Only the rung it is on now is emailed: a bill found three rungs on
         # after a missed week gets one message, not three.
-        if await _email(session, tenant, open_bill, target.value):
+        if await _email(session, tenant, open_bill, target.value, timings):
             open_bill.reminder_stage = target.value
             open_bill.reminders_sent += 1
             open_bill.last_reminded_at = _now()
@@ -407,7 +409,7 @@ async def cycle_for_tenant(session: AsyncSession, tenant: Tenant, today: date) -
             open_bill.reminder_stage = target.value
 
     await session.flush()
-    outcome.hold = await reconcile_hold(session, tenant, today)
+    outcome.hold = await reconcile_hold(session, tenant, today, timings)
     return outcome
 
 
@@ -418,12 +420,15 @@ async def run_cycle(
     tenant_ids: list[uuid.UUID] | None = None,
 ) -> dict:
     """The whole platform, one clinic per transaction — a failure at one clinic
-    is logged and does not stop the rest."""
+    is logged and does not stop the rest. One `Timings` value is resolved here
+    and used for every clinic in this run, so a setting changed mid-run cannot
+    split one billing cycle across two grace periods."""
     async with factory() as session:
         statement = select(Tenant.id)
         if tenant_ids:
             statement = statement.where(Tenant.id.in_(tenant_ids))
         ids = list((await session.execute(statement.order_by(Tenant.slug))).scalars())
+        timings = await get_timings(session)
 
     summary = {"clinics": 0, "raised": [], "reminded": [], "held": [], "lifted": [], "failed": []}
     # Clinics are independent — each has its own transaction and its own
@@ -440,7 +445,7 @@ async def run_cycle(
                     if tenant is None:
                         return None
                     slug = tenant.slug
-                    outcome = await cycle_for_tenant(session, tenant, today or clinic_today(tenant))
+                    outcome = await cycle_for_tenant(session, tenant, today or clinic_today(tenant), timings)
                 return tenant_id, slug, outcome
             except Exception:  # noqa: BLE001 - one clinic must not stop the run
                 log.exception("billing cycle failed for tenant %s", tenant_id)
@@ -476,6 +481,7 @@ async def settle(
     The receipts are returned, not sent: a payment is recorded whether or not
     the mail server is quick, so the caller sends them once the response has
     gone (see `deliver`)."""
+    timings = await get_timings(session)
     bill = await get_bill(session, tenant.id, bill_id)
     if bill.status != SubscriptionInvoiceStatus.OPEN:
         raise Conflict(f"That bill is already {bill.status.value}.")
@@ -484,8 +490,8 @@ async def settle(
     bill.payment_reference = reference.strip()
     bill.settled_by = by[:160]
     await session.flush()
-    change = await reconcile_hold(session, tenant, clinic_today(tenant))
-    receipts = await notices(session, tenant, bill, "paid")
+    change = await reconcile_hold(session, tenant, clinic_today(tenant), timings)
+    receipts = await notices(session, tenant, bill, "paid", timings)
     return bill, change, receipts
 
 
@@ -493,17 +499,18 @@ async def void(
     session: AsyncSession, tenant: Tenant, bill_id: uuid.UUID, *, by: str
 ) -> tuple[SubscriptionInvoice, str | None]:
     """Withdraw a bill raised in error. It stops counting towards the hold."""
+    timings = await get_timings(session)
     bill = await get_bill(session, tenant.id, bill_id)
     if bill.status != SubscriptionInvoiceStatus.OPEN:
         raise Conflict(f"That bill is already {bill.status.value}.")
     bill.status = SubscriptionInvoiceStatus.VOID
     bill.settled_by = by[:160]
     await session.flush()
-    change = await reconcile_hold(session, tenant, clinic_today(tenant))
+    change = await reconcile_hold(session, tenant, clinic_today(tenant), timings)
     return bill, change
 
 
-def summary_for(tenant: Tenant, bills: list[SubscriptionInvoice], today: date) -> dict:
+def summary_for(tenant: Tenant, bills: list[SubscriptionInvoice], today: date, timings: Timings) -> dict:
     """What the clinic owes, for its banner and its bills page."""
     open_bills = [b for b in bills if b.status == SubscriptionInvoiceStatus.OPEN]
     outstanding = sum((Decimal(b.amount) for b in open_bills), Decimal("0"))
@@ -516,8 +523,8 @@ def summary_for(tenant: Tenant, bills: list[SubscriptionInvoice], today: date) -
         "outstanding": float(outstanding),
         "open_count": len(open_bills),
         "next_due_on": next_bill.due_on.isoformat() if next_bill else None,
-        "next_hold_on": hold_date(next_bill).isoformat() if next_bill else None,
+        "next_hold_on": hold_date(next_bill, timings).isoformat() if next_bill else None,
         "overdue": bool(next_bill and today > next_bill.due_on),
-        "due_days": settings.rent_due_days,
-        "grace_days": settings.rent_grace_days,
+        "due_days": timings.rent_due_days,
+        "grace_days": timings.rent_grace_days,
     }

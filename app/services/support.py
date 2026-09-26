@@ -37,6 +37,7 @@ from app.models.identity import User
 from app.models.support import SupportRequest
 from app.models.tenancy import Feature, Tenant, TenantConfig, TenantFeature
 from app.services import audit, mailer
+from app.services import platform as platform_service
 
 log = logging.getLogger("pms.support")
 
@@ -164,8 +165,9 @@ async def _email_for(session: AsyncSession, row: SupportRequest) -> mailer.Email
         amount = float(feature.price_monthly)
         figure = f"{amount:,.0f}" if amount.is_integer() else f"{amount:,.2f}"
         price = f"{currency.value if currency else ''} {figure}".strip()
+    desk = await platform_service.get_platform_settings(session)
     return mailer.support_request(
-        to=settings.support_email,
+        to=desk.support_email,
         kind=row.kind.value,
         clinic=tenant.name if tenant else "A clinic",
         slug=tenant.slug if tenant else "",
@@ -242,9 +244,9 @@ async def deliver(
             await audit.record(
                 session, action="support.request_email", tenant_id=tenant_id,
                 entity="support_request", entity_id=str(row.id),
-                meta={"to": settings.support_email, "attempts": row.attempts},
+                meta={"to": email.to, "attempts": row.attempts},
             )
-            log.info("support request %s emailed to %s", row.id, settings.support_email)
+            log.info("support request %s emailed to %s", row.id, email.to)
             return "sent"
 
 

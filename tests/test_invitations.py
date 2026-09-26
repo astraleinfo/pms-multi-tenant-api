@@ -420,3 +420,49 @@ async def test_a_locked_account_is_not_released_by_asking_for_a_link(
 
     resend = await northgate.post(f"/v1/users/{user_id}/invite")
     assert resend.status_code == 409
+
+
+async def test_a_shorter_invitation_ttl_reaches_the_actual_token(
+    northgate, client, console, monkeypatch
+):
+    """The token's real expiry and the email's stated expiry must move
+    together — both are read from one resolved `Timings` value now, not two
+    independent reads that could disagree."""
+    import uuid
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import select
+
+    from app.db.session import tenant_session
+    from app.models.enums import AuthTokenPurpose
+    from app.models.identity import AuthToken
+    from app.services import mailer
+
+    sent: list = []
+
+    async def capture(email):
+        sent.append(email)
+
+    monkeypatch.setattr(mailer, "send", capture)
+
+    await console.patch("/v1/platform/settings", json={"invite_token_ttl_seconds": 86400})
+
+    before = datetime.now(timezone.utc)
+    row = await _invite_colleague(northgate, client, email="fast.expiry@northgate.clinic")
+
+    assert len(sent) == 1
+    assert "expires in a day" in sent[0].text  # mailer.invitation()'s wording for 86400s
+
+    tenant_id = uuid.UUID((await northgate.get("/v1/auth/me")).json()["tenant_id"])
+    async with tenant_session(tenant_id) as session:
+        token = (
+            await session.execute(
+                select(AuthToken).where(
+                    AuthToken.subject_id == uuid.UUID(row["id"]),
+                    AuthToken.purpose == AuthTokenPurpose.INVITE,
+                )
+            )
+        ).scalar_one()
+
+    delta = token.expires_at - before
+    assert timedelta(hours=23) < delta < timedelta(hours=25), f"expected ~24h, got {delta}"

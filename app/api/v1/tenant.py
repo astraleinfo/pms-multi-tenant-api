@@ -191,6 +191,57 @@ async def update_config(
     return TenantConfigOut.of(ctx.config, ctx.tz)
 
 
+@router.post("/tenant/config/logo", response_model=TenantConfigOut)
+async def set_logo(
+    file: UploadFile = File(..., description="A PNG, JPEG or WebP image, up to 2 MB."),
+    ctx: TenantContext = Depends(require_permission(Permission.TENANT_CONFIG_WRITE)),
+) -> TenantConfigOut:
+    """Set (or replace) the clinic's own logo — shown in its rail and printed
+    on its PDFs. A second upload overwrites the first; there is only ever one."""
+    data = await file.read()
+    config = await tenant_service.set_logo(
+        ctx.session,
+        ctx.tenant_id,
+        filename=file.filename or "logo",
+        content_type=file.content_type or "application/octet-stream",
+        data=data,
+    )
+    await audit.record(
+        ctx.session, action="config.logo_set", tenant_id=ctx.tenant_id, actor_kind=ctx.actor_kind,
+        actor_id=ctx.actor_id, actor_label=ctx.principal.label, entity="tenant_config",
+        entity_id=str(ctx.tenant_id), meta={"filename": config.logo_filename, "bytes": len(data)},
+    )
+    return TenantConfigOut.of(config, ctx.tz)
+
+
+@router.get("/tenant/config/logo")
+async def get_logo(ctx: TenantContext = Depends(require_permission(Permission.TENANT_CONFIG_READ))) -> Response:
+    """The logo itself. Every role may read it — it is the clinic's own
+    branding, not a setting only an admin should see."""
+    config = await tenant_service.config_with_logo(ctx.session, ctx.tenant_id)
+    data = await tenant_service.logo_bytes(config)
+    if data is None:
+        raise NotFound("This clinic has not set a logo.")
+    return Response(
+        content=data,
+        media_type=config.logo_content_type or "application/octet-stream",
+        headers={"Cache-Control": "private, max-age=300"},
+    )
+
+
+@router.delete("/tenant/config/logo", response_model=TenantConfigOut)
+async def delete_logo(
+    ctx: TenantContext = Depends(require_permission(Permission.TENANT_CONFIG_WRITE)),
+) -> TenantConfigOut:
+    await tenant_service.remove_logo(ctx.session, ctx.config)
+    await audit.record(
+        ctx.session, action="config.logo_removed", tenant_id=ctx.tenant_id, actor_kind=ctx.actor_kind,
+        actor_id=ctx.actor_id, actor_label=ctx.principal.label, entity="tenant_config",
+        entity_id=str(ctx.tenant_id),
+    )
+    return TenantConfigOut.of(ctx.config, ctx.tz)
+
+
 # --- dynamic fields (§3.3) ---------------------------------------------------
 
 

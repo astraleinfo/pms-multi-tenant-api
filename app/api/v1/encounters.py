@@ -143,6 +143,7 @@ async def consultation_pdf(
     encounter = await encounter_service.get_encounter(ctx.session, ctx.tenant_id, eid)
     prescription = await encounter_service.get_prescription_for_encounter(ctx.session, ctx.tenant_id, eid)
     doctor = await ctx.session.get(User, encounter.doctor_id)
+    logo_config = await tenant_service.config_with_logo(ctx.session, ctx.tenant_id)
     pdf_bytes = build_consultation_pdf(
         encounter,
         prescription,
@@ -150,6 +151,8 @@ async def consultation_pdf(
         tenant_name=ctx.tenant.name,
         doctor_name=doctor.name if doctor else "",
         tz=ctx.tz,
+        config=ctx.config,
+        logo=await tenant_service.logo_bytes(logo_config),
     )
     return Response(
         content=pdf_bytes,

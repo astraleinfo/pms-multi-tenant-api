@@ -64,11 +64,9 @@ class Settings(BaseSettings):
     password_reset_rate_limit: str = "5/hour"  # noqa: S105 - a rate, not a secret
 
     # ------------------------------------------------------- invitations
-    # An invitation is a one-time URL. The token is long-lived enough for a
-    # clinic to act on it in their own time, a reset short enough that a link
-    # sitting in an inbox is not a standing key.
-    invite_token_ttl_seconds: int = 60 * 60 * 24 * 7
-    reset_token_ttl_seconds: int = 60 * 60 * 2
+    # An invitation is a one-time URL. The token TTL (how long the link stays
+    # valid) and reset token TTL are configured in `platform_settings` (see
+    # app/services/platform.py::Timings) — editable from the console, not env vars.
 
     # ------------------------------------------------------------- email
     # Transactional mail — invitations and password resets. This is not the
@@ -128,8 +126,6 @@ class Settings(BaseSettings):
     message_retry_base_seconds: int = 30
     # How often the worker sweeps the table for due and stranded messages.
     worker_poll_seconds: int = 10
-    # Appointment reminders go out this many hours before the slot.
-    reminder_lead_hours: int = 24
     # Encrypts provider credentials at rest. Defaults to a key derived from
     # JWT_SECRET so development works out of the box; set your own to rotate
     # without invalidating sessions.
@@ -148,19 +144,16 @@ class Settings(BaseSettings):
 
     # ------------------------------------------------------ subscription rent
     # What each clinic pays the platform for the modules it has switched on.
-    # A bill is raised on the first run of each month, is due `RENT_DUE_DAYS`
-    # later, and a clinic that has not paid `RENT_GRACE_DAYS` after that is put
-    # on hold until it does. The admins are emailed at each step.
+    # When it's due, how long the grace period is, and when the reminder
+    # ladder starts are all in `platform_settings` now (see
+    # app/services/platform.py::Timings) — editable from the console, not
+    # env vars.
     #
     # Off by default: switched on, the beat raises real bills and emails real
     # admins — including every seeded demo clinic. The console's "Run billing
     # now" works either way, so the cycle can be tried by hand first.
     rent_billing_enabled: bool = False
     rent_currency: str = "INR"
-    rent_due_days: int = 7
-    rent_grace_days: int = 7
-    #: the "due soon" reminder goes this many days before the due date
-    rent_reminder_days_before_due: int = 3
     #: how often the beat runs the cycle; every run is idempotent
     rent_cycle_seconds: int = 3600
 

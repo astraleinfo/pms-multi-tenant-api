@@ -10,6 +10,7 @@ is no RLS bypass role anywhere in this application.
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 
@@ -24,9 +25,138 @@ from app.models.clinical import Appointment, Encounter, Patient
 from app.models.enums import AccountStatus, TenantFeatureStatus, TenantStatus
 from app.models.identity import PlatformUser, User
 from app.models.ops import Invoice, Payment
-from app.models.tenancy import ClinicalType, Feature, Tenant, TenantConfig, TenantFeature
+from app.models.tenancy import (
+    ClinicalType,
+    Feature,
+    LabTest,
+    MedicineSuggestion,
+    PlatformSettings,
+    Tenant,
+    TenantConfig,
+    TenantFeature,
+)
 from app.schemas.tenancy import TenantCreateIn, TenantPatchIn
 from app.services.tenants import CORE_FEATURES
+
+PLATFORM_SETTINGS_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+
+
+@dataclass(frozen=True)
+class Timings:
+    """The six operational knobs `platform_settings` carries, resolved once
+    per unit of work (one billing run, one invitation, one queued reminder)
+    and passed down as a plain value from there — never read from a
+    module-level global inside a pure function, so a run already in
+    progress cannot see two different configs partway through."""
+
+    invite_token_ttl_seconds: int
+    reset_token_ttl_seconds: int
+    reminder_lead_hours: int
+    rent_due_days: int
+    rent_grace_days: int
+    rent_reminder_days_before_due: int
+
+
+async def get_platform_settings(session: AsyncSession) -> PlatformSettings:
+    """The one row. Created on first read if the migration's seed somehow
+    hasn't run yet — belt to that braces, never expected to fire in practice."""
+    row = await session.get(PlatformSettings, PLATFORM_SETTINGS_ID)
+    if row is None:
+        row = PlatformSettings(id=PLATFORM_SETTINGS_ID)
+        session.add(row)
+        await session.flush()
+    return row
+
+
+async def get_timings(session: AsyncSession) -> Timings:
+    row = await get_platform_settings(session)
+    return Timings(
+        invite_token_ttl_seconds=row.invite_token_ttl_seconds,
+        reset_token_ttl_seconds=row.reset_token_ttl_seconds,
+        reminder_lead_hours=row.reminder_lead_hours,
+        rent_due_days=row.rent_due_days,
+        rent_grace_days=row.rent_grace_days,
+        rent_reminder_days_before_due=row.rent_reminder_days_before_due,
+    )
+
+
+async def update_platform_settings(session: AsyncSession, changes: dict) -> PlatformSettings:
+    row = await get_platform_settings(session)
+    for key, value in changes.items():
+        setattr(row, key, value)
+    await session.flush()
+    return row
+
+
+async def create_lab_test(
+    session: AsyncSession, code: str, name: str, panel: str, clinical_types: list[str] | None,
+) -> LabTest:
+    existing = await session.get(LabTest, code)
+    if existing is not None:
+        raise Conflict("A lab test with that code already exists.")
+    row = LabTest(code=code, name=name, panel=panel, clinical_types=clinical_types)
+    session.add(row)
+    await session.flush()
+    return row
+
+
+async def update_lab_test(session: AsyncSession, code: str, changes: dict) -> LabTest:
+    row = await session.get(LabTest, code)
+    if row is None:
+        raise NotFound("No such lab test.")
+    for key, value in changes.items():
+        setattr(row, key, value)
+    await session.flush()
+    return row
+
+
+async def delete_lab_test(session: AsyncSession, code: str) -> None:
+    row = await session.get(LabTest, code)
+    if row is None:
+        raise NotFound("No such lab test.")
+    await session.delete(row)
+    await session.flush()
+
+
+async def create_medicine(
+    session: AsyncSession, medicine: str, strength: str, dosage: str, frequency: str,
+    duration: str, clinical_types: list[str] | None,
+) -> MedicineSuggestion:
+    row = MedicineSuggestion(
+        medicine=medicine, strength=strength, dosage=dosage, frequency=frequency,
+        duration=duration, clinical_types=clinical_types,
+    )
+    session.add(row)
+    await session.flush()
+    return row
+
+
+async def update_medicine(session: AsyncSession, medicine_id: uuid.UUID, changes: dict) -> MedicineSuggestion:
+    row = await session.get(MedicineSuggestion, medicine_id)
+    if row is None:
+        raise NotFound("No such medicine suggestion.")
+    for key, value in changes.items():
+        setattr(row, key, value)
+    await session.flush()
+    return row
+
+
+async def delete_medicine(session: AsyncSession, medicine_id: uuid.UUID) -> None:
+    row = await session.get(MedicineSuggestion, medicine_id)
+    if row is None:
+        raise NotFound("No such medicine suggestion.")
+    await session.delete(row)
+    await session.flush()
+
+
+async def update_clinical_type_copy(session: AsyncSession, key: str, changes: dict) -> ClinicalType:
+    row = await session.get(ClinicalType, key)
+    if row is None:
+        raise NotFound("No such clinical type.")
+    for field, value in changes.items():
+        setattr(row, field, value)
+    await session.flush()
+    return row
 
 
 def initials_of(name: str) -> str:
@@ -73,12 +203,21 @@ async def create_tenant(
     # below is written *as* that tenant and checked by the same policies.
     await set_tenant(session, tenant.id)
 
+    defaults = await get_platform_settings(session)
     session.add(
         TenantConfig(
             tenant_id=tenant.id,
             mrn_prefix=prefix,
             token_prefix=prefix[:1],
             invoice_prefix=f"{prefix}-INV",
+            day_start=defaults.default_day_start,
+            day_end=defaults.default_day_end,
+            slot_minutes=defaults.default_slot_minutes,
+            default_duration=defaults.default_duration,
+            tax_pct=defaults.default_tax_pct,
+            payment_terms_days=defaults.default_payment_terms_days,
+            expiry_alert_days=defaults.default_expiry_alert_days,
+            currency=defaults.default_currency,
         )
     )
 

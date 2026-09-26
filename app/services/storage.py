@@ -65,6 +65,18 @@ def object_key(*, tenant_id: uuid.UUID, order_id: uuid.UUID, attachment_id: uuid
     return f"{prefix}/{path}" if prefix else path
 
 
+def logo_object_key(*, tenant_id: uuid.UUID) -> str:
+    """Where one clinic's logo lives in the bucket.
+
+    A clinic has at most one, so this is a fixed path rather than a minted
+    id: each upload overwrites the object in place, and nothing is left
+    behind to clean up when it is replaced.
+    """
+    prefix = settings.s3_prefix.strip("/")
+    path = f"tenants/{tenant_id}/logo"
+    return f"{prefix}/{path}" if prefix else path
+
+
 def _s3() -> Any:
     if not settings.s3_bucket:
         raise StorageUnavailable("File storage is not configured (S3_BUCKET is empty).")
