@@ -32,7 +32,7 @@ from app.db.session import set_tenant
 from app.models.enums import AuthTokenPurpose
 from app.models.identity import PlatformUser
 from app.models.tenancy import ClinicalType, Feature, LabTest, MedicineSuggestion, Tenant
-from app.schemas.common import zone
+from app.schemas.common import local_today, zone
 from app.schemas.identity import PlatformUserOut, UserOut
 from app.schemas.support import SupportRequestOut
 from app.schemas.tenancy import (
