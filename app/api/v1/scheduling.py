@@ -116,6 +116,19 @@ async def availability(
     )
 
 
+@router.get("/appointments/{appointment_id}", response_model=AppointmentOut)
+async def get_appointment(
+    appointment_id: str,
+    ctx: TenantContext = Depends(require_permission(Permission.APPOINTMENT_READ)),
+) -> AppointmentOut:
+    """One booking, for the screen that shows it. Declared after
+    `/appointments/availability`, so that path is never read as an id."""
+    appointment = await scheduling_service.get_appointment(
+        ctx.session, ctx.tenant_id, parse_uuid(appointment_id, what="appointment")
+    )
+    return AppointmentOut.of(appointment)
+
+
 @router.post("/appointments", response_model=AppointmentOut, status_code=status.HTTP_201_CREATED)
 async def create_appointment(
     payload: AppointmentIn,
@@ -183,15 +196,17 @@ async def reschedule_appointment(
 async def _announce_move(ctx: TenantContext, appointment, was: dict[str, str]) -> None:
     """Tell the patient, and re-time the reminder.
 
-    The old reminder is for a slot that no longer exists, so it is cancelled
-    before a new one is queued — cancelling first is also what frees the
-    uniqueness slot the new reminder needs.
+    Anything still waiting to go out names the old slot, so it is cancelled —
+    except the reminder, which is moved in place: its job is revoked and it is
+    scheduled, or queued with a new job, for the new slot.
     """
     patient = await ctx.session.get(Patient, appointment.patient_id)
     if patient is None:
         return
 
-    await message_service.cancel_pending_for_appointment(ctx.session, appointment.id)
+    await message_service.cancel_pending_for_appointment(
+        ctx.session, appointment.id, keep=(MessageTemplate.APPOINTMENT_REMINDER,)
+    )
     await ctx.session.flush()
 
     try:
@@ -203,12 +218,8 @@ async def _announce_move(ctx: TenantContext, appointment, was: dict[str, str]) -
             appointment=appointment,
             extra={"was_date": was["date"], "was_time": was["time"]},
         )
-        await message_service.queue_message(
-            ctx.session,
-            tenant_id=ctx.tenant_id,
-            patient=patient,
-            template=MessageTemplate.APPOINTMENT_REMINDER,
-            appointment=appointment,
+        await message_service.retime_reminder(
+            ctx.session, tenant_id=ctx.tenant_id, patient=patient, appointment=appointment
         )
     except Exception:  # noqa: BLE001 - a move must not fail on messaging
         log.exception("could not queue move notice for appointment %s", appointment.id)

@@ -66,6 +66,17 @@ class ValidationFailed(AppError):
     code = "validation_failed"
 
 
+class AccountOnHold(AppError):
+    """The clinic is on hold for an unpaid subscription bill.
+
+    402 rather than 403: nothing is wrong with who is asking, and the way out
+    is to pay. The client shows the bill instead of the screen it asked for.
+    """
+
+    status_code = status.HTTP_402_PAYMENT_REQUIRED
+    code = "account_on_hold"
+
+
 class RateLimited(AppError):
     status_code = status.HTTP_429_TOO_MANY_REQUESTS
     code = "rate_limited"

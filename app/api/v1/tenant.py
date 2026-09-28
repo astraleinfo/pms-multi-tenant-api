@@ -6,17 +6,28 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Request, Response, UploadFile, status
 from sqlalchemy import func, select
 
-from app.api.deps import TenantContext, current_tenant, parse_uuid, require_permission
+from app.api.deps import (
+    TenantContext,
+    client_ip,
+    current_tenant,
+    parse_uuid,
+    require_permission,
+    user_agent,
+)
+from app.core.config import settings
 from app.core.errors import Conflict, NotFound
 from app.core.permissions import Permission, Role, permissions_for
+from app.core.rate_limit import Rate, limiter
 from app.core.security import hash_password
 from app.models.enums import AccountStatus, AuthTokenPurpose, FieldEntity, FieldScope
 from app.models.identity import User
 from app.models.tenancy import Feature, FieldDefinition
-from app.schemas.identity import PasswordSetIn, UserCreateIn, UserOut, UserStatusIn
+from app.schemas.identity import PasswordSetIn, UserCreateIn, UserOut, UserStatusIn, UserUpdateIn
+from app.schemas.ops import ImportJobOut
+from app.schemas.support import SupportRequestIn, SupportRequestOut
 from app.schemas.tenancy import (
     FeatureOut,
     FeaturePurchaseIn,
@@ -27,8 +38,10 @@ from app.schemas.tenancy import (
     TenantFeatureOut,
     TenantOut,
 )
-from app.services import audit, invitations, mailer
+from app.services import audit, import_jobs, invitations, mailer, staff_io
 from app.services import auth as auth_service
+from app.services import imports as import_service
+from app.services import support as support_service
 from app.services import tenants as tenant_service
 
 log = logging.getLogger("pms.tenant")
@@ -90,6 +103,67 @@ async def deactivate_feature(
     return TenantFeatureOut.of(row)
 
 
+# --- the support desk ---------------------------------------------------------
+#
+# A clinic cannot switch a module on for itself; it asks, and a super admin
+# grants it from the console. The ask is stored here and the desk is emailed by
+# the Celery worker, so a slow or broken mail server never holds up the clinic.
+
+
+@router.post(
+    "/tenant/support-requests",
+    response_model=SupportRequestOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_support_request(
+    payload: SupportRequestIn,
+    request: Request,
+    response: Response,
+    tasks: BackgroundTasks,
+    ctx: TenantContext = Depends(current_tenant),
+) -> SupportRequestOut:
+    """Ask the platform for a module, a walkthrough of one, or anything else.
+
+    Any signed-in member of staff may ask; the email says who did. The same
+    person repeating the same ask inside a few minutes gets the earlier request
+    back with `200` instead of `201`, and the desk is not emailed again.
+    """
+    limiter.check(f"support:{ctx.user.id}", Rate.parse(settings.support_request_rate_limit))
+    row, created = await support_service.create(
+        ctx.session,
+        tenant=ctx.tenant,
+        user=ctx.user,
+        actor_kind=ctx.actor_kind,
+        actor_label=ctx.principal.label,
+        kind=payload.kind,
+        feature_key=payload.feature_key,
+        message=payload.message,
+        ip=client_ip(request),
+        user_agent=user_agent(request),
+    )
+    if created:
+        # Imported here so the API process only touches Celery on this route.
+        from app.worker.tasks import enqueue_support_request
+
+        # Publishing is blocking I/O, and slow when Redis is down, so it runs in
+        # the threadpool after the response has gone — never on the event loop,
+        # and never between the clinic and "your request is in".
+        tasks.add_task(enqueue_support_request, ctx.tenant_id, row.id)
+    else:
+        response.status_code = status.HTTP_200_OK
+    return SupportRequestOut.of(row, ctx.tz)
+
+
+@router.get("/tenant/support-requests", response_model=list[SupportRequestOut])
+async def list_support_requests(
+    ctx: TenantContext = Depends(current_tenant),
+) -> list[SupportRequestOut]:
+    """This clinic's recent asks, newest first — so a module page can say
+    "requested on …" instead of offering the same button again."""
+    rows = await support_service.list_for_tenant(ctx.session, ctx.tenant_id)
+    return [SupportRequestOut.of(r, ctx.tz) for r in rows]
+
+
 # --- configuration (§3.3) ----------------------------------------------------
 
 
@@ -113,6 +187,57 @@ async def update_config(
         ctx.session, action="config.update", tenant_id=ctx.tenant_id, actor_kind=ctx.actor_kind,
         actor_id=ctx.actor_id, actor_label=ctx.principal.label, entity="tenant_config",
         entity_id=str(ctx.tenant_id), meta={"fields": sorted(changes)},
+    )
+    return TenantConfigOut.of(ctx.config, ctx.tz)
+
+
+@router.post("/tenant/config/logo", response_model=TenantConfigOut)
+async def set_logo(
+    file: UploadFile = File(..., description="A PNG, JPEG or WebP image, up to 2 MB."),
+    ctx: TenantContext = Depends(require_permission(Permission.TENANT_CONFIG_WRITE)),
+) -> TenantConfigOut:
+    """Set (or replace) the clinic's own logo — shown in its rail and printed
+    on its PDFs. A second upload overwrites the first; there is only ever one."""
+    data = await file.read()
+    config = await tenant_service.set_logo(
+        ctx.session,
+        ctx.tenant_id,
+        filename=file.filename or "logo",
+        content_type=file.content_type or "application/octet-stream",
+        data=data,
+    )
+    await audit.record(
+        ctx.session, action="config.logo_set", tenant_id=ctx.tenant_id, actor_kind=ctx.actor_kind,
+        actor_id=ctx.actor_id, actor_label=ctx.principal.label, entity="tenant_config",
+        entity_id=str(ctx.tenant_id), meta={"filename": config.logo_filename, "bytes": len(data)},
+    )
+    return TenantConfigOut.of(config, ctx.tz)
+
+
+@router.get("/tenant/config/logo")
+async def get_logo(ctx: TenantContext = Depends(require_permission(Permission.TENANT_CONFIG_READ))) -> Response:
+    """The logo itself. Every role may read it — it is the clinic's own
+    branding, not a setting only an admin should see."""
+    config = await tenant_service.config_with_logo(ctx.session, ctx.tenant_id)
+    data = await tenant_service.logo_bytes(config)
+    if data is None:
+        raise NotFound("This clinic has not set a logo.")
+    return Response(
+        content=data,
+        media_type=config.logo_content_type or "application/octet-stream",
+        headers={"Cache-Control": "private, max-age=300"},
+    )
+
+
+@router.delete("/tenant/config/logo", response_model=TenantConfigOut)
+async def delete_logo(
+    ctx: TenantContext = Depends(require_permission(Permission.TENANT_CONFIG_WRITE)),
+) -> TenantConfigOut:
+    await tenant_service.remove_logo(ctx.session, ctx.config)
+    await audit.record(
+        ctx.session, action="config.logo_removed", tenant_id=ctx.tenant_id, actor_kind=ctx.actor_kind,
+        actor_id=ctx.actor_id, actor_label=ctx.principal.label, entity="tenant_config",
+        entity_id=str(ctx.tenant_id),
     )
     return TenantConfigOut.of(ctx.config, ctx.tz)
 
@@ -238,6 +363,97 @@ async def list_doctors(
     return [UserOut.of(u, ctx.tz) for u in rows]
 
 
+# --- the staff list as a spreadsheet ----------------------------------------------------
+
+_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def _spreadsheet(content: bytes, name: str) -> Response:
+    return Response(
+        content=content,
+        media_type=_XLSX,
+        headers={"Content-Disposition": f'attachment; filename="{name}"', "Cache-Control": "no-store"},
+    )
+
+
+@router.get("/users/export")
+async def export_users(
+    ctx: TenantContext = Depends(require_permission(Permission.USER_MANAGE)),
+) -> Response:
+    """Everyone on the Team tab, in the import's own layout. Admin-only: it is
+    every colleague's email address in one file."""
+    rows = list(
+        (
+            await ctx.session.execute(
+                select(User)
+                .where(User.tenant_id == ctx.tenant_id, User.is_support.is_(False))
+                .order_by(User.name)
+            )
+        ).scalars()
+    )
+    content = staff_io.export(rows, tz=ctx.tz)
+    return _spreadsheet(content, f"{ctx.tenant.slug}-staff-{ctx.today.isoformat()}.xlsx")
+
+
+@router.get("/users/import/template")
+async def staff_import_template(
+    ctx: TenantContext = Depends(require_permission(Permission.USER_MANAGE)),
+) -> Response:
+    """The sample sheet: name, email, role (as a dropdown) and speciality."""
+    return _spreadsheet(staff_io.template(clinic=ctx.tenant.name), f"{ctx.tenant.slug}-staff-import.xlsx")
+
+
+@router.post("/users/import", response_model=ImportJobOut, status_code=status.HTTP_202_ACCEPTED)
+async def import_users(
+    tasks: BackgroundTasks,
+    file: UploadFile = File(..., description="The filled-in sample sheet (.xlsx), or a .csv."),
+    ctx: TenantContext = Depends(require_permission(Permission.USER_MANAGE)),
+) -> ImportJobOut:
+    """Hand a sheet of people to the worker, and answer at once.
+
+    Every row is checked the way "Add person" checks it; then everyone is
+    opened as an invited account and emailed their link — or, with one bad row
+    or one email the clinic already has, nobody is. The upload is deleted
+    either way. Poll the job for the outcome.
+    """
+    content = await file.read(import_service.MAX_FILE_BYTES + 1)
+    job = await import_jobs.queue(
+        ctx.session,
+        ctx.tenant_id,
+        staff_io.KIND,
+        filename=file.filename or "",
+        content=content,
+        actor=import_jobs.Actor(ctx.actor_id, ctx.principal.label, ctx.actor_kind),
+    )
+    # after the response, so the session has committed and the worker finds the row
+    from app.worker.tasks import enqueue_import
+
+    tasks.add_task(enqueue_import, ctx.tenant_id, job.id)
+    return ImportJobOut.of(job, ctx.tz)
+
+
+@router.get("/users/import/jobs/latest", response_model=ImportJobOut | None)
+async def latest_staff_import(
+    ctx: TenantContext = Depends(require_permission(Permission.USER_MANAGE)),
+) -> ImportJobOut | None:
+    """The clinic's most recent staff import, so a page opened mid-import can pick it up."""
+    job = await import_jobs.latest(ctx.session, ctx.tenant_id, staff_io.KIND)
+    return ImportJobOut.of(job, ctx.tz) if job else None
+
+
+@router.get("/users/import/jobs/{job_id}", response_model=ImportJobOut)
+async def staff_import_job(
+    job_id: str,
+    ctx: TenantContext = Depends(require_permission(Permission.USER_MANAGE)),
+) -> ImportJobOut:
+    job = await import_jobs.get_job(
+        ctx.session, ctx.tenant_id, parse_uuid(job_id, what="import"), staff_io.KIND
+    )
+    if job is None:
+        raise NotFound("No such import.")
+    return ImportJobOut.of(job, ctx.tz)
+
+
 @router.post("/users", response_model=UserOut, status_code=status.HTTP_201_CREATED)
 async def create_user(
     payload: UserCreateIn,
@@ -358,6 +574,141 @@ async def _staff_member(ctx: TenantContext, user_id: str) -> User:
     if user is None:
         raise NotFound("No such account.")
     return user
+
+
+async def _other_admins(ctx: TenantContext, user: User) -> int:
+    """Active practice admins besides this one — the clinic must keep one."""
+    return (
+        await ctx.session.execute(
+            select(func.count(User.id)).where(
+                User.tenant_id == ctx.tenant_id,
+                User.id != user.id,
+                User.role == Role.TENANT_ADMIN.value,
+                User.status == AccountStatus.ACTIVE,
+                User.is_support.is_(False),
+            )
+        )
+    ).scalar() or 0
+
+
+@router.patch("/users/{user_id}", response_model=UserOut)
+async def update_user(
+    user_id: str,
+    payload: UserUpdateIn,
+    ctx: TenantContext = Depends(require_permission(Permission.USER_MANAGE)),
+) -> UserOut:
+    """Correct a colleague's name, sign-in email, role or speciality.
+
+    A role takes effect on their next request — the guards read it from the
+    account, not from their session. Two changes are refused because they
+    cannot be undone from inside the clinic: an admin changing their own role,
+    and the last practice admin being made something else.
+
+    A new email is a new username. Any link already sent to the old address
+    is spent, and someone still invited is sent a fresh one at the new one.
+    """
+    user = await _staff_member(ctx, user_id)
+    changes = payload.model_dump(exclude_unset=True)
+    before = {"name": user.name, "email": user.email, "role": user.role, "speciality": user.speciality}
+
+    role = changes.get("role")
+    if role is not None and role != user.role:
+        if role not in {r.value for r in Role}:
+            raise Conflict("That is not a role this product has.")
+        if user.id == ctx.actor_id:
+            raise Conflict("You cannot change your own role — ask another practice admin.")
+        if user.role == Role.TENANT_ADMIN.value and not await _other_admins(ctx, user):
+            raise Conflict("This is the clinic's only practice admin. Make someone else an admin first.")
+        user.role = role
+
+    email_changed = False
+    if changes.get("email") is not None:
+        email = str(changes["email"]).lower()
+        if email != user.email.lower():
+            clash = (
+                await ctx.session.execute(
+                    select(func.count(User.id)).where(
+                        User.tenant_id == ctx.tenant_id, User.id != user.id, func.lower(User.email) == email
+                    )
+                )
+            ).scalar()
+            if clash:
+                raise Conflict("Someone here already uses that email.")
+            user.email = email
+            email_changed = True
+
+    if changes.get("name") is not None:
+        user.name = changes["name"].strip()
+        user.initials = "".join(p[0] for p in user.name.split()[:2]).upper()
+    if "speciality" in changes:
+        user.speciality = (changes["speciality"] or "").strip() or None
+
+    await ctx.session.flush()
+    invited = False
+    if email_changed:
+        # A link to the old address is a way in for whoever reads that inbox.
+        await invitations.revoke_all_for_user(ctx.session, user_id=user.id)
+        if user.status == AccountStatus.INVITED:
+            try:
+                await invitations.invite_user(
+                    ctx.session, user=user, tenant=ctx.tenant, issued_by_label=ctx.principal.label
+                )
+                invited = True
+            except mailer.MailError as exc:
+                log.error("could not send invitation to %s: %s", user.email, exc)
+
+    after = {"name": user.name, "email": user.email, "role": user.role, "speciality": user.speciality}
+    await audit.record(
+        ctx.session, action="user.update", tenant_id=ctx.tenant_id, actor_kind=ctx.actor_kind,
+        actor_id=ctx.actor_id, actor_label=ctx.principal.label, entity="user", entity_id=str(user.id),
+        meta={
+            "changed": {k: {"from": before[k], "to": after[k]} for k in after if before[k] != after[k]},
+            "reinvited": invited,
+        },
+    )
+    return UserOut.of(user, ctx.tz)
+
+
+@router.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_user(
+    user_id: str,
+    ctx: TenantContext = Depends(require_permission(Permission.USER_MANAGE)),
+) -> Response:
+    """Remove an account that never recorded anything — an invitation sent to
+    the wrong person, a duplicate.
+
+    Anyone whose name is on a record stays: a consultation, a prescription, a
+    verified result has to keep saying who did it. For them the answer is to
+    lock the account, which stops the sign-in and keeps the history, and the
+    refusal says so and counts what they recorded.
+    """
+    user = await _staff_member(ctx, user_id)
+    if user.id == ctx.actor_id:
+        raise Conflict("You cannot delete your own account.")
+    only_admin = user.role == Role.TENANT_ADMIN.value and user.status == AccountStatus.ACTIVE
+    if only_admin and not await _other_admins(ctx, user):
+        raise Conflict("This is the clinic's only practice admin. Make someone else an admin first.")
+
+    used = await tenant_service.records_by(ctx.session, user.id)
+    if used:
+        total = sum(used.values())
+        raise Conflict(
+            f"{user.name} has {total} record{'s' if total != 1 else ''} here, which must keep their name. "
+            "Lock the account instead — it stops the sign-in and keeps the history.",
+            details={"records": used},
+        )
+
+    await auth_service.revoke_all_for_subject(ctx.session, subject_id=user.id)
+    await invitations.revoke_all_for_user(ctx.session, user_id=user.id)
+    label = f"{user.name} <{user.email}>"
+    await ctx.session.delete(user)
+    await ctx.session.flush()
+    await audit.record(
+        ctx.session, action="user.delete", tenant_id=ctx.tenant_id, actor_kind=ctx.actor_kind,
+        actor_id=ctx.actor_id, actor_label=ctx.principal.label, entity="user", entity_id=user_id,
+        meta={"who": label, "role": user.role},
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.patch("/users/{user_id}/status", response_model=UserOut)

@@ -16,7 +16,9 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import AfterValidator, BaseModel, ConfigDict
 
-DEFAULT_TZ = "Europe/London"
+from app.core.config import settings
+
+DEFAULT_TZ = settings.pms_timezone
 
 
 def zone(name: str | None) -> ZoneInfo:
@@ -34,6 +36,22 @@ def _local(value: datetime, tz: str | None) -> datetime:
 
 def iso_date(value: date | None) -> str | None:
     return value.isoformat() if value else None
+
+
+def local_now(tz: str | None = None) -> datetime:
+    """Now, on a clinic's clock — or the PMS's, with none given. Stored times
+    are UTC; this is for what a person reads."""
+    return datetime.now(zone(tz))
+
+
+def local_today(tz: str | None = None) -> date:
+    return local_now(tz).date()
+
+
+def local_iso(value: datetime | None, tz: str | None = None) -> str | None:
+    """An ISO instant with the display timezone's offset (`+05:30`), not UTC's.
+    The same moment either way; this one reads right as it stands."""
+    return _local(value, tz).isoformat() if value else None
 
 
 def clock(value: datetime | None, tz: str | None = None) -> str | None:

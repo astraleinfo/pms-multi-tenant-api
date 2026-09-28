@@ -9,11 +9,11 @@ from __future__ import annotations
 from datetime import date as date_t
 from typing import Literal
 
-from fastapi import APIRouter, Depends, File, Form, Query, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Query, UploadFile, status
 from fastapi.responses import Response
 
 from app.api.deps import TenantContext, parse_uuid, require_feature
-from app.core.errors import ValidationFailed
+from app.core.errors import NotFound, ValidationFailed
 from app.core.permissions import Permission
 from app.models.enums import BillingDepartment, DispenseStatus, InvoiceStatus, LabOrderStatus
 from app.schemas.clinical import (
@@ -30,6 +30,7 @@ from app.schemas.ops import (
     CounterPaymentIn,
     CounterPaymentOut,
     DepartmentAccountOut,
+    ImportJobOut,
     InventoryBatchOut,
     InventoryItemIn,
     InventoryItemOut,
@@ -47,12 +48,14 @@ from app.schemas.ops import (
     SuggestedLinesOut,
 )
 from app.services import accounts as account_service
-from app.services import audit
+from app.services import audit, import_jobs, inventory_io
 from app.services import billing as billing_service
+from app.services import imports as import_service
 from app.services import inventory as inventory_service
 from app.services import lab as lab_service
 from app.services import patients as patient_service
 from app.services import pharmacy as pharmacy_service
+from app.services.documents import build_invoice_pdf
 
 # --- pharmacy (§3.9) ---------------------------------------------------------
 
@@ -256,7 +259,7 @@ async def download_attachment(
         parse_uuid(attachment_id, what="attachment"),
     )
     return Response(
-        content=attachment.data,
+        content=await lab_service.attachment_bytes(attachment),
         media_type=attachment.content_type,
         headers={
             # `inline` so a report opens in the tab it was asked for; the name
@@ -456,6 +459,96 @@ async def record_movement(
     return InventoryTxOut.of(transaction, ctx.tz)
 
 
+XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def _spreadsheet(content: bytes, name: str) -> Response:
+    return Response(
+        content=content,
+        media_type=XLSX,
+        headers={"Content-Disposition": f'attachment; filename="{name}"', "Cache-Control": "no-store"},
+    )
+
+
+@inventory_router.get("/import/template")
+async def inventory_import_template(
+    ctx: TenantContext = Depends(require_feature("inventory", Permission.INVENTORY_WRITE)),
+) -> Response:
+    """The sample sheet: every field a stock line has, the fixed choices as
+    dropdowns, an example per pricing mode, and a sheet saying what each is."""
+    content = inventory_io.template(clinic=ctx.tenant.name)
+    return _spreadsheet(content, f"{ctx.tenant.slug}-inventory-import.xlsx")
+
+
+@inventory_router.post(
+    "/import", response_model=ImportJobOut, status_code=status.HTTP_202_ACCEPTED
+)
+async def inventory_import(
+    tasks: BackgroundTasks,
+    file: UploadFile = File(..., description="The filled-in sample sheet (.xlsx), an export, or a .csv."),
+    ctx: TenantContext = Depends(require_feature("inventory", Permission.INVENTORY_WRITE)),
+) -> ImportJobOut:
+    """Hand a sheet of stock lines to the worker, and answer at once.
+
+    The worker checks every row, writes them all or none — a SKU the clinic has
+    is an update, a new one a new line, a quantity received a purchase — and
+    deletes the upload whichever way it went. Poll the job for the outcome.
+    """
+    content = await file.read(import_service.MAX_FILE_BYTES + 1)
+    job = await import_jobs.queue(
+        ctx.session,
+        ctx.tenant_id,
+        inventory_io.KIND,
+        filename=file.filename or "",
+        content=content,
+        actor=import_jobs.Actor(ctx.actor_id, ctx.principal.label, ctx.actor_kind),
+    )
+    # Imported here so the API process only touches Celery on this route, and
+    # published after the response — the session commits first, so the worker
+    # finds the row, and a slow broker never holds the upload's answer.
+    from app.worker.tasks import enqueue_import
+
+    tasks.add_task(enqueue_import, ctx.tenant_id, job.id)
+    return ImportJobOut.of(job, ctx.tz)
+
+
+@inventory_router.get("/import/jobs/latest", response_model=ImportJobOut | None)
+async def latest_inventory_import(
+    ctx: TenantContext = Depends(require_feature("inventory", Permission.INVENTORY_WRITE)),
+) -> ImportJobOut | None:
+    """The clinic's most recent import, so a page opened mid-import can pick it up."""
+    job = await import_jobs.latest(ctx.session, ctx.tenant_id, inventory_io.KIND)
+    return ImportJobOut.of(job, ctx.tz) if job else None
+
+
+@inventory_router.get("/import/jobs/{job_id}", response_model=ImportJobOut)
+async def inventory_import_job(
+    job_id: str,
+    ctx: TenantContext = Depends(require_feature("inventory", Permission.INVENTORY_WRITE)),
+) -> ImportJobOut:
+    job = await import_jobs.get_job(
+        ctx.session, ctx.tenant_id, parse_uuid(job_id, what="import"), inventory_io.KIND
+    )
+    if job is None:
+        raise NotFound("No such import.")
+    return ImportJobOut.of(job, ctx.tz)
+
+
+@inventory_router.get("/export")
+async def inventory_export(
+    ctx: TenantContext = Depends(require_feature("inventory", Permission.INVENTORY_READ)),
+) -> Response:
+    """Every stock line in the import's own layout, with what is on hand, and
+    the batches on the shelf. Edited, it goes straight back in as an import."""
+    items = await inventory_service.list_items(ctx.session, ctx.tenant_id)
+    levels = await inventory_service.stock_levels(ctx.session, ctx.tenant_id)
+    batches = await inventory_service.list_batches(ctx.session, ctx.tenant_id)
+    content = inventory_io.export(
+        items, levels, batches, today=ctx.today, alert_days=ctx.config.expiry_alert_days
+    )
+    return _spreadsheet(content, f"{ctx.tenant.slug}-inventory-{ctx.today.isoformat()}.xlsx")
+
+
 # --- billing (§3.12) ---------------------------------------------------------
 
 billing_router = APIRouter(prefix="/billing", tags=["billing"])
@@ -541,6 +634,43 @@ async def get_invoice(
         ctx.session, ctx.tenant_id, parse_uuid(invoice_id, what="invoice")
     )
     return InvoiceOut.of(invoice, ctx.tz, billing_service.totals_for(invoice))
+
+
+@billing_router.get("/invoices/{invoice_id}/pdf")
+async def invoice_pdf(
+    invoice_id: str,
+    ctx: TenantContext = Depends(require_feature("billing", Permission.BILLING_READ)),
+) -> Response:
+    """The invoice as a printable PDF, on the clinic's letterhead.
+
+    Built from the same row and the same `totals_for` the screen reads, so the
+    paper and the screen cannot disagree about what is owed. `inline`, so a
+    print button opens it in a tab rather than forcing a download.
+    """
+    invoice = await billing_service.get_invoice(
+        ctx.session, ctx.tenant_id, parse_uuid(invoice_id, what="invoice")
+    )
+    content = build_invoice_pdf(
+        invoice,
+        billing_service.totals_for(invoice),
+        clinic=ctx.tenant.name,
+        config=ctx.config,
+        currency=ctx.config.currency.value if ctx.config.currency else "",
+    )
+    return Response(
+        content=content,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'inline; filename="invoice-{_filename_safe(invoice.number)}.pdf"',
+            "Cache-Control": "private, no-store",
+        },
+    )
+
+
+def _filename_safe(text: str) -> str:
+    """An invoice number is the clinic's own prefix plus a sequence; this keeps
+    a header value to characters that cannot break out of the quotes."""
+    return "".join(ch for ch in text if ch.isalnum() or ch in "-_") or "invoice"
 
 
 @billing_router.post("/invoices/{invoice_id}/issue", response_model=InvoiceOut)

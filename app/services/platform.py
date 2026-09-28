@@ -10,7 +10,9 @@ is no RLS bypass role anywhere in this application.
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from datetime import date
+from decimal import Decimal
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,9 +25,138 @@ from app.models.clinical import Appointment, Encounter, Patient
 from app.models.enums import AccountStatus, TenantFeatureStatus, TenantStatus
 from app.models.identity import PlatformUser, User
 from app.models.ops import Invoice, Payment
-from app.models.tenancy import ClinicalType, Feature, Tenant, TenantConfig, TenantFeature
+from app.models.tenancy import (
+    ClinicalType,
+    Feature,
+    LabTest,
+    MedicineSuggestion,
+    PlatformSettings,
+    Tenant,
+    TenantConfig,
+    TenantFeature,
+)
 from app.schemas.tenancy import TenantCreateIn, TenantPatchIn
 from app.services.tenants import CORE_FEATURES
+
+PLATFORM_SETTINGS_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+
+
+@dataclass(frozen=True)
+class Timings:
+    """The six operational knobs `platform_settings` carries, resolved once
+    per unit of work (one billing run, one invitation, one queued reminder)
+    and passed down as a plain value from there — never read from a
+    module-level global inside a pure function, so a run already in
+    progress cannot see two different configs partway through."""
+
+    invite_token_ttl_seconds: int
+    reset_token_ttl_seconds: int
+    reminder_lead_hours: int
+    rent_due_days: int
+    rent_grace_days: int
+    rent_reminder_days_before_due: int
+
+
+async def get_platform_settings(session: AsyncSession) -> PlatformSettings:
+    """The one row. Created on first read if the migration's seed somehow
+    hasn't run yet — belt to that braces, never expected to fire in practice."""
+    row = await session.get(PlatformSettings, PLATFORM_SETTINGS_ID)
+    if row is None:
+        row = PlatformSettings(id=PLATFORM_SETTINGS_ID)
+        session.add(row)
+        await session.flush()
+    return row
+
+
+async def get_timings(session: AsyncSession) -> Timings:
+    row = await get_platform_settings(session)
+    return Timings(
+        invite_token_ttl_seconds=row.invite_token_ttl_seconds,
+        reset_token_ttl_seconds=row.reset_token_ttl_seconds,
+        reminder_lead_hours=row.reminder_lead_hours,
+        rent_due_days=row.rent_due_days,
+        rent_grace_days=row.rent_grace_days,
+        rent_reminder_days_before_due=row.rent_reminder_days_before_due,
+    )
+
+
+async def update_platform_settings(session: AsyncSession, changes: dict) -> PlatformSettings:
+    row = await get_platform_settings(session)
+    for key, value in changes.items():
+        setattr(row, key, value)
+    await session.flush()
+    return row
+
+
+async def create_lab_test(
+    session: AsyncSession, code: str, name: str, panel: str, clinical_types: list[str] | None,
+) -> LabTest:
+    existing = await session.get(LabTest, code)
+    if existing is not None:
+        raise Conflict("A lab test with that code already exists.")
+    row = LabTest(code=code, name=name, panel=panel, clinical_types=clinical_types)
+    session.add(row)
+    await session.flush()
+    return row
+
+
+async def update_lab_test(session: AsyncSession, code: str, changes: dict) -> LabTest:
+    row = await session.get(LabTest, code)
+    if row is None:
+        raise NotFound("No such lab test.")
+    for key, value in changes.items():
+        setattr(row, key, value)
+    await session.flush()
+    return row
+
+
+async def delete_lab_test(session: AsyncSession, code: str) -> None:
+    row = await session.get(LabTest, code)
+    if row is None:
+        raise NotFound("No such lab test.")
+    await session.delete(row)
+    await session.flush()
+
+
+async def create_medicine(
+    session: AsyncSession, medicine: str, strength: str, dosage: str, frequency: str,
+    duration: str, clinical_types: list[str] | None,
+) -> MedicineSuggestion:
+    row = MedicineSuggestion(
+        medicine=medicine, strength=strength, dosage=dosage, frequency=frequency,
+        duration=duration, clinical_types=clinical_types,
+    )
+    session.add(row)
+    await session.flush()
+    return row
+
+
+async def update_medicine(session: AsyncSession, medicine_id: uuid.UUID, changes: dict) -> MedicineSuggestion:
+    row = await session.get(MedicineSuggestion, medicine_id)
+    if row is None:
+        raise NotFound("No such medicine suggestion.")
+    for key, value in changes.items():
+        setattr(row, key, value)
+    await session.flush()
+    return row
+
+
+async def delete_medicine(session: AsyncSession, medicine_id: uuid.UUID) -> None:
+    row = await session.get(MedicineSuggestion, medicine_id)
+    if row is None:
+        raise NotFound("No such medicine suggestion.")
+    await session.delete(row)
+    await session.flush()
+
+
+async def update_clinical_type_copy(session: AsyncSession, key: str, changes: dict) -> ClinicalType:
+    row = await session.get(ClinicalType, key)
+    if row is None:
+        raise NotFound("No such clinical type.")
+    for field, value in changes.items():
+        setattr(row, field, value)
+    await session.flush()
+    return row
 
 
 def initials_of(name: str) -> str:
@@ -72,12 +203,21 @@ async def create_tenant(
     # below is written *as* that tenant and checked by the same policies.
     await set_tenant(session, tenant.id)
 
+    defaults = await get_platform_settings(session)
     session.add(
         TenantConfig(
             tenant_id=tenant.id,
             mrn_prefix=prefix,
             token_prefix=prefix[:1],
             invoice_prefix=f"{prefix}-INV",
+            day_start=defaults.default_day_start,
+            day_end=defaults.default_day_end,
+            slot_minutes=defaults.default_slot_minutes,
+            default_duration=defaults.default_duration,
+            tax_pct=defaults.default_tax_pct,
+            payment_terms_days=defaults.default_payment_terms_days,
+            expiry_alert_days=defaults.default_expiry_alert_days,
+            currency=defaults.default_currency,
         )
     )
 
@@ -183,19 +323,47 @@ async def set_tenant_feature(
         )
     ).scalar_one_or_none()
 
+    was_active = row is not None and row.status == TenantFeatureStatus.ACTIVE
     if row is None:
         row = TenantFeature(tenant_id=tenant_id, feature_key=feature_key, status=status)
         session.add(row)
     else:
         row.status = status
 
-    # `activated_at` records when it was last switched on, and is left alone by
-    # a deactivation so the history of the entitlement survives it.
-    if status == TenantFeatureStatus.ACTIVE and row.activated_at is None:
+    # `activated_at` records when it was last switched on — the console counts
+    # billing from it, so a module switched back on starts again from today
+    # rather than looking billed for the months it was off. Re-sending "on"
+    # for a module already on leaves it alone, and a deactivation leaves the
+    # last date in place.
+    if status == TenantFeatureStatus.ACTIVE and not was_active:
         row.activated_at = today
 
     await session.flush()
     return row
+
+
+async def set_feature_price(
+    session: AsyncSession, feature_key: str, price_monthly: float
+) -> tuple[Feature, Decimal]:
+    """Change what a module costs, for every clinic at once.
+
+    The catalogue is the platform's, not a clinic's, so this is one row and no
+    tenant is bound. A core module carries no price — it is in every plan and
+    cannot be bought or dropped — so pricing one is refused rather than stored
+    and then contradicted by every screen that says "included".
+
+    Returns the row and the price it replaced, for the audit line.
+    """
+    feature = await session.get(Feature, feature_key)
+    if feature is None:
+        raise NotFound("No such module.")
+    if feature.is_core or feature_key in CORE_FEATURES:
+        raise Conflict("That module is part of the core product and carries no price.")
+
+    previous = Decimal(feature.price_monthly or 0)
+    feature.price_monthly = Decimal(str(price_monthly)).quantize(Decimal("0.01"))
+    await session.flush()
+    return feature, previous
 
 
 SUPPORT_EMAIL_DOMAIN = "platform.invalid"
@@ -269,7 +437,18 @@ async def snapshot(session: AsyncSession) -> dict:
     for tenant in tenants:
         await set_tenant(session, tenant.id)
         counts = {
-            "users": await _count(session, User, tenant.id),
+            # Staff only: the support account a console session works
+            # through is plumbing, and the clinic's own Team tab leaves it out.
+            "users": int(
+                (
+                    await session.execute(
+                        select(func.count(User.id)).where(
+                            User.tenant_id == tenant.id, User.is_support.is_(False)
+                        )
+                    )
+                ).scalar()
+                or 0
+            ),
             "patients": await _count(session, Patient, tenant.id),
             "appointments": await _count(session, Appointment, tenant.id),
             "encounters": await _count(session, Encounter, tenant.id),

@@ -10,9 +10,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import TenantContext, current_tenant, db_session, host_tenant
 from app.models.enums import TenantStatus
-from app.models.tenancy import ClinicalType, LabTest, MedicineSuggestion
+from app.models.tenancy import ClinicalType, Feature, LabTest, MedicineSuggestion
 from app.schemas.common import ApiModel
-from app.schemas.tenancy import ClinicalTypeOut
+from app.schemas.tenancy import ClinicalTypeOut, FeatureOut
+from app.services import platform as platform_service
 
 router = APIRouter(tags=["catalog"])
 
@@ -25,6 +26,15 @@ class PublicTenantOut(ApiModel):
     slug: str
     clinical_type: str
     status: TenantStatus
+
+
+class PublicSettingsOut(ApiModel):
+    """Only what a clinic that can't self-serve needs to know: who to ask.
+    Nothing else on `platform_settings` is public."""
+
+    support_email: str
+    support_phone: str
+    support_hours: str
 
 
 class LabTestOut(ApiModel):
@@ -48,10 +58,35 @@ async def public_tenant(tenant=Depends(host_tenant)) -> PublicTenantOut:
     )
 
 
+@router.get("/public/settings", response_model=PublicSettingsOut)
+async def public_settings(
+    session: AsyncSession = Depends(db_session, scope="function"),
+) -> PublicSettingsOut:
+    row = await platform_service.get_platform_settings(session)
+    return PublicSettingsOut(
+        support_email=row.support_email, support_phone=row.support_phone, support_hours=row.support_hours,
+    )
+
+
 @router.get("/catalog/clinical-types", response_model=list[ClinicalTypeOut])
-async def clinical_types(session: AsyncSession = Depends(db_session)) -> list[ClinicalTypeOut]:
+async def clinical_types(
+    session: AsyncSession = Depends(db_session, scope="function"),
+) -> list[ClinicalTypeOut]:
     rows = (await session.execute(select(ClinicalType).order_by(ClinicalType.label))).scalars()
     return [ClinicalTypeOut.of(c) for c in rows]
+
+
+@router.get("/catalog/features", response_model=list[FeatureOut])
+async def features(ctx: TenantContext = Depends(current_tenant)) -> list[FeatureOut]:
+    """The module catalogue with its current prices.
+
+    Prices are set in the console by a super admin and change without a
+    release, so a clinic reads them from here rather than from anything
+    compiled into the front end — the figure on a padlocked module page is the
+    figure the platform will actually charge.
+    """
+    rows = (await ctx.session.execute(select(Feature).order_by(Feature.name))).scalars()
+    return [FeatureOut.of(f) for f in rows]
 
 
 @router.get("/catalog/lab-tests", response_model=list[LabTestOut])

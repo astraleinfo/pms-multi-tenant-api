@@ -97,7 +97,9 @@ make seed        # the three demo clinics from the front end's seed
 make run         # http://localhost:8000 — docs at /docs
 ```
 
-Or `make up` for all of it, or `docker compose up` to run the API in a container too.
+Or `make up` for all of it, or `docker compose up` to run the API in a container too. Compose also
+brings up the Celery worker, beat and Flower; only the API's port is published, and Postgres and
+Redis are bound to the loopback rather than to the machine's network.
 
 That path uses the throwaway PostgreSQL in `docker-compose.yml`, which bootstraps itself. To
 point the API at a PostgreSQL you already run — or to understand the two roles it connects as —
@@ -122,7 +124,8 @@ then `-2026`:
 | `northgate.localhost` | `a.iyer@northgate.clinic` (clinician) | `aiyer-2026` |
 | `clearview.localhost` | `admin@clearview.eye` | `admin-2026` |
 | `rowan.localhost` | `owner@rowanskin.co` | `owner-2026` |
-| `localhost` (console) | `ines@astrale.health` | `ines-2026` |
+| `admin.localhost` (console) | `ines@astrale.health` (super admin) | `ines-2026` |
+| `admin.localhost` (console) | `rafael@astrale.health` (support desk) | `rafael-2026` |
 
 They are hashed with Argon2 on the way into the database. Five wrong passwords lock an account;
 a practice admin releases it from `PATCH /v1/users/{id}/status`, which also clears the counter
@@ -500,10 +503,83 @@ Everything is under `/v1`. The full list is at `/docs`; this is the shape of it.
 | **Realtime** (§3.6) | `WS /ws/queue?access_token=…` |
 | **Analytics** (§3.14) | `GET /analytics/dashboard` |
 | **Platform** (§3.1) | `GET|POST /platform/tenants`, `PATCH /platform/tenants/{id}/status`, `GET /platform/snapshot`, `GET /platform/me` |
+| **Background jobs** (§3.1) 👑 | `GET /platform/jobs`, `GET /platform/jobs/tasks/{id}`, `POST|DELETE /platform/jobs/flower-session`, `GET|POST /platform/jobs/flower/{path}` |
 | **Public** | `GET /v1/public/tenant`, `GET /health`, `GET /health/db` |
 
 🔒 = behind an entitlement. A clinic that has not bought the module gets `403 feature_not_enabled`,
 whatever its staff's roles say.
+
+👑 = platform super admins only. Everyone else gets `403 forbidden`, including a practice admin
+with a perfectly good session and a member of the platform's own support desk. See
+**Background jobs** below.
+
+---
+
+## Background jobs (§3.1)
+
+Celery does the work away from the request; [Flower](https://flower.readthedocs.io) watches its
+event stream and keeps the task history; the console's **Background jobs** section reads Flower
+through this API. Four endpoints, one guard, and one rule about ports.
+
+**Flower's port is never published.** It answers on the container network and nowhere else —
+there is no `ports:` entry for it in `docker-compose.yml`, deliberately. The only route to it from
+outside is `/v1/platform/jobs/flower/…`, which is a reverse proxy behind the same check as the
+rest of the section. Adding a published port, or a hostname of its own, would hand every job's
+arguments to anyone who found it.
+
+**The guard is a role, and it answers 403.** `platform_users.role` is `super_admin` or `support`.
+Everywhere else in the console the two are the same; here they are not, because this section reads
+the platform's own machinery. What each caller gets:
+
+| Who | Answer |
+|---|---|
+| Nobody signed in | `401 unauthenticated` |
+| Any clinic account — practice admin, doctor, receptionist, pharmacist, lab tech | `403 forbidden` |
+| A support session working inside a clinic | `403 forbidden` |
+| Platform staff whose role is `support` | `403 forbidden` |
+| Platform staff whose role is `super_admin`, on the console address | the jobs |
+
+A clinic session is answered 403 rather than 401 on purpose: the token is valid and the session is
+fine, so "sign in again" would be a lie and the front end would act on it. The console's own guard
+still answers 401 for a clinic token, because there the question is which door, not which person.
+
+**How a browser loads Flower's own pages.** A page's stylesheet, scripts and polls are
+navigations — they cannot carry an `Authorization` header. So `POST /v1/platform/jobs/flower-session`
+mints a short-lived token carrying a `scp` claim and sets it as an HttpOnly, host-only cookie.
+That token opens the proxy and nothing else: presented to any other route it is refused, because
+`current_tenant` and `current_platform_user` both reject a token that carries a scope at all.
+Signing out of the console hands it back.
+
+**What the counts mean.** Flower holds a bounded history in memory, so the figures are over that
+window rather than over all time, and every payload carries `summary.window` saying how many
+records they were taken over. A monitor that is restarting answers `available: false` with a
+sentence, and the console says so — drawing zeroes instead would read like a quiet platform.
+Celery itself does not depend on any of this: `worker_send_task_events` is what feeds Flower, and
+a worker runs its jobs whether or not anything is listening.
+
+Configuration is in `.env.example` under **Background-job monitoring**. `FLOWER_URL_PREFIX` is the
+one worth reading twice — Flower builds its own links from it, so it has to be the path the
+*browser* uses, which behind the web app's `/api` rewrite is `api/v1/platform/jobs/flower`.
+
+**Running the API on the host.** `docker compose up` starts the worker, beat and the monitor for
+you. `make run` does not, and `FLOWER_URL` still points at the container by name, so the section
+reports the monitor as unreachable until you either run the whole set in Docker or start the three
+yourself:
+
+```bash
+make worker      # -E, which is what feeds the monitor
+make beat        # the sweep
+make flower      # 127.0.0.1:5555, same loopback treatment as the database
+```
+
+and set `FLOWER_URL=http://127.0.0.1:5555` with a matching `FLOWER_BASIC_AUTH` in `.env`. Flower
+comes from the `monitor` extra — `pip install -e ".[dev,monitor]"`.
+
+One thing worth knowing about Flower: it inspects its workers **once, at startup**, and then only
+when a request asks it to. Started before any worker exists — which is what happens every time the
+container set comes up — that one inspection finds nothing, and `concurrency` and the queue list
+would be blank for the life of the process. `app/services/jobs.py` asks for a refresh every
+`FLOWER_INSPECT_SECONDS` rather than on every poll, which is a ping to each worker.
 
 ---
 
@@ -694,11 +770,12 @@ app/
   schemas/             request and response contracts
   services/            the decisions: auth, tenants, patients, scheduling,
                        encounters, pharmacy, lab, inventory, billing, history,
-                       analytics, platform, audit
+                       analytics, platform, audit, jobs
   api/
     deps.py            the §4 middleware stack as dependencies
     v1/                routers
   seed/                the demo dataset and its loader
+  worker/              the Celery app and its tasks
 alembic/versions/
   0001_initial_schema.py
   0002_row_level_security.py    policies, grants, and the audit-log rules

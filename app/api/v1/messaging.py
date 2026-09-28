@@ -26,7 +26,7 @@ from app.schemas.messaging import (
     MessagingConfigOut,
 )
 from app.services import audit
-from app.services.messaging import outbox, service
+from app.services.messaging import outbox, reminders, service
 from app.services.messaging.crypto import encrypt_secret
 from app.services.messaging.providers import available_providers, build_provider
 from app.services.messaging.providers.base import Outbound, SendRefused, SendRetryable
@@ -161,14 +161,48 @@ async def retry_message(
     if message.status != MessageStatus.FAILED:
         raise Conflict("Only a failed message can be retried.")
 
-    message.status = MessageStatus.QUEUED
     message.attempts = 0
     message.last_error = ""
-    await ctx.session.flush()
-    await outbox.nudge(str(message.id))
+    if message.job_id:
+        # A reminder: it goes back to Celery, under a new job, straight away.
+        message.send_after = reminders.now()
+        reminders.queue(ctx.session, message)
+        await ctx.session.flush()
+    else:
+        message.status = MessageStatus.QUEUED
+        await ctx.session.flush()
+        await outbox.nudge(str(message.id))
 
     patient = await ctx.session.get(Patient, message.patient_id)
     return MessageOut.of(message, ctx.tz, patient.full_name if patient else "")
+
+
+@router.delete("/messages/{message_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_message(
+    message_id: str,
+    ctx: TenantContext = Depends(require_permission(Permission.MESSAGE_SEND)),
+) -> None:
+    """Delete a message that has not gone out — a reminder, most often.
+
+    Its job, if it has one, is revoked once the delete commits, and the row
+    is gone. One being sent right now, or already sent, is the record of what
+    the patient received and stays.
+    """
+    message = await ctx.session.get(Message, parse_uuid(message_id, what="message"))
+    if message is None or message.tenant_id != ctx.tenant_id:
+        raise NotFound("No such message.")
+    if message.status in (MessageStatus.SENDING, MessageStatus.SENT):
+        raise Conflict("That message has already gone out.")
+
+    reminders.stop(ctx.session, message)
+    await ctx.session.delete(message)
+    await ctx.session.flush()
+    await audit.record(
+        ctx.session, action="message.deleted", tenant_id=ctx.tenant_id,
+        actor_kind=ctx.actor_kind, actor_id=ctx.actor_id, actor_label=ctx.principal.label,
+        entity="message", entity_id=str(message.id),
+        meta={"template": str(message.template), "status": str(message.status)},
+    )
 
 
 @router.post("/messages/test", response_model=MessageTestOut)

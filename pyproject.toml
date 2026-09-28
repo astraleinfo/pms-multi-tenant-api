@@ -27,6 +27,15 @@ dependencies = [
     # one; Windows does not, so every clinic timezone lookup raises there unless
     # this is installed. Free on the platforms that do not need it.
     "tzdata>=2024.1; platform_system == 'Windows'",
+    # Background jobs — support-request emails. A dependency, not an extra:
+    # the API enqueues on the support route. `[redis]` brings the broker client.
+    "celery[redis]>=5.4",
+    # S3 file storage and SES email. Imported only when STORAGE_BACKEND=s3 or
+    # MAIL_PROVIDER=ses, but a dependency rather than an extra so switching a
+    # deployment over is a configuration change, not a rebuild.
+    "boto3>=1.34",
+    # Reading and writing the onboarding spreadsheets.
+    "openpyxl>=3.1",
 ]
 
 [project.optional-dependencies]
@@ -34,7 +43,17 @@ dev = [
     "pytest>=8.2",
     "pytest-asyncio>=0.23",
     "ruff>=0.5",
+    # A fake AWS for the S3 and SES tests — nothing leaves the machine.
+    "moto[s3,ses]>=5.0",
+    # Reads the text back out of the PDFs the API renders.
+    "pypdf>=4.0",
 ]
+# The Celery monitor. Not imported by this application at all — the API reads
+# it over HTTP like any other service — so it is an extra rather than a
+# dependency. The container image installs it because one image runs the API,
+# the worker, beat and Flower; a deployment that runs no monitor can leave it
+# out and set FLOWER_ENABLED=false.
+monitor = ["flower>=2.0"]
 # The outbox nudge, and only the nudge. `app/services/messaging/outbox.py`
 # imports this inside the call and swallows its absence on purpose — without it
 # a queued message waits for the sweep instead of going out immediately, which

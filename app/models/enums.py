@@ -17,6 +17,30 @@ class TenantStatus(StrEnum):
     SUSPENDED = "suspended"
 
 
+class SubscriptionInvoiceStatus(StrEnum):
+    """A clinic's monthly bill from the platform — the "app rent"."""
+
+    OPEN = "open"
+    PAID = "paid"
+    VOID = "void"
+
+
+class RentReminder(StrEnum):
+    """How far along the reminder ladder a bill has got. Each rung is emailed
+    once, in this order; `STAGE_ORDER` is what "further along" means."""
+
+    NONE = "none"
+    ISSUED = "issued"
+    DUE_SOON = "due_soon"
+    DUE = "due"
+    OVERDUE = "overdue"
+    FINAL = "final"
+    BLOCKED = "blocked"
+
+
+RENT_STAGE_ORDER: dict[str, int] = {stage.value: i for i, stage in enumerate(RentReminder)}
+
+
 class TenantFeatureStatus(StrEnum):
     ACTIVE = "active"
     INACTIVE = "inactive"
@@ -27,6 +51,57 @@ class AccountStatus(StrEnum):
     ACTIVE = "active"
     INVITED = "invited"
     LOCKED = "locked"
+
+
+class PlatformRole(StrEnum):
+    """What a platform account may do in the console.
+
+    Clinic roles live in `app.core.permissions`; this is the other side of the
+    seam. `super_admin` is the whole console, including the parts that look at
+    the platform's own machinery — background jobs, the workers running them,
+    the broker behind both. `support` is the desk: clinics, their requests, and
+    nothing underneath them.
+
+    Existing accounts were all of the first kind, so the column defaults to it;
+    narrowing somebody to `support` is a deliberate act.
+    """
+
+    SUPER_ADMIN = "super_admin"
+    SUPPORT = "support"
+
+
+class JobStatus(StrEnum):
+    """The buckets the console counts background jobs in.
+
+    Celery has more states than this and Flower reports every one of them;
+    these are the ones an operator actually asks about. `pending` folds
+    PENDING and RECEIVED together — from the console's point of view both mean
+    "queued, not started" — and `revoked` is kept separate from `failed`
+    because a job somebody cancelled is not a job that went wrong.
+    """
+
+    PENDING = "pending"
+    ACTIVE = "active"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    RETRIED = "retried"
+    REVOKED = "revoked"
+
+
+#: Celery's task states, mapped onto the six above. A state not listed here is
+#: reported as `pending`, which is what an unrecognised state means in practice:
+#: the broker has it and nothing has finished it.
+CELERY_STATE_STATUS: dict[str, JobStatus] = {
+    "PENDING": JobStatus.PENDING,
+    "RECEIVED": JobStatus.PENDING,
+    "STARTED": JobStatus.ACTIVE,
+    "SUCCESS": JobStatus.COMPLETED,
+    "FAILURE": JobStatus.FAILED,
+    "REJECTED": JobStatus.FAILED,
+    "RETRY": JobStatus.RETRIED,
+    "REVOKED": JobStatus.REVOKED,
+    "IGNORED": JobStatus.COMPLETED,
+}
 
 
 class AuthTokenPurpose(StrEnum):
@@ -291,8 +366,13 @@ class MessageTemplate(StrEnum):
 class MessageStatus(StrEnum):
     """`queued` is the only state the worker picks up. `failed` is terminal
     until someone retries it; `cancelled` is what a scrapped appointment does
-    to a reminder that had not gone out yet."""
+    to a reminder that had not gone out yet.
 
+    `scheduled` is a reminder whose day has not come: it has no job yet, and
+    the midnight run queues it when its day arrives. See
+    `app/services/messaging/reminders.py`."""
+
+    SCHEDULED = "scheduled"
     QUEUED = "queued"
     SENDING = "sending"
     SENT = "sent"
@@ -305,3 +385,33 @@ class MessageProvider(StrEnum):
 
     CONSOLE = "console"
     TWILIO = "twilio"
+
+
+class SupportRequestKind(StrEnum):
+    """What a clinic is asking the support desk for. `activation` and
+    `walkthrough` are about one module; `general` is anything else."""
+
+    ACTIVATION = "activation"
+    WALKTHROUGH = "walkthrough"
+    GENERAL = "general"
+
+
+class ImportJobStatus(StrEnum):
+    """Where a spreadsheet import has got to. `queued` and `running` are the
+    states the worker picks up; `done` and `failed` are final, and by then the
+    uploaded file is gone."""
+
+    QUEUED = "queued"
+    RUNNING = "running"
+    DONE = "done"
+    FAILED = "failed"
+
+
+class SupportRequestStatus(StrEnum):
+    """Whether the desk has been told. `queued` is the only state the worker
+    picks up; `failed` is parked after the last attempt, and the request itself
+    still stands — the row is the ask, the email is only how the desk hears."""
+
+    QUEUED = "queued"
+    SENT = "sent"
+    FAILED = "failed"

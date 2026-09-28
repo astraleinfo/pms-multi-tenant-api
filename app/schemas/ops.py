@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import Field
 
 from app.models.enums import (
     BillingDepartment,
+    ImportJobStatus,
     InventoryCategory,
     InventoryRefType,
     InventoryTxType,
@@ -158,6 +159,61 @@ class StockMovementIn(InputModel):
     mrp: float | None = Field(default=None, ge=0, le=1_000_000)
     margin_pct: float | None = Field(default=None, ge=-100, le=1000)
     pricing_mode: PricingMode | None = None
+
+
+class ImportRowOut(ApiModel):
+    row: int
+    label: str
+    ok: bool
+    errors: list[str]
+    #: `create` for a SKU the clinic does not have yet, `update` for one it does
+    action: Literal["create", "update"]
+    #: stock the row brings with it, as a purchase; 0 for none
+    qty: int = 0
+    #: set when the row repeats another: `row 4`, or the SKU it is already stocked as
+    duplicate_of: str | None = None
+
+
+class ImportReportOut(ApiModel):
+    total: int
+    valid: int
+    invalid: int
+    committed: bool
+    created: int = 0
+    updated: int = 0
+    #: inventory: rows that brought stock with them
+    stocked: int = 0
+    #: staff: invitations that left. A failed send is not a failed import —
+    #: the account exists and "resend" is on the staff list.
+    invited: int = 0
+    #: rows that repeat another row, or an item already in stock
+    duplicates: int = 0
+    rows: list[ImportRowOut]
+
+
+class ImportJobOut(ApiModel):
+    """A spreadsheet import the worker has, or has finished with. The file
+    itself is never returned, and is gone once `status` is final."""
+
+    id: str
+    status: ImportJobStatus
+    filename: str
+    created_at: str
+    finished_at: str | None = None
+    #: on a failure, the one sentence that says why
+    error: str = ""
+    #: counts once finished; on a failure, the rows that need fixing
+    report: ImportReportOut | None = None
+
+    @classmethod
+    def of(cls, job, tz: str) -> ImportJobOut:
+        return cls(
+            id=str(job.id), status=job.status, filename=job.filename,
+            created_at=stamp(job.created_at, tz) or "", finished_at=stamp(job.finished_at, tz),
+            error=job.error,
+            report=ImportReportOut(committed=job.status == ImportJobStatus.DONE, **job.report)
+            if job.report else None,
+        )
 
 
 class StockLevelOut(ApiModel):
@@ -472,3 +528,6 @@ class AnalyticsOut(ApiModel):
     core: dict[str, Any]
     modules: dict[str, Any]
     clinical: dict[str, Any]
+    #: false when the money figures were taken out — `revenue:read` is the
+    #: practice admin's; see `analytics.without_revenue`
+    revenue_visible: bool = True

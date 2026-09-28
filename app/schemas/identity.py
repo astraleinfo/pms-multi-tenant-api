@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pydantic import EmailStr, Field
 
-from app.models.enums import AccountStatus
+from app.models.enums import AccountStatus, PlatformRole
 from app.schemas.common import ApiModel, InputModel, day, money
 
 
@@ -74,10 +74,16 @@ class PlatformUserOut(ApiModel):
     email: str
     initials: str
     title: str
+    #: `super_admin` or `support`. The console hides what this role cannot
+    #: reach; the API refuses it either way, so this is a courtesy, not a gate.
+    role: str = PlatformRole.SUPER_ADMIN.value
 
     @classmethod
     def of(cls, u) -> PlatformUserOut:
-        return cls(id=str(u.id), name=u.name, email=u.email, initials=u.initials, title=u.title)
+        return cls(
+            id=str(u.id), name=u.name, email=u.email, initials=u.initials,
+            title=u.title, role=u.role,
+        )
 
 
 class SessionOut(ApiModel):
@@ -128,6 +134,16 @@ class UserCreateIn(InputModel):
     role: str = Field(max_length=40)
     speciality: str | None = Field(default=None, max_length=120)
     password: str | None = Field(default=None, min_length=12, max_length=200)
+
+
+class UserUpdateIn(InputModel):
+    """What a practice admin may change about a colleague. Everything is
+    optional; what is sent is what changes. A speciality sent as "" clears it."""
+
+    name: str | None = Field(default=None, min_length=2, max_length=160)
+    email: EmailStr | None = None
+    role: str | None = Field(default=None, max_length=40)
+    speciality: str | None = Field(default=None, max_length=120)
 
 
 class PasswordSetIn(InputModel):

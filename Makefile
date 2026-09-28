@@ -1,4 +1,4 @@
-.PHONY: help install db up down migrate seed run test lint fmt reset check
+.PHONY: help install db redis up down migrate seed run worker beat flower test lint fmt reset check
 
 VENV := .venv
 PY   := $(VENV)/bin/python
@@ -15,6 +15,9 @@ install:  ## create the virtualenv and install everything
 db:  ## start PostgreSQL (docker) and create both roles
 	docker compose up -d db
 
+redis:  ## start Redis (docker) — the Celery broker and the outbox nudge
+	docker compose up -d redis
+
 migrate:  ## apply migrations
 	$(VENV)/bin/alembic upgrade head
 
@@ -23,6 +26,25 @@ seed:  ## load the demo clinics
 
 run:  ## serve on http://localhost:8000
 	$(VENV)/bin/uvicorn app.main:app --reload --port 8000
+
+# The three background processes, for when the API is run on the host rather
+# than in a container. `docker compose up` starts all three itself.
+worker: redis  ## run a Celery worker (-E feeds the monitor)
+	$(VENV)/bin/celery -A app.worker.celery_app worker -Q pms --loglevel=INFO -E
+
+beat: redis  ## run the scheduler — exactly one of these, ever
+	$(VENV)/bin/celery -A app.worker.celery_app beat --loglevel=INFO
+
+# Bound to the loopback, like the database and the broker: the console reaches
+# it through the API, and nothing else has any business reaching it at all. Set
+# FLOWER_URL=http://127.0.0.1:5555 and a matching FLOWER_BASIC_AUTH in .env, or
+# the API will keep looking for the container by name. Needs `.[monitor]`.
+flower: redis  ## run the job monitor on 127.0.0.1:5555
+	$(VENV)/bin/celery -A app.worker.celery_app flower \
+	  --address=127.0.0.1 --port=5555 \
+	  --url_prefix=api/v1/platform/jobs/flower \
+	  --basic_auth=$${FLOWER_BASIC_AUTH:-pms-console:dev-only-flower-password} \
+	  --max_tasks=10000
 
 test:  ## run the suite against the test database
 	$(PY) -m pytest -q

@@ -127,6 +127,33 @@ async def test_configuration_is_per_clinic_and_validated(northgate, clearview):
     await northgate.patch("/v1/tenant/config", json={"slot_minutes": ours["slot_minutes"], "tax_pct": ours["tax_pct"]})
 
 
+async def test_appointment_types_are_the_clinics_own_and_validated(northgate, clearview):
+    ours = (await northgate.get("/v1/tenant/config")).json()
+    assert [t["id"] for t in ours["appointment_types"]]  # every clinic starts with some
+
+    types = [
+        {"id": "consultation", "name": "Consultation", "minutes": 30},
+        {"id": "root-canal", "name": "Root canal", "minutes": 90},
+    ]
+    saved = await northgate.patch("/v1/tenant/config", json={"appointment_types": types})
+    assert saved.status_code == 200
+    assert saved.json()["appointment_types"] == types
+
+    # another clinic's list is untouched
+    theirs = (await clearview.get("/v1/tenant/config")).json()
+    assert theirs["appointment_types"] != types
+
+    for bad in (
+        [{"id": "x", "name": "Odd length", "minutes": 17}],            # not a 5-minute step
+        [{"id": "x", "name": "Too long", "minutes": 300}],
+        [{"id": "a", "name": "Review", "minutes": 15}, {"id": "b", "name": "review", "minutes": 20}],
+        [{"id": "x", "name": "   ", "minutes": 15}],
+    ):
+        assert (await northgate.patch("/v1/tenant/config", json={"appointment_types": bad})).status_code == 422
+
+    await northgate.patch("/v1/tenant/config", json={"appointment_types": ours["appointment_types"]})
+
+
 # --- §3.1 the console --------------------------------------------------------
 
 
@@ -534,3 +561,77 @@ async def test_the_openapi_document_is_valid(client):
     document = response.json()
     assert document["info"]["title"] == "Astrale PMS API"
     assert "/v1/patients" in document["paths"]
+
+
+
+def test_every_request_transaction_commits_before_the_response():
+    """`db_session` must be function-scoped everywhere it is used.
+
+    Request-scoped, its commit runs after the response is sent: a client that
+    creates something and immediately re-reads the list can miss the new row,
+    which is exactly what the module page's "Request activation" did.
+
+    Read from source, like the RLS check above: FastAPI keeps included routers
+    in private structures, and walking those would break on an upgrade.
+    """
+    import re
+    from pathlib import Path
+
+    app_dir = Path(__file__).resolve().parents[1] / "app"
+    found = [
+        f"{path.relative_to(app_dir)}:{source[:m.start()].count(chr(10)) + 1}"
+        for path in app_dir.rglob("*.py")
+        for source in [path.read_text(encoding="utf-8")]
+        for m in re.finditer(r"Depends\(\s*db_session\s*(\)|,(?![^)]*scope=\"function\")[^)]*\))", source)
+    ]
+    assert not found, f"db_session without scope='function' at: {found}"
+
+
+async def test_switching_a_module_back_on_restarts_its_date(console, rowan):
+    """The console counts billing from `activated_at`, so a module switched off
+    and on again must start from the day it came back — not look billed for
+    the whole time it was off. Switching on one that is already on changes
+    nothing."""
+    import datetime as _dt
+    import uuid as _uuid
+
+    from sqlalchemy import select
+
+    from app.db.session import tenant_session
+    from app.models.tenancy import TenantFeature
+
+    tenant_id = rowan.tenant_id
+    url = f"/v1/platform/tenants/{tenant_id}/features/inventory"
+    today = (await rowan.get("/v1/tenant")).json()["today"]
+    before = next(
+        (
+            f["status"]
+            for f in (await console.get(f"/v1/platform/tenants/{tenant_id}/features")).json()
+            if f["feature_key"] == "inventory"
+        ),
+        "inactive",
+    )
+
+    assert (await console.put(url, json={"status": "active"})).status_code == 200
+    long_ago = _dt.date(2024, 9, 18)
+    async with tenant_session(_uuid.UUID(tenant_id)) as session:
+        row = (
+            await session.execute(
+                select(TenantFeature).where(
+                    TenantFeature.tenant_id == _uuid.UUID(tenant_id),
+                    TenantFeature.feature_key == "inventory",
+                )
+            )
+        ).scalar_one()
+        row.activated_at = long_ago
+
+    again = await console.put(url, json={"status": "active"})
+    assert again.json()["activated_at"] == long_ago.isoformat(), "already on: left alone"
+
+    assert (await console.put(url, json={"status": "inactive"})).status_code == 200
+    back = await console.put(url, json={"status": "active"})
+    assert back.status_code == 200, back.text
+    assert back.json()["activated_at"] == today
+
+    # Leave the clinic as the seed had it, for the tests that run after this one.
+    await console.put(url, json={"status": before})

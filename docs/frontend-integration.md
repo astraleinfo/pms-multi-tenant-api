@@ -107,6 +107,8 @@ tenant in the topbar becomes a link to the other clinic's subdomain, which it al
 | `listInvoices` / `getInvoice` / `createInvoice` | `GET /v1/billing/invoices` (paged; `status=`, `unpaid=`, `search=`, `counts`), `GET|POST /v1/billing/invoices/{id}` |
 | `addPayment` / `issueInvoice` / `voidInvoice` | `POST /v1/billing/invoices/{id}/payments`, `.../issue`, `.../void` |
 | `createTenant` / `setTenantStatus` | `POST /v1/platform/tenants`, `PATCH /v1/platform/tenants/{id}/status` |
+| `listJobs` / `getJob` (console) | `GET /v1/platform/jobs`, `GET /v1/platform/jobs/tasks/{id}` — super admin only |
+| `openFlowerSession` / `closeFlowerSession` | `POST` / `DELETE /v1/platform/jobs/flower-session` |
 
 ### Paged lists
 
@@ -124,6 +126,32 @@ Where a screen has tabs, the page carries `counts` keyed by status, taken *befor
 filter is applied, so "Pending 12" stays true while the Dispensed tab is the one on screen.
 Billing adds `unpaid`, which is a question about money rather than a status value.
 
+
+### Background jobs
+
+`GET /v1/platform/jobs` answers with the whole screen in one read: the tiles, the filter options,
+and a page of jobs. It takes `status`, `task`, `worker`, `since`, `until`, `search`, `limit` and
+`offset`, and the summary is counted *before* the filters — the same rule as `counts` on the
+clinical lists, so "Failed 3" stays true while the Active tab is on screen.
+
+Two things to get right:
+
+* **`403`, not `401`.** Every clinic session is refused here on who is asking, not on whether the
+  session is good, and so is a platform account whose `role` is `support`. A client that treats
+  403 as "the session expired" will sign the person out of a perfectly good console. The role is
+  on `platform_user.role`, so the nav can hide the section — but hiding it is presentation, and
+  the API refuses the route either way.
+* **Times are UTC, ISO-8601.** Not `YYYY-MM-DD HH:mm` in a clinic's timezone like everything else:
+  a job belongs to no clinic, so it has no local clock, and seconds matter when half of what is on
+  screen is a duration. Convert in the browser. The `since` / `until` filters read a stamp without
+  a zone as UTC, so a `datetime-local` value has to go through `new Date(value).toISOString()`
+  before it is sent — otherwise the window slides by the reader's offset from Greenwich.
+
+Flower's own interface is proxied at `/v1/platform/jobs/flower/…` and is behind the same check.
+A frame or a tab pointed at it cannot send an `Authorization` header, so `POST .../flower-session`
+sets a short-lived HttpOnly cookie first and returns the path to open; that cookie opens the proxy
+and nothing else. `FLOWER_URL_PREFIX` on the API must be the path the browser uses — behind the
+`/api` rewrite that is `api/v1/platform/jobs/flower` — because Flower builds its own links from it.
 
 ## 4. Realtime — the queue socket
 

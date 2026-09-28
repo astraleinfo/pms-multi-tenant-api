@@ -23,15 +23,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import HTTPConnection
 
 from app.core.config import settings
-from app.core.errors import AuthError, FeatureNotEnabled, NotFound, PermissionDenied
+from app.core.errors import (
+    AccountOnHold,
+    AuthError,
+    FeatureNotEnabled,
+    NotFound,
+    PermissionDenied,
+)
 from app.core.permissions import Permission, role_has
 from app.core.security import TokenError, decode_access_token
 from app.core.tenancy import HostContext, resolve_host
 from app.db.session import session_factory, set_tenant
-from app.models.enums import AccountStatus, FieldEntity, TenantStatus
+from app.models.enums import AccountStatus, FieldEntity, PlatformRole, TenantStatus
 from app.models.identity import PlatformUser, User
 from app.models.tenancy import Tenant, TenantConfig
-from app.schemas.common import zone
+from app.schemas.common import local_iso, zone
 from app.services import tenants as tenant_service
 from app.services.auth import Principal
 
@@ -43,6 +49,13 @@ async def db_session() -> AsyncIterator[AsyncSession]:
 
     `app.tenant_id` is transaction-local, so it is impossible for one request's
     tenant to leak into the next request that borrows the same connection.
+
+    Always depend on it as `Depends(db_session, scope="function")`. The default
+    ("request") scope exits *after* the response is sent, so the commit would
+    land after the client already has its answer: a refetch fired straight
+    after a create could read the table before the new row exists, and a
+    failed commit would reach the client as a success. "function" commits
+    before the response goes out.
     """
     async with session_factory() as session:
         async with session.begin():
@@ -138,7 +151,7 @@ def _token_from(request: Request, credentials: HTTPAuthorizationCredentials | No
 
 async def current_tenant(
     request: Request,
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_session, scope="function"),
     host: HostContext = Depends(host_context),
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
 ) -> TenantContext:
@@ -150,6 +163,10 @@ async def current_tenant(
     except TokenError as exc:
         raise AuthError("Your session has expired. Sign in again.") from exc
 
+    if claims.scope:
+        # A scoped token is minted for one door (see `create_access_token`).
+        # It is never a session.
+        raise AuthError("That token is not a clinic session.")
     if claims.tenant_id is None:
         raise AuthError("That token is not for a clinic.")
     if claims.subject_kind == "platform" and not claims.impersonated:
@@ -213,6 +230,16 @@ async def current_tenant(
             tenant=tenant,
             user=user,
         )
+    if (
+        tenant.billing_hold_since is not None
+        and not claims.impersonated
+        and not _open_while_on_hold(request)
+    ):
+        raise AccountOnHold(
+            "This clinic is on hold until its subscription bill is paid.",
+            details={"hold_since": local_iso(tenant.billing_hold_since, tenant.timezone)},
+        )
+
     config = await tenant_service.get_config(session, tenant.id)
     active = await tenant_service.active_feature_keys(session, tenant.id)
 
@@ -229,9 +256,29 @@ async def current_tenant(
     )
 
 
+#: What a clinic on hold may still reach: signing in and out, who it is, the
+#: clinic record, and the bills — enough to see what is owed and nothing else.
+_OPEN_ON_HOLD_PREFIXES = ("/auth/", "/tenant/subscription")
+_OPEN_ON_HOLD_EXACT = {"/tenant"}
+
+
+def _open_while_on_hold(request: Request) -> bool:
+    """Decided on the matched route's template, not the raw URL — a path
+    parameter cannot be used to smuggle a request under an open prefix.
+
+    Depending on the FastAPI version the template carries the router's `/v1`
+    prefix or not, so it is compared without it.
+    """
+    route = request.scope.get("route")
+    path = getattr(route, "path", None) or request.url.path
+    if path.startswith("/v1/"):
+        path = path[3:]
+    return path in _OPEN_ON_HOLD_EXACT or path.startswith(_OPEN_ON_HOLD_PREFIXES)
+
+
 async def current_platform_user(
     request: Request,
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_session, scope="function"),
     host: HostContext = Depends(host_context),
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
 ) -> PlatformUser:
@@ -243,6 +290,8 @@ async def current_platform_user(
     except TokenError as exc:
         raise AuthError("Your session has expired. Sign in again.") from exc
 
+    if claims.scope:
+        raise AuthError("That token is not a console session.")
     if claims.subject_kind != "platform":
         raise AuthError("That token is not for the platform console.")
     if claims.impersonated:
@@ -258,6 +307,74 @@ async def current_platform_user(
 
     request.state.actor_id = str(staff.id)
     return staff
+
+
+async def resolve_super_admin(
+    request: Request,
+    session: AsyncSession,
+    host: HostContext,
+    token: str,
+    *,
+    allowed_scopes: tuple[str | None, ...] = (None,),
+    check_host: bool = True,
+) -> PlatformUser:
+    """Platform staff holding `super_admin`, from a token in hand.
+
+    This is the one guard in the API that answers 403 where the console's own
+    guard answers 401, and the difference is deliberate. `current_platform_user`
+    is asked "is this the console's door?", and a clinic token at it is simply
+    the wrong door. Here the question is "may *this person* see the platform's
+    own machinery" — the workers, the broker, the arguments every job was
+    called with — and a practice admin, a doctor and a receptionist all hold
+    perfectly valid tokens and are all refused on who they are. That is a 403,
+    and saying so is what lets the front end tell "sign in again" apart from
+    "not for you".
+
+    `allowed_scopes` is what the Flower proxy widens: it also takes the scoped
+    cookie minted for it, which nothing else in the API accepts.
+
+    `check_host` is off for exactly one caller, and only because the check has
+    already happened: the scoped cookie is minted by a request that passed it,
+    and the cookie is set host-only, so the browser returns it to the console's
+    address and to no other. The proxy cannot re-check the address itself —
+    a page's stylesheet, scripts and polls are navigations, and a development
+    proxy rewrites `Host` on the way through, so the one thing the request
+    definitely does not carry is the address the browser used.
+    """
+    try:
+        claims = decode_access_token(token)
+    except TokenError as exc:
+        raise AuthError("Your session has expired. Sign in again.") from exc
+
+    if claims.scope not in allowed_scopes:
+        raise PermissionDenied("That token does not open this.")
+    if claims.subject_kind != "platform" or claims.impersonated:
+        # Every clinic account lands here, whatever its role, and so does a
+        # support session working inside one.
+        raise PermissionDenied("That belongs to the platform console, not to a clinic.")
+    if check_host and not host.is_admin:
+        raise PermissionDenied("The console is served on the admin address only.")
+
+    staff = await session.get(PlatformUser, claims.subject_id)
+    if staff is None or staff.status != AccountStatus.ACTIVE:
+        raise AuthError("Sign in to continue.")
+    if staff.role != PlatformRole.SUPER_ADMIN.value:
+        raise PermissionDenied("Your role does not allow that.")
+
+    request.state.actor_id = str(staff.id)
+    return staff
+
+
+async def current_super_admin(
+    request: Request,
+    session: AsyncSession = Depends(db_session, scope="function"),
+    host: HostContext = Depends(host_context),
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+) -> PlatformUser:
+    """The guard on every jobs route. See `resolve_super_admin`."""
+    return await resolve_super_admin(
+        request, session, host, _token_from(request, credentials)
+    )
 
 
 def require_permission(permission: Permission):
@@ -304,7 +421,7 @@ def parse_uuid(value: str, *, what: str = "record") -> uuid.UUID:
 
 
 async def host_tenant(
-    session: AsyncSession = Depends(db_session), host: HostContext = Depends(host_context)
+    session: AsyncSession = Depends(db_session, scope="function"), host: HostContext = Depends(host_context)
 ) -> Tenant:
     """The clinic this host belongs to — used by the sign-in page, before
     anyone is authenticated."""

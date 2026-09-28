@@ -47,7 +47,7 @@ HEARTBEAT_SECONDS = 25
 async def queue_socket(
     websocket: WebSocket,
     access_token: str = Query(description="A current access token. Browsers cannot set headers on a socket."),
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_session, scope="function"),
     host: HostContext = Depends(host_context),
 ) -> None:
     try:

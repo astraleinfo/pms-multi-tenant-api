@@ -41,13 +41,20 @@ async def nudge(message_id: str) -> None:
 
 async def claim_due(session: AsyncSession, limit: int = 20) -> list[Message]:
     """Take up to `limit` messages that are due, locking them against other
-    workers and flipping them to `sending` in the same transaction."""
+    workers and flipping them to `sending` in the same transaction.
+
+    A message with a `job_id` belongs to its Celery job — the reminders — and
+    is not this loop's to send."""
     now = datetime.now(timezone.utc)
     rows = (
         (
             await session.execute(
                 select(Message)
-                .where(Message.status == MessageStatus.QUEUED, Message.send_after <= now)
+                .where(
+                    Message.status == MessageStatus.QUEUED,
+                    Message.send_after <= now,
+                    Message.job_id.is_(None),
+                )
                 .order_by(Message.send_after)
                 .limit(limit)
                 .with_for_update(skip_locked=True)

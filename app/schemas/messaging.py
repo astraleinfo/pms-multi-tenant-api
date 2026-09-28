@@ -70,6 +70,10 @@ class MessageOut(ApiModel):
     attempts: int
     last_error: str
     provider: MessageProvider | None
+    #: when it is due to go out — for a reminder, `reminder_lead_hours` before the slot
+    send_after: str | None
+    #: the Celery job that will send it, while one does
+    job_id: str | None
     sent_at: str | None
     created_at: str
 
@@ -88,6 +92,8 @@ class MessageOut(ApiModel):
             attempts=m.attempts,
             last_error=m.last_error,
             provider=m.provider,
+            send_after=stamp(m.send_after, tz) if m.send_after else None,
+            job_id=m.job_id,
             sent_at=stamp(m.sent_at, tz) if m.sent_at else None,
             created_at=stamp(m.created_at, tz) or "",
         )

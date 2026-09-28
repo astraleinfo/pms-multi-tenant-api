@@ -15,29 +15,50 @@ import string
 
 from app.models.enums import MessageTemplate
 
+# How these are written:
+#
+#   * The clinic's name leads, the way a sender ID would. Many phones show only
+#     the first line in a notification, and "Northgate Dental: ..." is what
+#     tells the patient this is not spam before they open it.
+#   * The facts come first — who, what day, what time — and the ask comes last,
+#     with a way to act on it: the clinic's phone when it has one.
+#   * Plain GSM-7 characters only. One curly quote, dash or emoji turns the
+#     whole message into UCS-2, which cuts a segment from 160 characters to 70
+#     and roughly doubles what every clinic pays per message.
+#
+# `{contact}` is filled by `render` — "call +44 161 496 0110 or reply here", or
+# "reply to this text" for a clinic with no number set.
 BODIES: dict[MessageTemplate, str] = {
     MessageTemplate.BOOKING_CONFIRMATION: (
-        "Hi {patient_name}, your appointment at {clinic_name} with {doctor_name} "
-        "is confirmed for {date} at {time}. Reply to this message to change it."
+        "{clinic_name}: Hi {patient_name}, you're booked with {doctor_name} on "
+        "{weekday} {date} at {time}. To change it, {contact}."
     ),
     MessageTemplate.APPOINTMENT_RESCHEDULED: (
-        "Hi {patient_name}, your appointment at {clinic_name} has been moved from "
-        "{was_date} at {was_time} to {date} at {time} with {doctor_name}. "
-        "Reply to this message if that does not suit you."
+        "{clinic_name}: Hi {patient_name}, your appointment has moved from {was_date} "
+        "{was_time} to {weekday} {date} at {time} with {doctor_name}. "
+        "If that doesn't suit you, {contact}."
     ),
     MessageTemplate.APPOINTMENT_CANCELLED: (
-        "Hi {patient_name}, your appointment at {clinic_name} on {date} at {time} "
-        "has been cancelled. Reply to this message to rebook."
+        "{clinic_name}: Hi {patient_name}, your appointment on {weekday} {date} at {time} "
+        "has been cancelled. To book a new time, {contact}."
     ),
     MessageTemplate.APPOINTMENT_REMINDER: (
-        "Hi {patient_name}, a reminder of your appointment at {clinic_name} with "
-        "{doctor_name} on {date} at {time}. Please arrive 10 minutes early."
+        "{clinic_name}: Reminder, {patient_name} - you're seeing {doctor_name} "
+        "{weekday} {date} at {time}. Please arrive 10 min early. "
+        "Can't make it? Please {contact}."
     ),
     MessageTemplate.FOLLOW_UP: (
-        "Hi {patient_name}, thank you for visiting {clinic_name}. "
-        "If you have any questions about your visit, reply to this message."
+        "{clinic_name}: Hi {patient_name}, thank you for visiting. Any questions about "
+        "your visit or treatment? Please {contact}."
     ),
 }
+
+#: Characters a GSM-7 message may carry without switching the whole message to
+#: UCS-2. The basic set plus the extension table's common members.
+GSM7 = set(
+    "@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ !\"#¤%&'()*+,-./0123456789:;<=>?"
+    "¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà^{}[~]|€"
+)
 
 MAX_BODY = 1200
 
@@ -47,9 +68,20 @@ class _Blank(dict):
         return ""
 
 
+def contact_phrase(phone: str | None) -> str:
+    """How the patient answers: by phone when the clinic has one, by reply always."""
+    phone = (phone or "").strip()
+    return f"call {phone} or reply here" if phone else "reply to this text"
+
+
 def render(template: MessageTemplate, variables: dict[str, str]) -> str:
     """The message body for this template, filled in and length-capped."""
     if template == MessageTemplate.CUSTOM:
         raise ValueError("A custom message carries its own body.")
-    body = string.Formatter().vformat(BODIES[template], (), _Blank(variables))
+    values = _Blank(variables)
+    values.setdefault("contact", contact_phrase(variables.get("clinic_phone")))
+    # A doctor-less booking still reads as a sentence.
+    if not values.get("doctor_name"):
+        values["doctor_name"] = "the clinic"
+    body = string.Formatter().vformat(BODIES[template], (), values)
     return " ".join(body.split())[:MAX_BODY]

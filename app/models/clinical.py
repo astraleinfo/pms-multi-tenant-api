@@ -283,17 +283,21 @@ class LabAttachment(Base, TenantScoped, TimestampMixin):
     """A file that belongs to a lab order — a scan, a machine printout, a
     signed report.
 
-    The bytes live in the database rather than on a disk the API happens to be
-    sitting on: a patient's report is tenant-owned data, and keeping it in the
-    same table space means row-level security covers it exactly as it covers
-    the order it hangs off. `data` is deferred, so listing an order's
-    attachments never drags the files across the wire.
+    The bytes live in one of two places (`app/services/storage.py`): in `data`,
+    where row-level security covers them exactly as it covers the order they
+    hang off, or in S3 under `storage_key`, reached only through this row. One
+    of the two is always set — the check constraint says so. `data` is
+    deferred, so listing an order's attachments never drags files across the
+    wire.
     """
 
     __tablename__ = "lab_attachments"
     __extra_table_args__ = (
         Index("ix_lab_attachments_tenant_order", "tenant_id", "lab_order_id"),
         CheckConstraint("size_bytes > 0", name="ck_lab_attachment_size"),
+        CheckConstraint(
+            "data IS NOT NULL OR storage_key IS NOT NULL", name="ck_lab_attachment_stored"
+        ),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -310,5 +314,7 @@ class LabAttachment(Base, TenantScoped, TimestampMixin):
     uploaded_by: Mapped[uuid.UUID | None] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
-    data: Mapped[bytes] = deferred(mapped_column(LargeBinary, nullable=False))
+    data: Mapped[bytes | None] = deferred(mapped_column(LargeBinary, nullable=True))
+    #: the object's key in the bucket when the file is held in S3; NULL when in `data`
+    storage_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
 

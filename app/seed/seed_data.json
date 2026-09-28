@@ -2185,7 +2185,8 @@
    "email": "ines@astrale.health",
    "password": "ines-2026",
    "initials": "IO",
-   "title": "Platform operations"
+   "title": "Platform operations",
+  "role": "super_admin"
   },
   {
    "id": "s2",
@@ -2193,7 +2194,8 @@
    "email": "rafael@astrale.health",
    "password": "rafael-2026",
    "initials": "RO",
-   "title": "Customer success"
+   "title": "Customer success",
+  "role": "support"
   }
  ],
  "PRESCRIPTIONS": [
@@ -3490,6 +3492,20 @@
    "order": 80,
    "span": 1,
    "help": "Comma separated. Shown on every prescription.",
+   "group": "Clinical background"
+  },
+  {
+   "id": "fd-93",
+   "scope": "common",
+   "clinical_type": null,
+   "tenant_id": null,
+   "entity": "patient",
+   "field_key": "weight",
+   "label": "Weight (kg)",
+   "type": "number",
+   "required": false,
+   "order": 75,
+   "span": 1,
    "group": "Clinical background"
   },
   {

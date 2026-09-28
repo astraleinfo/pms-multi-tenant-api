@@ -29,7 +29,7 @@ from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TenantScoped, TimestampMixin, uuid_pk
-from app.models.enums import AccountStatus, AuthTokenPurpose, SubjectKind
+from app.models.enums import AccountStatus, AuthTokenPurpose, PlatformRole, SubjectKind
 
 
 class User(Base, TenantScoped, TimestampMixin):
@@ -94,6 +94,16 @@ class PlatformUser(Base, TimestampMixin):
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     initials: Mapped[str] = mapped_column(String(4), nullable=False, default="")
     title: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+
+    #: What this account may reach inside the console. A plain string, exactly
+    #: as `User.role` is, so adding a third kind of platform account is a row
+    #: change rather than a type change. Everything that existed before this
+    #: column did was a super admin, which is why that is the default.
+    role: Mapped[str] = mapped_column(
+        String(40), nullable=False,
+        default=PlatformRole.SUPER_ADMIN.value,
+        server_default=PlatformRole.SUPER_ADMIN.value,
+    )
     status: Mapped[AccountStatus] = mapped_column(
         Enum(AccountStatus, name="account_status", values_callable=lambda e: [m.value for m in e]),
         nullable=False,
