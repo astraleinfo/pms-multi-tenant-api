@@ -17,7 +17,8 @@ from decimal import Decimal
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import Conflict, NotFound
+from app.core.config import settings
+from app.core.errors import Conflict, NotFound, ValidationFailed
 from app.core.permissions import Role
 from app.core.tenancy import slug_problem
 from app.db.session import set_tenant
@@ -36,6 +37,7 @@ from app.models.tenancy import (
     TenantFeature,
 )
 from app.schemas.tenancy import TenantCreateIn, TenantPatchIn
+from app.services import referrals as referral_service
 from app.services.tenants import CORE_FEATURES
 
 PLATFORM_SETTINGS_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -186,6 +188,21 @@ async def create_tenant(
     if clinical_type is None:
         raise NotFound("No such clinical type.")
 
+    # Resolved before the clinic is created, so a bad code never leaves a
+    # half-made clinic behind — the console would have to clean up a
+    # subdomain claim it did not mean to make.
+    referrer: Tenant | None = None
+    if payload.referral_code:
+        referrer = await referral_service.resolve_code(session, payload.referral_code)
+        if referrer is None:
+            raise ValidationFailed(
+                "That is not a referral code this platform knows.",
+                details={"fields": [{
+                    "field": "referral_code",
+                    "message": "That is not a referral code this platform knows.",
+                }]},
+            )
+
     prefix = payload.slug[:2].upper()
     tenant = Tenant(
         name=payload.name,
@@ -204,6 +221,20 @@ async def create_tenant(
     await set_tenant(session, tenant.id)
 
     defaults = await get_platform_settings(session)
+
+    if referrer is not None:
+        # `referrals` carries no tenant_id and has no RLS policy, so writing
+        # it here — with the session bound to the *referred* clinic — is
+        # fine regardless: it belongs to the platform, not to either tenant.
+        await referral_service.create_referral(
+            session,
+            referrer_tenant_id=referrer.id,
+            referred_tenant_id=tenant.id,
+            code_used=referrer.referral_code,
+            credit_amount=Decimal(str(defaults.referral_credit_amount)),
+            currency=settings.rent_currency,
+        )
+
     session.add(
         TenantConfig(
             tenant_id=tenant.id,

@@ -393,6 +393,10 @@ class TenantCreateIn(InputModel):
     clinical_type: str = Field(max_length=40)
     admin_name: str = Field(min_length=2, max_length=160)
     admin_email: EmailStr
+    #: quoted by the clinic that referred this one — resolved against
+    #: `tenants.referral_code` by the service, not validated here (that needs
+    #: a database read)
+    referral_code: str | None = Field(default=None, max_length=20)
     #: No password. The console cannot choose one, and neither can this
     #: payload: the account is created without a hash and the person named
     #: here is emailed a link to set their own.
