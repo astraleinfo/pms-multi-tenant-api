@@ -40,6 +40,8 @@ class TenantOut(ApiModel):
     billing_hold_since: str | None = None
     #: never billed by the platform
     billing_exempt: bool = False
+    #: NULL until the clinic mints one from its own Settings
+    referral_code: str | None = None
 
     @classmethod
     def of(cls, t) -> TenantOut:
@@ -50,6 +52,7 @@ class TenantOut(ApiModel):
             billing_hold=t.billing_hold_since is not None,
             billing_hold_since=local_iso(t.billing_hold_since, t.timezone),
             billing_exempt=bool(t.billing_exempt),
+            referral_code=t.referral_code,
         )
 
 
@@ -216,6 +219,8 @@ class PlatformSettingsOut(ApiModel):
     rent_due_days: int
     rent_grace_days: int
     rent_reminder_days_before_due: int
+    #: what one completed referral earns its referrer
+    referral_credit_amount: float
 
     @classmethod
     def of(cls, row) -> PlatformSettingsOut:
@@ -237,6 +242,7 @@ class PlatformSettingsOut(ApiModel):
             rent_due_days=row.rent_due_days,
             rent_grace_days=row.rent_grace_days,
             rent_reminder_days_before_due=row.rent_reminder_days_before_due,
+            referral_credit_amount=money(row.referral_credit_amount),
         )
 
 
@@ -258,6 +264,7 @@ class PlatformSettingsPatch(InputModel):
     rent_due_days: int | None = Field(default=None, ge=1, le=60)
     rent_grace_days: int | None = Field(default=None, ge=0, le=60)
     rent_reminder_days_before_due: int | None = Field(default=None, ge=0, le=30)
+    referral_credit_amount: float | None = Field(default=None, ge=0, le=999_999.99)
 
 
 class LabTestAdminOut(ApiModel):

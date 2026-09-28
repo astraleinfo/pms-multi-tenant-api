@@ -25,6 +25,16 @@ class SubscriptionInvoiceStatus(StrEnum):
     VOID = "void"
 
 
+class ReferralStatus(StrEnum):
+    """A clinic's referral of another clinic. `pending` until the referred
+    clinic pays its first bill; `vested` once it has, which is when the
+    referrer's credit becomes spendable; `void` if a super admin cancels it."""
+
+    PENDING = "pending"
+    VESTED = "vested"
+    VOID = "void"
+
+
 class RentReminder(StrEnum):
     """How far along the reminder ladder a bill has got. Each rung is emailed
     once, in this order; `STAGE_ORDER` is what "further along" means."""

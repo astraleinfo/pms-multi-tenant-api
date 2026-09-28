@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     Boolean,
@@ -90,6 +91,9 @@ class Tenant(Base, TimestampMixin):
     billing_hold_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     #: Never billed — an internal or demo clinic, or one on a separate contract.
     billing_exempt: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    #: minted on demand from the clinic's own Settings — NULL until it asks.
+    #: Unique: it is how a signup resolves which clinic referred it.
+    referral_code: Mapped[str | None] = mapped_column(String(16), nullable=True, unique=True)
 
     __table_args__ = (
         CheckConstraint("slug ~ '^[a-z0-9][a-z0-9-]{1,39}$'", name="ck_tenants_slug_shape"),
@@ -222,6 +226,14 @@ class PlatformSettings(Base, TimestampMixin):
     rent_due_days: Mapped[int] = mapped_column(Integer, nullable=False, default=7)
     rent_grace_days: Mapped[int] = mapped_column(Integer, nullable=False, default=7)
     rent_reminder_days_before_due: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+
+    # referral programme — what one completed referral is worth. Read
+    # directly by `platform.create_tenant`, not folded into `Timings`: it is
+    # not an operational clock, and threading it through that dataclass would
+    # make every `Timings` consumer carry a field it never uses.
+    referral_credit_amount: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2), nullable=False, default=Decimal("100.00")
+    )
 
 
 class FieldDefinition(Base, TimestampMixin):
