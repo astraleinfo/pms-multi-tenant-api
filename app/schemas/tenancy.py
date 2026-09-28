@@ -517,6 +517,44 @@ def uuid_or_none(value: str | None) -> uuid.UUID | None:
         return None
 
 
+# --- referral credits ---------------------------------------------------------
+
+
+class ReferralOut(ApiModel):
+    id: str
+    referred_tenant_name: str
+    code_used: str
+    credit_amount: float
+    currency: str
+    status: str
+    created_at: str
+    vested_at: str | None
+
+    @classmethod
+    def of(cls, r, referred_name: str) -> ReferralOut:
+        return cls(
+            id=str(r.id), referred_tenant_name=referred_name, code_used=r.code_used,
+            credit_amount=money(r.credit_amount), currency=r.currency, status=r.status.value,
+            created_at=local_iso(r.created_at) or "", vested_at=local_iso(r.vested_at),
+        )
+
+
+class ReferralProgramOut(ApiModel):
+    """A clinic's own referral programme: its code (if it has minted one),
+    what a referral is worth right now, its spendable balance, and every
+    referral it has made."""
+
+    code: str | None
+    #: `XXXX-XXXX`, for display — `None` when `code` is `None`
+    formatted_code: str | None
+    #: what a *new* referral earns today — already-earned referrals keep
+    #: whatever was promised when they were created
+    credit_amount: float
+    currency: str
+    balance: float
+    referrals: list[ReferralOut]
+
+
 # --- subscription rent ---------------------------------------------------------
 
 
