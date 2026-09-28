@@ -274,18 +274,14 @@ async def mint_referral_code(
 ) -> ReferralProgramOut:
     """This clinic's own code — minted the first time this is called, and
     handed back unchanged on every call after that."""
-    from app.db.session import set_tenant
-
     was_unset = ctx.tenant.referral_code is None
     await referral_service.mint_code(ctx.session, ctx.tenant_id)
     if was_unset:
-        await audit.record_for_tenant(
-            ctx.session, ctx.tenant_id, action="referral.code_issued", actor_kind=ctx.actor_kind,
-            actor_id=ctx.actor_id, actor_label=ctx.principal.label, entity="tenant",
-            entity_id=str(ctx.tenant_id), meta={"code": ctx.tenant.referral_code},
+        await audit.record(
+            ctx.session, action="referral.code_issued", tenant_id=ctx.tenant_id,
+            actor_kind=ctx.actor_kind, actor_id=ctx.actor_id, actor_label=ctx.principal.label,
+            entity="tenant", entity_id=str(ctx.tenant_id), meta={"code": ctx.tenant.referral_code},
         )
-        # record_for_tenant unbinds the tenant, so re-bind it for subsequent queries
-        await set_tenant(ctx.session, ctx.tenant_id)
     return await _referral_program(ctx)
 
 
