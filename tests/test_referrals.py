@@ -453,3 +453,21 @@ async def test_voiding_a_bill_returns_its_redeemed_credit(console, northgate, no
             -line["amount"] for line in bill.lines if line["feature_key"] == "referral_credit"
         )
     )
+
+
+# --- the console's view --------------------------------------------------------------
+
+
+async def test_the_console_shows_who_referred_a_clinic(console, northgate):
+    referred_id = await _referred_clinic(console, northgate, slug="console-view-test")
+
+    body = (await console.get(f"/v1/platform/tenants/{referred_id}/referrals")).json()
+    assert body["referred_by"] is not None
+    assert body["referred_by"]["referrer_tenant_name"] == "Northgate Dental Studio"
+    assert body["referred_by"]["status"] == "pending"
+
+
+async def test_the_console_shows_no_referrer_for_an_unreferred_clinic(console, clearview):
+    clearview_id = clearview.tenant_id
+    body = (await console.get(f"/v1/platform/tenants/{clearview_id}/referrals")).json()
+    assert body["referred_by"] is None

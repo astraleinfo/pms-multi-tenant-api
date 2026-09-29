@@ -32,11 +32,18 @@ from app.core.errors import NotFound
 from app.core.permissions import Permission
 from app.db.session import session_factory, set_tenant
 from app.models.identity import PlatformUser
+from app.models.referrals import Referral
 from app.models.tenancy import Tenant
+from app.schemas.common import local_iso
+from app.services import referrals as referral_service
 from app.schemas.tenancy import (
     BillingRunOut,
+    ConsoleReferralsOut,
     PlatformBillingOut,
     PlatformBillingRowOut,
+    ReferralOut,
+    ReferralProgramOut,
+    ReferredByOut,
     SettleIn,
     SubscriptionInvoiceOut,
     SubscriptionOut,
@@ -181,6 +188,48 @@ async def tenant_bill_pdf(
     bill = await rent_service.get_bill(session, clinic.id, parse_uuid(bill_id, what="bill"))
     timings = await platform_service.get_timings(session)
     return _pdf(bill, clinic, timings)
+
+
+@console_router.get("/tenants/{tenant_id}/referrals", response_model=ConsoleReferralsOut)
+async def tenant_referrals(
+    tenant_id: str,
+    staff: PlatformUser = Depends(current_platform_user),
+    session: AsyncSession = Depends(db_session, scope="function"),
+) -> ConsoleReferralsOut:
+    clinic = await _clinic(session, tenant_id)
+
+    referred_by = None
+    incoming = (
+        await session.execute(select(Referral).where(Referral.referred_tenant_id == clinic.id))
+    ).scalar_one_or_none()
+    if incoming is not None:
+        referrer = await session.get(Tenant, incoming.referrer_tenant_id)
+        referred_by = ReferredByOut(
+            referrer_tenant_name=referrer.name if referrer else "—",
+            code_used=incoming.code_used, status=incoming.status.value,
+            created_at=local_iso(incoming.created_at) or "",
+        )
+
+    settings_row = await platform_service.get_platform_settings(session)
+    balance = await referral_service.balance_for(session, clinic.id)
+    rows = await referral_service.list_for(session, clinic.id)
+    referred = []
+    for row in rows:
+        target = await session.get(Tenant, row.referred_tenant_id)
+        referred.append(ReferralOut.of(row, target.name if target else "—"))
+
+    return ConsoleReferralsOut(
+        referred_by=referred_by,
+        program=ReferralProgramOut(
+            code=clinic.referral_code,
+            formatted_code=referral_service.format_code(clinic.referral_code)
+            if clinic.referral_code else None,
+            credit_amount=float(settings_row.referral_credit_amount),
+            currency=settings.rent_currency,
+            balance=float(balance),
+            referrals=referred,
+        ),
+    )
 
 
 @console_router.post(

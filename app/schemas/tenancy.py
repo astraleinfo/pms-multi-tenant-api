@@ -559,6 +559,21 @@ class ReferralProgramOut(ApiModel):
     referrals: list[ReferralOut]
 
 
+class ReferredByOut(ApiModel):
+    referrer_tenant_name: str
+    code_used: str
+    status: str
+    created_at: str
+
+
+class ConsoleReferralsOut(ApiModel):
+    """The console's view of one clinic's referral story: who referred it
+    (if anyone), and its own programme as a referrer."""
+
+    referred_by: ReferredByOut | None
+    program: ReferralProgramOut
+
+
 # --- subscription rent ---------------------------------------------------------
 
 
