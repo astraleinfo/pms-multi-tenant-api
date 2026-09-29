@@ -52,6 +52,7 @@ from app.models.rent import SubscriptionInvoice
 from app.models.tenancy import Feature, Tenant, TenantConfig, TenantFeature
 from app.schemas.common import zone
 from app.services import mailer
+from app.services import referrals as referral_service
 from app.services.platform import Timings, get_timings
 
 log = logging.getLogger("pms.rent")
@@ -490,6 +491,10 @@ async def settle(
     bill.payment_reference = reference.strip()
     bill.settled_by = by[:160]
     await session.flush()
+    # Only ever touches the platform-owned `referrals` table — never a row
+    # owned by whichever clinic referred this one, so this is safe to call
+    # while the session is bound to *this* clinic.
+    await referral_service.vest(session, tenant.id)
     change = await reconcile_hold(session, tenant, clinic_today(tenant), timings)
     receipts = await notices(session, tenant, bill, "paid", timings)
     return bill, change, receipts

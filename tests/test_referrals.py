@@ -11,9 +11,11 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import select
 
-from app.db.session import tenant_session
+from app.db.session import session_factory, tenant_session
+from app.models.rent import SubscriptionInvoice
 from app.models.referrals import Referral, ReferralRedemption
 from app.models.tenancy import Tenant
+from app.services import mailer
 from tests.conftest import sign_in
 
 
@@ -161,3 +163,97 @@ async def test_a_clinic_can_be_referred_only_once(console, northgate, clearview)
         ))
         with pytest.raises(IntegrityError):
             await session.flush()
+
+
+# --- vesting -------------------------------------------------------------------------
+
+
+@pytest.fixture
+def outbox(monkeypatch) -> list[mailer.Email]:
+    """Captures mail rather than sending it for real, the same pattern
+    `tests/test_rent.py` uses — not shared via conftest, so mirrored here."""
+    sent: list[mailer.Email] = []
+
+    async def capture(email: mailer.Email) -> None:
+        sent.append(email)
+
+    monkeypatch.setattr(mailer, "send", capture)
+    return sent
+
+
+async def _referred_clinic(console, referrer, *, slug: str) -> uuid.UUID:
+    code = (await referrer.post("/v1/tenant/referral-code")).json()["code"]
+    created = await console.post(
+        "/v1/platform/tenants",
+        json={
+            "name": f"Vesting Test {slug}", "slug": slug, "city": "Leeds",
+            "clinical_type": "dental", "admin_name": "Priya Nair",
+            "admin_email": f"priya@{slug}.example", "referral_code": code,
+        },
+    )
+    assert created.status_code == 201, created.text
+    return uuid.UUID(created.json()["tenant"]["id"])
+
+
+async def test_settling_the_referred_clinics_first_bill_vests_the_referral(
+    console, northgate, outbox
+):
+    from app.services import rent as rent_service
+
+    referred_id = await _referred_clinic(console, northgate, slug="vest-test-one")
+    # Give the referred clinic something billable, then raise and settle its bill.
+    await console.put(f"/v1/platform/tenants/{referred_id}/features/billing", json={"status": "active"})
+    today = date(2026, 10, 1)
+    await rent_service.run_cycle(session_factory, today=today, tenant_ids=[referred_id])
+    async with tenant_session(referred_id) as session:
+        bill = (
+            await session.execute(select(SubscriptionInvoice).where(
+                SubscriptionInvoice.tenant_id == referred_id
+            ))
+        ).scalar_one()
+
+    settled = await console.post(
+        f"/v1/platform/tenants/{referred_id}/subscription/invoices/{bill.id}/settle",
+        json={"reference": "TEST-REF-1"},
+    )
+    assert settled.status_code == 200, settled.text
+
+    program = (await northgate.get("/v1/tenant/referrals")).json()
+    [referral] = [r for r in program["referrals"] if r["referred_tenant_name"].startswith("Vesting Test")]
+    assert referral["status"] == "vested"
+    assert referral["vested_at"] is not None
+    assert program["balance"] == referral["credit_amount"]
+
+
+async def test_vesting_a_second_bill_does_not_double_credit(console, northgate):
+    from app.services import rent as rent_service
+
+    # Northgate's balance before this test's own referral: other tests in this
+    # module (run in the same session, without a per-test rollback) may have
+    # already vested referrals of their own for northgate, so the balance
+    # this test cares about is the *increase* its own referral contributes,
+    # not the absolute total.
+    before = (await northgate.get("/v1/tenant/referrals")).json()["balance"]
+
+    referred_id = await _referred_clinic(console, northgate, slug="vest-test-two")
+    await console.put(f"/v1/platform/tenants/{referred_id}/features/billing", json={"status": "active"})
+
+    for month in (date(2026, 10, 1), date(2026, 11, 1)):
+        await rent_service.run_cycle(session_factory, today=month, tenant_ids=[referred_id])
+        async with tenant_session(referred_id) as session:
+            bill = (
+                await session.execute(
+                    select(SubscriptionInvoice).where(
+                        SubscriptionInvoice.tenant_id == referred_id,
+                        SubscriptionInvoice.period_start == month,
+                    )
+                )
+            ).scalar_one()
+        await console.post(
+            f"/v1/platform/tenants/{referred_id}/subscription/invoices/{bill.id}/settle",
+            json={"reference": f"TEST-{month.isoformat()}"},
+        )
+
+    program = (await northgate.get("/v1/tenant/referrals")).json()
+    # exactly one credit_amount's worth, not two
+    assert program["balance"] - before == program["credit_amount"]
