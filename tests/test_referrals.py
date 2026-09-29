@@ -9,7 +9,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, select, update
 
 from app.db.session import session_factory, tenant_session
 from app.models.rent import SubscriptionInvoice
@@ -17,6 +17,29 @@ from app.models.referrals import Referral, ReferralRedemption
 from app.models.tenancy import Tenant
 from app.services import mailer
 from tests.conftest import sign_in
+
+
+@pytest.fixture(autouse=True)
+async def _clean_referrals():
+    """Every test here starts and ends with no referrals, no redemptions,
+    and no referral code minted anywhere — mirrors test_rent.py's own
+    clean_bills fixture, and for the same reason: these tests share one
+    seeded database across the whole file."""
+    await _wipe_referrals()
+    yield
+    await _wipe_referrals()
+
+
+async def _wipe_referrals() -> None:
+    async with tenant_session(None) as session:
+        ids = list((await session.execute(select(Tenant.id))).scalars())
+        await session.execute(update(Tenant).values(referral_code=None))
+        await session.execute(delete(Referral))
+    for tenant_id in ids:
+        async with tenant_session(tenant_id) as session:
+            await session.execute(
+                delete(ReferralRedemption).where(ReferralRedemption.tenant_id == tenant_id)
+            )
 
 
 async def test_the_referral_tables_exist_and_hold_a_row():
@@ -228,13 +251,6 @@ async def test_settling_the_referred_clinics_first_bill_vests_the_referral(
 async def test_vesting_a_second_bill_does_not_double_credit(console, northgate):
     from app.services import rent as rent_service
 
-    # Northgate's balance before this test's own referral: other tests in this
-    # module (run in the same session, without a per-test rollback) may have
-    # already vested referrals of their own for northgate, so the balance
-    # this test cares about is the *increase* its own referral contributes,
-    # not the absolute total.
-    before = (await northgate.get("/v1/tenant/referrals")).json()["balance"]
-
     referred_id = await _referred_clinic(console, northgate, slug="vest-test-two")
     await console.put(f"/v1/platform/tenants/{referred_id}/features/billing", json={"status": "active"})
 
@@ -256,4 +272,4 @@ async def test_vesting_a_second_bill_does_not_double_credit(console, northgate):
 
     program = (await northgate.get("/v1/tenant/referrals")).json()
     # exactly one credit_amount's worth, not two
-    assert program["balance"] - before == program["credit_amount"]
+    assert program["balance"] == program["credit_amount"]
