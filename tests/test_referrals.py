@@ -15,7 +15,7 @@ from app.db.session import session_factory, tenant_session
 from app.models.rent import SubscriptionInvoice
 from app.models.referrals import Referral, ReferralRedemption
 from app.models.tenancy import Tenant
-from app.services import mailer
+from app.services import mailer, rent
 from tests.conftest import sign_in
 
 
@@ -39,6 +39,31 @@ async def _wipe_referrals() -> None:
         async with tenant_session(tenant_id) as session:
             await session.execute(
                 delete(ReferralRedemption).where(ReferralRedemption.tenant_id == tenant_id)
+            )
+
+
+@pytest.fixture(autouse=True)
+async def _clean_bills():
+    """The redeeming tests below (see "--- redeeming") raise real bills for
+    northgate *itself*, not just for the clinics it refers — several of them
+    on the same date (2026-10-01). `_clean_referrals` above only wipes
+    referral/redemption state, not `subscription_invoices`, so without this a
+    bill raised for northgate in one test survives into the next one for the
+    same month: `raise_bill`'s existing-bill branch then returns that stale
+    bill unchanged, silently ignoring the new test's own balance. Mirrors
+    test_rent.py's own `clean_bills` fixture, for the same reason."""
+    await _wipe_bills()
+    yield
+    await _wipe_bills()
+
+
+async def _wipe_bills() -> None:
+    async with tenant_session(None) as session:
+        ids = list((await session.execute(select(Tenant.id))).scalars())
+    for tenant_id in ids:
+        async with tenant_session(tenant_id) as session:
+            await session.execute(
+                delete(SubscriptionInvoice).where(SubscriptionInvoice.tenant_id == tenant_id)
             )
 
 
@@ -273,3 +298,133 @@ async def test_vesting_a_second_bill_does_not_double_credit(console, northgate):
     program = (await northgate.get("/v1/tenant/referrals")).json()
     # exactly one credit_amount's worth, not two
     assert program["balance"] == program["credit_amount"]
+
+
+# --- redeeming -----------------------------------------------------------------------
+
+
+@pytest.fixture
+async def northgate_id(northgate) -> uuid.UUID:
+    """Mirrors test_rent.py's own fixture — not shared via conftest, so
+    mirrored here, the same pattern this file already uses for `outbox`."""
+    return uuid.UUID(northgate.tenant_id)
+
+
+async def _bills(tenant_id: uuid.UUID) -> list[SubscriptionInvoice]:
+    """Mirrors test_rent.py's own helper, for the same reason as `northgate_id` above."""
+    async with tenant_session(tenant_id) as session:
+        return list(
+            (
+                await session.execute(
+                    select(SubscriptionInvoice).where(SubscriptionInvoice.tenant_id == tenant_id)
+                )
+            ).scalars()
+        )
+
+
+async def _vested_referrer_with_balance(console, referrer, *, slug: str) -> None:
+    """Runs a referral all the way to vested, leaving `referrer` with a
+    spendable balance. Reuses `_referred_clinic` from the vesting tests."""
+    from app.services import rent as rent_service
+
+    referred_id = await _referred_clinic(console, referrer, slug=slug)
+    await console.put(f"/v1/platform/tenants/{referred_id}/features/billing", json={"status": "active"})
+    today = date(2026, 10, 1)
+    await rent_service.run_cycle(session_factory, today=today, tenant_ids=[referred_id])
+    async with tenant_session(referred_id) as session:
+        bill = (
+            await session.execute(select(SubscriptionInvoice).where(
+                SubscriptionInvoice.tenant_id == referred_id
+            ))
+        ).scalar_one()
+    settled = await console.post(
+        f"/v1/platform/tenants/{referred_id}/subscription/invoices/{bill.id}/settle",
+        json={"reference": "TEST-VEST"},
+    )
+    assert settled.status_code == 200, settled.text
+
+
+async def test_a_vested_credit_comes_off_the_referrers_next_bill(console, northgate, northgate_id):
+    await console.patch("/v1/platform/settings", json={"referral_credit_amount": 50})
+    await _vested_referrer_with_balance(console, northgate, slug="redeem-test-small")
+
+    await console.put(f"/v1/platform/tenants/{northgate_id}/features/billing", json={"status": "active"})
+    today = date(2026, 10, 1)
+    await rent.run_cycle(session_factory, today=today, tenant_ids=[northgate_id])
+
+    [bill] = await _bills(northgate_id)
+    credit_line = next(line for line in bill.lines if line["feature_key"] == "referral_credit")
+    assert credit_line["amount"] == -50.0
+
+    program = (await northgate.get("/v1/tenant/referrals")).json()
+    assert program["balance"] == 0.0
+    await console.patch("/v1/platform/settings", json={"referral_credit_amount": 100})
+
+
+async def test_a_credit_larger_than_the_bill_clamps_at_zero_and_carries_forward(
+    console, northgate, northgate_id
+):
+    await console.patch("/v1/platform/settings", json={"referral_credit_amount": 999999})
+    await _vested_referrer_with_balance(console, northgate, slug="redeem-test-large")
+
+    await console.put(f"/v1/platform/tenants/{northgate_id}/features/billing", json={"status": "active"})
+    today = date(2026, 10, 1)
+    await rent.run_cycle(session_factory, today=today, tenant_ids=[northgate_id])
+
+    [bill] = await _bills(northgate_id)
+    assert float(bill.amount) == 0.0
+    credit_line = next(line for line in bill.lines if line["feature_key"] == "referral_credit")
+    gross = sum(line["amount"] for line in bill.lines if line["feature_key"] != "referral_credit")
+    assert credit_line["amount"] == pytest.approx(-gross)
+
+    program = (await northgate.get("/v1/tenant/referrals")).json()
+    assert program["balance"] > 0  # the remainder carried forward
+    await console.patch("/v1/platform/settings", json={"referral_credit_amount": 100})
+
+
+async def test_running_the_cycle_twice_does_not_redeem_the_credit_twice(
+    console, northgate, northgate_id
+):
+    await _vested_referrer_with_balance(console, northgate, slug="redeem-test-idempotent")
+    await console.put(f"/v1/platform/tenants/{northgate_id}/features/billing", json={"status": "active"})
+    today = date(2026, 10, 1)
+
+    await rent.run_cycle(session_factory, today=today, tenant_ids=[northgate_id])
+    program_after_first = (await northgate.get("/v1/tenant/referrals")).json()
+
+    await rent.run_cycle(session_factory, today=today, tenant_ids=[northgate_id])
+    program_after_second = (await northgate.get("/v1/tenant/referrals")).json()
+
+    assert program_after_first["balance"] == program_after_second["balance"]
+    assert len(await _bills(northgate_id)) == 1
+
+
+async def test_the_next_bill_preview_agrees_with_the_bill_that_gets_raised(
+    console, northgate, northgate_id
+):
+    await _vested_referrer_with_balance(console, northgate, slug="redeem-test-preview")
+    await console.put(f"/v1/platform/tenants/{northgate_id}/features/billing", json={"status": "active"})
+
+    preview = (await northgate.get("/v1/tenant/subscription")).json()["plan"]
+    await rent.run_cycle(session_factory, today=date(2026, 10, 1), tenant_ids=[northgate_id])
+    [bill] = await _bills(northgate_id)
+
+    assert preview["amount_due"] == pytest.approx(float(bill.amount))
+
+
+async def test_one_clinics_redemption_never_touches_another_clinics_balance(
+    console, northgate, clearview, northgate_id
+):
+    """`ReferralRedemption` is RLS-protected; `balance_for` also filters by
+    tenant explicitly. This exercises both at once: clearview must read a
+    zero balance whether or not it is asked before or after northgate earns
+    and spends a credit."""
+    before = (await clearview.get("/v1/tenant/referrals")).json()["balance"]
+    assert before == 0
+
+    await _vested_referrer_with_balance(console, northgate, slug="isolation-test")
+    await console.put(f"/v1/platform/tenants/{northgate_id}/features/billing", json={"status": "active"})
+    await rent.run_cycle(session_factory, today=date(2026, 10, 1), tenant_ids=[northgate_id])
+
+    after = (await clearview.get("/v1/tenant/referrals")).json()["balance"]
+    assert after == 0

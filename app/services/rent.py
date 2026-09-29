@@ -159,8 +159,15 @@ async def plan_for(session: AsyncSession, tenant: Tenant) -> dict:
         }
         for f, tf in rows
     ]
-    total = sum((Decimal(str(amount)) for amount in billed.values()), Decimal("0"))
-    return {"modules": modules, "monthly_total": float(total.quantize(CENTS))}
+    total = sum((Decimal(str(amount)) for amount in billed.values()), Decimal("0")).quantize(CENTS)
+    balance = await referral_service.balance_for(session, tenant.id)
+    amount_due, _ = referral_service.apply_credit(total, balance)
+    return {
+        "modules": modules,
+        "monthly_total": float(total),
+        "credit_balance": float(balance),
+        "amount_due": float(amount_due),
+    }
 
 
 async def raise_bill(
@@ -183,7 +190,20 @@ async def raise_bill(
     lines = await billable_lines(session, tenant.id)
     if not lines:
         return None
-    total = sum((Decimal(str(line["amount"])) for line in lines), Decimal("0")).quantize(CENTS)
+    subtotal = sum((Decimal(str(line["amount"])) for line in lines), Decimal("0")).quantize(CENTS)
+
+    # Redeemed here, where the session is bound to the referrer during its
+    # own cycle — the one place a write owned by the referrer is the natural
+    # thing to do. `balance_for` and `apply_credit` never mutate anything;
+    # the redemption row (below) is what actually spends it.
+    balance = await referral_service.balance_for(session, tenant.id)
+    total, redeemed = referral_service.apply_credit(subtotal, balance)
+    if redeemed > 0:
+        lines = [
+            *lines,
+            {"feature_key": "referral_credit", "name": "Referral credit", "amount": -float(redeemed)},
+        ]
+
     bill = SubscriptionInvoice(
         tenant_id=tenant.id,
         number=f"AST-{period_start:%Y%m}-{tenant.slug.upper()}",
@@ -199,6 +219,8 @@ async def raise_bill(
     )
     session.add(bill)
     await session.flush()
+    if redeemed > 0:
+        await referral_service.redeem(session, tenant.id, bill.id, redeemed)
     return bill
 
 

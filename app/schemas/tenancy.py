@@ -634,8 +634,13 @@ class SubscriptionPlanOut(ApiModel):
     """What the clinic has switched on, and what that comes to a month."""
 
     modules: list[SubscribedModuleOut]
-    #: the sum of the billed modules — what the next bill will be, at today's prices
+    #: the sum of the billed modules, before any referral credit
     monthly_total: float
+    #: spendable referral credit right now
+    credit_balance: float
+    #: what the next bill will actually come to, after credit — this is the
+    #: figure that should be shown as "what you'll pay"
+    amount_due: float
 
 
 class SubscriptionOut(ApiModel):
