@@ -428,3 +428,28 @@ async def test_one_clinics_redemption_never_touches_another_clinics_balance(
 
     after = (await clearview.get("/v1/tenant/referrals")).json()["balance"]
     assert after == 0
+
+
+# --- reversing -----------------------------------------------------------------------
+
+
+async def test_voiding_a_bill_returns_its_redeemed_credit(console, northgate, northgate_id):
+    await _vested_referrer_with_balance(console, northgate, slug="void-test")
+    await console.put(f"/v1/platform/tenants/{northgate_id}/features/billing", json={"status": "active"})
+    await rent.run_cycle(session_factory, today=date(2026, 10, 1), tenant_ids=[northgate_id])
+
+    [bill] = await _bills(northgate_id)
+    before = (await northgate.get("/v1/tenant/referrals")).json()["balance"]
+    assert before < (await console.get("/v1/platform/settings")).json()["referral_credit_amount"]
+
+    voided = await console.post(
+        f"/v1/platform/tenants/{northgate_id}/subscription/invoices/{bill.id}/void"
+    )
+    assert voided.status_code == 200, voided.text
+
+    after = (await northgate.get("/v1/tenant/referrals")).json()["balance"]
+    assert after == pytest.approx(
+        before + next(
+            -line["amount"] for line in bill.lines if line["feature_key"] == "referral_credit"
+        )
+    )

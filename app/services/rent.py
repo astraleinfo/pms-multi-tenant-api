@@ -533,6 +533,9 @@ async def void(
     bill.status = SubscriptionInvoiceStatus.VOID
     bill.settled_by = by[:160]
     await session.flush()
+    # The session is already bound to the referrer whose bill this was, so
+    # this is the same safe write `raise_bill`'s redemption made.
+    await referral_service.reverse_redemption(session, bill.id)
     change = await reconcile_hold(session, tenant, clinic_today(tenant), timings)
     return bill, change
 
