@@ -59,6 +59,9 @@ log = logging.getLogger("pms.rent")
 
 CENTS = Decimal("0.01")
 
+#: what a bill paid in full by referral credit records as its payment
+CREDIT_REFERENCE = "Referral credit"
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
@@ -217,6 +220,15 @@ async def raise_bill(
         status=SubscriptionInvoiceStatus.OPEN,
         reminder_stage=RentReminder.NONE.value,
     )
+    if total == 0:
+        # Credit covered all of it: the bill is born paid, in this same
+        # transaction as the redemption below. Left open, a ₹0 bill would be
+        # chased up the ladder and put the clinic on hold for owing nothing.
+        # Not a real payment, so `settle` (and its `vest`) is not involved.
+        bill.status = SubscriptionInvoiceStatus.PAID
+        bill.paid_at = _now()
+        bill.payment_reference = CREDIT_REFERENCE
+        bill.settled_by = CREDIT_REFERENCE
     session.add(bill)
     await session.flush()
     if redeemed > 0:
@@ -525,11 +537,20 @@ async def settle(
 async def void(
     session: AsyncSession, tenant: Tenant, bill_id: uuid.UUID, *, by: str
 ) -> tuple[SubscriptionInvoice, str | None]:
-    """Withdraw a bill raised in error. It stops counting towards the hold."""
+    """Withdraw a bill raised in error. It stops counting towards the hold.
+
+    A bill paid in full by referral credit (see `raise_bill`) is still
+    voidable: no money changed hands, and voiding it is the only way to give
+    back the credit an erroneous bill spent — exactly as voiding a
+    part-credited open bill does. A bill paid with real money is not."""
     timings = await get_timings(session)
     bill = await get_bill(session, tenant.id, bill_id)
-    if bill.status != SubscriptionInvoiceStatus.OPEN:
+    paid_by_credit = bill.status == SubscriptionInvoiceStatus.PAID and bill.amount == 0
+    if bill.status != SubscriptionInvoiceStatus.OPEN and not paid_by_credit:
         raise Conflict(f"That bill is already {bill.status.value}.")
+    if paid_by_credit:
+        bill.paid_at = None
+        bill.payment_reference = ""
     bill.status = SubscriptionInvoiceStatus.VOID
     bill.settled_by = by[:160]
     await session.flush()

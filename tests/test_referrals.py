@@ -12,11 +12,12 @@ import pytest
 from sqlalchemy import delete, select, update
 
 from app.db.session import session_factory, tenant_session
-from app.models.rent import SubscriptionInvoice
 from app.models.referrals import Referral, ReferralRedemption
+from app.models.rent import SubscriptionInvoice
 from app.models.tenancy import Tenant
 from app.services import mailer, rent
-from tests.conftest import sign_in
+from app.services import referrals as referral_service
+from app.services.platform import get_timings
 
 
 @pytest.fixture(autouse=True)
@@ -60,6 +61,9 @@ async def _clean_bills():
 async def _wipe_bills() -> None:
     async with tenant_session(None) as session:
         ids = list((await session.execute(select(Tenant.id))).scalars())
+        # A test that lets a bill run past its hold date must not leave the
+        # clinic held for the next one — test_rent.py's `_wipe` does the same.
+        await session.execute(update(Tenant).values(billing_hold_since=None))
     for tenant_id in ids:
         async with tenant_session(tenant_id) as session:
             await session.execute(
@@ -382,6 +386,62 @@ async def test_a_credit_larger_than_the_bill_clamps_at_zero_and_carries_forward(
     await console.patch("/v1/platform/settings", json={"referral_credit_amount": 100})
 
 
+async def _held(tenant_id: uuid.UUID) -> bool:
+    """Mirrors test_rent.py's own helper."""
+    async with tenant_session(None) as session:
+        tenant = await session.get(Tenant, tenant_id)
+        return tenant.billing_hold_since is not None
+
+
+async def test_a_bill_covered_in_full_by_credit_is_born_paid_and_never_puts_the_clinic_on_hold(
+    console, northgate, northgate_id, outbox
+):
+    await console.patch("/v1/platform/settings", json={"referral_credit_amount": 999999})
+    try:
+        await _vested_referrer_with_balance(console, northgate, slug="redeem-test-born-paid")
+        await console.put(f"/v1/platform/tenants/{northgate_id}/features/billing", json={"status": "active"})
+        outbox.clear()
+
+        issued = date(2026, 10, 1)
+        await rent.run_cycle(session_factory, today=issued, tenant_ids=[northgate_id])
+        [bill] = await _bills(northgate_id)
+        assert float(bill.amount) == 0.0
+        assert bill.status.value == "paid"
+        assert bill.paid_at is not None
+        assert bill.payment_reference == rent.CREDIT_REFERENCE
+
+        # Walk it through every rung up to and past the day an open bill would
+        # hold the clinic: nothing to chase, so nothing is sent and no hold lands.
+        async with tenant_session(None) as session:
+            timings = await get_timings(session)
+        hold_on = rent.hold_date(bill, timings)
+        day = issued
+        while day <= hold_on + timedelta(days=1):
+            await rent.run_cycle(session_factory, today=day, tenant_ids=[northgate_id])
+            assert not await _held(northgate_id), f"held on {day}"
+            day += timedelta(days=1)
+
+        assert outbox == []
+        [bill] = await _bills(northgate_id)
+        assert bill.status.value == "paid"
+        assert bill.reminders_sent == 0
+
+        summary = (await northgate.get("/v1/tenant/subscription")).json()["summary"]
+        assert summary["on_hold"] is False
+        assert summary["open_count"] == 0
+    finally:
+        await console.patch("/v1/platform/settings", json={"referral_credit_amount": 100})
+
+
+def test_a_negative_balance_never_adds_to_a_bill():
+    """A balance can go negative if a spent credit's referral is later voided.
+    That must redeem nothing — never a negative redemption that inflates the bill."""
+    total = Decimal("500.00")
+    owed, redeemed = referral_service.apply_credit(total, Decimal("-120.00"))
+    assert redeemed == Decimal("0.00")
+    assert owed == total
+
+
 async def test_running_the_cycle_twice_does_not_redeem_the_credit_twice(
     console, northgate, northgate_id
 ):
@@ -453,6 +513,54 @@ async def test_voiding_a_bill_returns_its_redeemed_credit(console, northgate, no
             -line["amount"] for line in bill.lines if line["feature_key"] == "referral_credit"
         )
     )
+
+
+async def test_a_bill_paid_in_full_by_credit_can_still_be_voided_and_returns_the_credit(
+    console, northgate, northgate_id
+):
+    """Voiding is how an erroneous bill's credit is given back. A bill that
+    credit covered entirely is born paid, but no money changed hands, so it
+    must stay voidable — or its credit would be lost for good."""
+    await console.patch("/v1/platform/settings", json={"referral_credit_amount": 999999})
+    try:
+        await _vested_referrer_with_balance(console, northgate, slug="void-test-born-paid")
+        await console.put(f"/v1/platform/tenants/{northgate_id}/features/billing", json={"status": "active"})
+        await rent.run_cycle(session_factory, today=date(2026, 10, 1), tenant_ids=[northgate_id])
+
+        [bill] = await _bills(northgate_id)
+        assert bill.status.value == "paid" and float(bill.amount) == 0.0
+        before = (await northgate.get("/v1/tenant/referrals")).json()["balance"]
+
+        voided = await console.post(
+            f"/v1/platform/tenants/{northgate_id}/subscription/invoices/{bill.id}/void"
+        )
+        assert voided.status_code == 200, voided.text
+
+        [bill_after] = await _bills(northgate_id)
+        assert bill_after.status.value == "void"
+        assert bill_after.paid_at is None
+        after = (await northgate.get("/v1/tenant/referrals")).json()["balance"]
+        assert after == pytest.approx(before + next(
+            -line["amount"] for line in bill.lines if line["feature_key"] == "referral_credit"
+        ))
+    finally:
+        await console.patch("/v1/platform/settings", json={"referral_credit_amount": 100})
+
+
+async def test_a_bill_paid_with_real_money_still_cannot_be_voided(console, northgate_id):
+    await console.put(f"/v1/platform/tenants/{northgate_id}/features/billing", json={"status": "active"})
+    await rent.run_cycle(session_factory, today=date(2026, 10, 1), tenant_ids=[northgate_id])
+    [bill] = await _bills(northgate_id)
+    settled = await console.post(
+        f"/v1/platform/tenants/{northgate_id}/subscription/invoices/{bill.id}/settle",
+        json={"reference": "NEFT 1"},
+    )
+    assert settled.status_code == 200, settled.text
+
+    refused = await console.post(
+        f"/v1/platform/tenants/{northgate_id}/subscription/invoices/{bill.id}/void"
+    )
+    assert refused.status_code == 409
 
 
 # --- the console's view --------------------------------------------------------------

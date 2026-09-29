@@ -155,9 +155,11 @@ def apply_credit(total: Decimal, balance: Decimal) -> tuple[Decimal, Decimal]:
 
     Clamped so a bill never goes negative (`CHECK (amount >= 0)` on
     `subscription_invoices`) and never spends more credit than the bill
-    needed — the rest stays in the balance for next month.
+    needed — the rest stays in the balance for next month. A negative balance
+    (a spent credit whose referral was later voided) redeems nothing: it is
+    netted against future credit, never added to a bill.
     """
-    redeemed = min(balance, total).quantize(CENTS)
+    redeemed = max(Decimal("0"), min(balance, total)).quantize(CENTS)
     return (total - redeemed).quantize(CENTS), redeemed
 
 

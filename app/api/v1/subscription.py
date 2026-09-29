@@ -35,7 +35,6 @@ from app.models.identity import PlatformUser
 from app.models.referrals import Referral
 from app.models.tenancy import Tenant
 from app.schemas.common import local_iso
-from app.services import referrals as referral_service
 from app.schemas.tenancy import (
     BillingRunOut,
     ConsoleReferralsOut,
@@ -53,6 +52,7 @@ from app.schemas.tenancy import (
 )
 from app.services import audit
 from app.services import platform as platform_service
+from app.services import referrals as referral_service
 from app.services import rent as rent_service
 from app.services.documents import build_subscription_invoice_pdf
 from app.services.platform import Timings
