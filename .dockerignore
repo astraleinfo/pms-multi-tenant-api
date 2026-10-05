@@ -1,0 +1,28 @@
+# The image needs pyproject.toml, app/, alembic/, alembic.ini and scripts/.
+# Everything else stays out of the build context — above all, secrets.
+
+.env
+.env.*
+!.env.example
+
+.git
+.github
+.venv
+venv
+**/__pycache__
+**/*.py[cod]
+*.egg-info
+.pytest_cache
+.ruff_cache
+.coverage
+htmlcov
+
+celerybeat-schedule*
+tests
+docs
+deploy
+docker-compose*.yml
+Dockerfile
+.dockerignore
+Makefile
+README.md
