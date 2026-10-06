@@ -23,6 +23,10 @@ x-app: &app
   image: ${PMS_IMAGE:-pms-api:latest}
   build:
     context: .
+    args:
+      # Error reports name the build they came from:
+      #   APP_RELEASE=$(git rev-parse --short HEAD) docker compose -f docker-compose.prod.yml build
+      APP_RELEASE: ${APP_RELEASE:-}
   env_file: .env.production
   networks: [pms-internal]
   read_only: true

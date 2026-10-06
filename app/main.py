@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
 from app.api.v1 import api_router
+from app.core import error_reporting
 from app.core.config import settings
 from app.core.errors import install_error_handlers
 from app.core.logging import (
@@ -37,6 +38,7 @@ async def lifespan(app: FastAPI):
     problems = settings.validate_for_production()
     if problems:
         raise RuntimeError("Refusing to start: " + "; ".join(problems))
+    error_reporting.init("api")
 
     async with engine.connect() as conn:
         # Fail fast, and prove the app role is the unprivileged one.
@@ -60,6 +62,7 @@ async def lifespan(app: FastAPI):
     yield
     await jobs_service.close()
     await dispose_engine()
+    error_reporting.flush()
 
 
 app = FastAPI(

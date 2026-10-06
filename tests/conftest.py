@@ -43,6 +43,8 @@ os.environ.update(
         "FLOWER_URL": "http://127.0.0.1:9/",
         "FLOWER_TIMEOUT_SECONDS": "2",
         "FLOWER_BASIC_AUTH": "test:test",
+        # Whatever a developer's .env says, the suite reports nowhere.
+        "ERROR_REPORTER": "none",
     }
 )
 

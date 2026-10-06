@@ -13,6 +13,7 @@ clinician's free-text turns out to be.
 from __future__ import annotations
 
 import io
+import logging
 from datetime import date, timedelta
 
 from reportlab.lib import colors
@@ -33,6 +34,8 @@ from reportlab.platypus import (
 from app.models.clinical import Encounter, Patient, Prescription
 from app.models.tenancy import TenantConfig
 from app.schemas.common import local_now
+
+log = logging.getLogger("pms.pdf")
 
 # --- palette -----------------------------------------------------------------
 # One accent, used sparingly — a document meant to be printed and filed, not a
@@ -164,7 +167,10 @@ def _logo_flowable(logo: bytes | None) -> Image | None:
         return None
     try:
         return Image(io.BytesIO(logo), width=18 * mm, height=18 * mm, kind="proportional")
-    except Exception:
+    except Exception:  # noqa: BLE001 - the document still prints, see docstring
+        # Uploads are checked to be an image, so this is not the usual case —
+        # it is a decoder missing a format, and then every PDF loses its logo.
+        log.exception("could not draw the clinic logo; printing without it")
         return None
 
 

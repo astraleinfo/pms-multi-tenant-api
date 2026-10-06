@@ -18,7 +18,9 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
+from app.core import error_reporting
 from app.core.config import settings
+from app.core.error_reporting import ReportingHandler
 
 
 class JsonFormatter(logging.Formatter):
@@ -38,26 +40,61 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, default=str)
 
 
+#: One instance, so configuring twice (the API, then Celery's hook in the same
+#: process) never attaches it to a logger twice.
+_reporting = ReportingHandler()
+
+
 def configure_logging() -> None:
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(JsonFormatter() if settings.is_production else logging.Formatter(
         "%(levelname)s %(name)s %(message)s"
     ))
     root = logging.getLogger()
-    root.handlers = [handler]
+    # The second handler is how an ERROR line becomes an error report. It
+    # forwards to whatever `error_reporting.init` installed — nothing, until a
+    # process calls it.
+    root.handlers = [handler, _reporting]
     root.setLevel(settings.log_level.upper())
     logging.getLogger("uvicorn.access").handlers = [handler]
+    # Whatever escapes the application — a crash in the queue socket, which no
+    # exception handler covers, or a failed startup — is logged by uvicorn on
+    # a logger that does not reach the root. A 500 the error handlers already
+    # reported is logged there again; the handler reports it once.
+    uvicorn_error = logging.getLogger("uvicorn.error")
+    if _reporting not in uvicorn_error.handlers:
+        uvicorn_error.addHandler(_reporting)
+
+
+def request_context(request: Request) -> dict[str, Any]:
+    """Who and what a request is about — identifiers only. The access line, the
+    error handlers' lines and every error report carry these."""
+    return {
+        "request_id": getattr(request.state, "request_id", None),
+        "tenant_id": getattr(request.state, "tenant_id", None),
+        "actor_id": getattr(request.state, "actor_id", None),
+        "path": request.url.path,
+        "method": request.method,
+    }
 
 
 class RequestContextMiddleware(BaseHTTPMiddleware):
-    """Stamps a request id, times the request, and logs the outcome."""
+    """Stamps a request id, times the request, and logs the outcome.
+
+    It also binds the request for error reporting, so anything logged at
+    ERROR while the request is served is reported against it.
+    """
 
     async def dispatch(self, request: Request, call_next) -> Response:
         request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
         request.state.request_id = request_id
         started = time.perf_counter()
 
-        response = await call_next(request)
+        token = error_reporting.bind(lambda: request_context(request))
+        try:
+            response = await call_next(request)
+        finally:
+            error_reporting.unbind(token)
 
         duration_ms = round((time.perf_counter() - started) * 1000, 2)
         response.headers["X-Request-ID"] = request_id
@@ -67,11 +104,7 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
             request.url.path,
             response.status_code,
             extra={
-                "request_id": request_id,
-                "tenant_id": getattr(request.state, "tenant_id", None),
-                "actor_id": getattr(request.state, "actor_id", None),
-                "path": request.url.path,
-                "method": request.method,
+                **request_context(request),
                 "status": response.status_code,
                 "duration_ms": duration_ms,
             },

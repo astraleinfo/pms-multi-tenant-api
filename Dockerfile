@@ -39,6 +39,10 @@ FROM python:${PYTHON_VERSION}-slim-bookworm AS runtime
 
 ARG VERSION=dev
 ARG REVISION=unknown
+# What error reports name as the release — a version or git sha. Baked in so it
+# travels with the image; empty sends none. An env file can still override it.
+#   docker build --build-arg APP_RELEASE=$(git rev-parse --short HEAD) .
+ARG APP_RELEASE=
 LABEL org.opencontainers.image.title="pms-multi-tenant-api" \
       org.opencontainers.image.description="Multi-tenant patient management API" \
       org.opencontainers.image.version="${VERSION}" \
@@ -49,6 +53,7 @@ ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONFAULTHANDLER=1 \
+    APP_RELEASE="${APP_RELEASE}" \
     # Read by uvicorn itself. Trusting every hop is safe only because nothing
     # but the reverse proxy can reach port 8000, and the proxy overwrites
     # X-Forwarded-For rather than appending to it. Narrow it (an IP or CIDR) if

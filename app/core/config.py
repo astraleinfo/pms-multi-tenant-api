@@ -208,6 +208,20 @@ class Settings(BaseSettings):
     #: worker, so it is throttled rather than done on each poll of the screen.
     flower_inspect_seconds: float = 30.0
 
+    # -------------------------------------------------------- error reporting
+    # Where unexpected errors go besides the log. Every line logged at ERROR or
+    # above is a report — the unhandled-500 handler, a Celery task that raised,
+    # a worker loop that caught a bug and carried on — so the code never names
+    # a vendor (see app/core/error_reporting). Switching service is this
+    # setting plus that service's own keys below.
+    #   none    the log only; what development and the tests use
+    #   sentry  sent to the Sentry project SENTRY_DSN names
+    error_reporter: Literal["none", "sentry"] = "none"
+    #: Which build an error came from — a version or git sha, set by the
+    #: deploy — so a regression can be pinned to a release. Blank sends none.
+    app_release: str = ""
+    sentry_dsn: str = ""
+
     @property
     def flower_api_base(self) -> str:
         """Where this API talks to Flower, prefix included."""
@@ -306,6 +320,8 @@ class Settings(BaseSettings):
             # credential. Without this, anything else on that network reads
             # every job's arguments.
             problems.append("FLOWER_BASIC_AUTH must be set, or FLOWER_ENABLED turned off")
+        if self.error_reporter == "sentry" and not self.sentry_dsn:
+            problems.append("ERROR_REPORTER=sentry needs SENTRY_DSN")
         return problems
 
 
