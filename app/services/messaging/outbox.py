@@ -89,7 +89,8 @@ def mark_retry(message: Message, error: str) -> None:
     message.last_error = error[:2000]
     if message.attempts >= settings.message_max_attempts:
         message.status = MessageStatus.FAILED
-        log.warning("message %s parked after %s attempts", message.id, message.attempts)
+        # A patient was not told something; nothing will try again.
+        log.error("message %s parked after %s attempts", message.id, message.attempts)
         return
     message.status = MessageStatus.QUEUED
     message.send_after = backoff(message.attempts)

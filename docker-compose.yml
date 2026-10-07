@@ -74,6 +74,9 @@ services:
       # The web app serves this API under /api, so that is the path Flower's
       # own links have to be built from. Both containers are told the same one.
       FLOWER_URL_PREFIX: api/v1/platform/jobs/flower
+      # Off unless set in the shell or .env — e.g. to try a Sentry project.
+      ERROR_REPORTER: ${ERROR_REPORTER:-none}
+      SENTRY_DSN: ${SENTRY_DSN:-}
     ports:
       - "8000:8000"
     networks: [pms-internal]
@@ -100,6 +103,8 @@ services:
       JWT_SECRET: dev-secret-only-for-local-development-not-a-real-secret
       APP_DOMAIN: localhost
       REDIS_URL: redis://redis:6379/0
+      ERROR_REPORTER: ${ERROR_REPORTER:-none}
+      SENTRY_DSN: ${SENTRY_DSN:-}
     networks: [pms-internal]
     # `-E` publishes the task events Flower reads. It is also set in the Celery
     # configuration, so a worker started without the flag still reports.

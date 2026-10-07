@@ -10,18 +10,21 @@ so two workers never send the same message twice.
 from __future__ import annotations
 
 import asyncio
+import logging
 import signal
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from app.core import error_reporting  # noqa: E402
 from app.core.logging import configure_logging  # noqa: E402
 from app.services.messaging.worker import run_forever  # noqa: E402
 
 
 async def main() -> None:
     configure_logging()
+    error_reporting.init("outbox")
     stop = asyncio.Event()
 
     loop = asyncio.get_running_loop()
@@ -32,7 +35,15 @@ async def main() -> None:
             # Windows: KeyboardInterrupt below is the stop signal instead.
             pass
 
-    await run_forever(stop)
+    try:
+        await run_forever(stop)
+    except Exception:
+        # The loop survives a failed sweep on its own; reaching here means the
+        # worker itself is going down, and nothing else would report it.
+        logging.getLogger("pms.worker").exception("message worker crashed")
+        raise
+    finally:
+        error_reporting.flush()
 
 
 if __name__ == "__main__":

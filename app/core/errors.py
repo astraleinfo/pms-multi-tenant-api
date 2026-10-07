@@ -18,6 +18,8 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.core.logging import request_context
+
 log = logging.getLogger("pms.error")
 
 
@@ -114,8 +116,7 @@ def install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(TenantIsolationViolation)
     async def _isolation(request: Request, exc: TenantIsolationViolation) -> JSONResponse:
         log.critical(
-            "tenant isolation guard tripped: %s", exc,
-            extra={"path": request.url.path, "request_id": _request_id(request)},
+            "tenant isolation guard tripped: %s", exc, exc_info=exc, extra=request_context(request),
         )
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -152,7 +153,7 @@ def install_error_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(SQLAlchemyError)
     async def _sqlalchemy(request: Request, exc: SQLAlchemyError) -> JSONResponse:
-        log.exception("database error on %s", request.url.path, exc_info=exc)
+        log.exception("database error on %s", request.url.path, exc_info=exc, extra=request_context(request))
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content=_payload("internal_error", "Something went wrong.", request),
@@ -160,7 +161,7 @@ def install_error_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(Exception)
     async def _unhandled(request: Request, exc: Exception) -> JSONResponse:
-        log.exception("unhandled error on %s", request.url.path, exc_info=exc)
+        log.exception("unhandled error on %s", request.url.path, exc_info=exc, extra=request_context(request))
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content=_payload("internal_error", "Something went wrong.", request),

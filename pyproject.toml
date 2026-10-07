@@ -36,6 +36,9 @@ dependencies = [
     "boto3>=1.34",
     # Reading and writing the onboarding spreadsheets.
     "openpyxl>=3.1",
+    # Error reporting to Sentry. Imported only when ERROR_REPORTER=sentry, and a
+    # dependency for the same reason as boto3: turning it on is configuration.
+    "sentry-sdk>=2.0",
 ]
 
 [project.optional-dependencies]

@@ -13,3 +13,8 @@ htmlcov/
 # Celery beat keeps its last-run times here; local to each machine.
 celerybeat-schedule*
 .worktrees/
+
+# Production secrets and certificates.
+.env.production
+.env.migrate
+deploy/certs/

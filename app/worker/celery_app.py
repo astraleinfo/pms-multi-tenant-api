@@ -31,9 +31,10 @@ A broker wiped clean delays delivery by one sweep; it loses nothing.
 
 from __future__ import annotations
 
-from celery import Celery
+from celery import Celery, signals
 from celery.schedules import crontab
 
+from app.core import error_reporting
 from app.core.config import settings
 from app.core.logging import configure_logging
 
@@ -104,3 +105,23 @@ celery_app.conf.update(
 @celery_app.on_after_configure.connect
 def _logging(**_: object) -> None:
     configure_logging()
+
+
+# Reporting starts from the worker and beat processes' own init signals, never
+# from module import: the API imports this module to enqueue, and it reports
+# as itself. A prefork child inherits the reporter from the parent, and a task
+# that raises is reported because Celery logs it at ERROR.
+@signals.celeryd_init.connect
+def _report_worker_errors(**_: object) -> None:
+    error_reporting.init("worker")
+
+
+@signals.beat_init.connect
+def _report_beat_errors(**_: object) -> None:
+    error_reporting.init("beat")
+
+
+@signals.worker_process_shutdown.connect
+@signals.worker_shutdown.connect
+def _flush_error_reports(**_: object) -> None:
+    error_reporting.flush()

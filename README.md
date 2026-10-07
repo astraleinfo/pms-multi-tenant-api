@@ -724,6 +724,41 @@ guards on that endpoint are the only guards that matter.
 
 ---
 
+## Error reporting
+
+Anything logged at `ERROR` or above is an error report: an unhandled 500, a crash in the queue
+socket, a Celery task that raised, an outbox or billing loop that caught a bug and carried on, a
+patient message that ran out of attempts. The application only ever logs — `log.exception(...)`
+— and a handler on the root logger (and on `uvicorn.error`, which does not reach it) forwards
+those lines to the service `ERROR_REPORTER` selects. One failure logged twice is one report. No
+module outside `app/core/error_reporting/` names a vendor. Failures the system recovers from on
+its own — a broker hiccup the sweep covers, a carrier refusing one number — stay at `WARNING`.
+
+| `ERROR_REPORTER` | Where reports go | Needs |
+|---|---|---|
+| `none` (default) | the log only | — |
+| `sentry` | the Sentry project | `SENTRY_DSN` (production refuses to start without it) |
+
+Each process starts reporting itself and is tagged with what it is — `api`, `worker`, `beat`,
+`outbox`. Inside the API, `RequestContextMiddleware` binds each request, so anything logged at
+`ERROR` while it is served — in a route, a service, a background task — is reported with its
+request id, clinic, user, path and method, without the log call passing them. 4xx responses are
+the client's mistake, not ours, and are not reported.
+Build the image with `APP_RELEASE` (a build arg, read by `docker-compose.prod.yml` from the
+shell) set to the version or git sha, so an error is tied to a deploy:
+`APP_RELEASE=$(git rev-parse --short HEAD) docker compose -f docker-compose.prod.yml build`.
+
+Reports carry identifiers, never patient data. The Sentry adapter turns off what the SDK sends
+by default: PII, stack-frame local variables, request bodies, its own framework integrations,
+and the `extra` fields on log breadcrumbs (the console messaging provider puts a message body
+there). An exception's *message* is still sent, so do not put patient data in one.
+
+**Switching service** — write an adapter implementing `Reporter` (`report` and `flush`, see
+`app/core/error_reporting/base.py`), add its name to `ERROR_REPORTER` in `app/core/config.py`,
+and register it in `_BUILDERS` in `app/core/error_reporting/__init__.py`. Nothing else changes.
+
+---
+
 ## Tests
 
 ```bash
@@ -762,6 +797,7 @@ app/
     errors.py          one error vocabulary; 404 for another clinic's rows
     rate_limit.py      fixed-window limiter
     logging.py         request context, security headers
+    error_reporting/   ERROR log lines → the configured service (Sentry, or none)
   db/
     base.py            Base, TimestampMixin, TenantScoped
     session.py         engine, one transaction per request, app.tenant_id

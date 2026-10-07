@@ -41,5 +41,8 @@ def decrypt_secret(value: str) -> str:
     try:
         return _fernet().decrypt(value.encode()).decode()
     except (InvalidToken, ValueError):
-        log.warning("stored provider credential could not be decrypted; treating as unset")
+        # Not one clinic's typo: SECRETS_KEY (or JWT_SECRET, which it falls
+        # back to) changed under stored credentials, and every carrier send
+        # is now refused. Someone has to re-enter them or restore the key.
+        log.error("stored provider credential could not be decrypted; treating as unset")
         return ""
