@@ -1,9 +1,8 @@
 """A clinic asking the platform for something.
 
-A clinic cannot switch a module on for itself — the entitlement is the
-platform's to grant — so what it can do is ask. The row is the ask. Emailing the
-support desk is how the desk hears about it, and that happens in the Celery
-worker, off the request: the row is written first, in the same transaction as
+A clinic asks for a walkthrough, or for help with anything else. The row is
+the ask. Emailing the support desk is how the desk hears about it, and that
+happens in the Celery worker, off the request: the row is written first, in the same transaction as
 its audit entry, and the worker reads it back. A worker that dies mid-send, a
 deploy, or a wiped broker delays the email; it never loses the request, because
 the beat sweep re-queues anything still `queued`.
@@ -14,7 +13,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Index, Integer, String, Text, func
+from sqlalchemy import DateTime, Enum, Index, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -38,9 +37,6 @@ class SupportRequest(Base, TenantScoped, TimestampMixin):
             values_callable=lambda e: [m.value for m in e],
         ),
         nullable=False,
-    )
-    feature_key: Mapped[str | None] = mapped_column(
-        String(40), ForeignKey("features.key", ondelete="SET NULL"), nullable=True
     )
     message: Mapped[str] = mapped_column(Text, nullable=False, default="")
 

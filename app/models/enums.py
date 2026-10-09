@@ -51,12 +51,6 @@ class RentReminder(StrEnum):
 RENT_STAGE_ORDER: dict[str, int] = {stage.value: i for i, stage in enumerate(RentReminder)}
 
 
-class TenantFeatureStatus(StrEnum):
-    ACTIVE = "active"
-    INACTIVE = "inactive"
-    TRIAL = "trial"
-
-
 class AccountStatus(StrEnum):
     ACTIVE = "active"
     INVITED = "invited"
@@ -157,10 +151,47 @@ class Sex(StrEnum):
 
 class AppointmentStatus(StrEnum):
     SCHEDULED = "scheduled"
+    #: The patient said on a follow-up call that they are coming. Still a
+    #: booking rather than an arrival: everything `scheduled` can do, this can.
+    CONFIRMED = "confirmed"
     CHECKED_IN = "checked_in"
     CANCELLED = "cancelled"
     NO_SHOW = "no_show"
     COMPLETED = "completed"
+
+
+#: Bookings that are still going to happen — the ones a front desk can check
+#: in, move, or ring to confirm.
+BOOKED_STATUSES = (AppointmentStatus.SCHEDULED, AppointmentStatus.CONFIRMED)
+
+
+class FollowUpOutcome(StrEnum):
+    """What came of one call to a patient about an upcoming appointment.
+
+    `rescheduled` is `reschedule_required` with the new slot booked on the
+    same call; the log keeps them apart because only one of them moved
+    anything.
+    """
+
+    CONFIRMED = "confirmed"
+    RESCHEDULE_REQUIRED = "reschedule_required"
+    RESCHEDULED = "rescheduled"
+    NO_ANSWER = "no_answer"
+    DECLINED = "declined"
+    CALL_BACK = "call_back"
+
+
+class FollowUpStatus(StrEnum):
+    """Where an appointment's follow-up stands. Worked out, never stored: it is
+    the appointment's own status where that says it is confirmed, and the last
+    call's outcome otherwise — see `services.follow_ups.status_expression`."""
+
+    PENDING = "pending"
+    CONFIRMED = "confirmed"
+    RESCHEDULE_REQUIRED = "reschedule_required"
+    NO_ANSWER = "no_answer"
+    DECLINED = "declined"
+    CALL_BACK = "call_back"
 
 
 class AppointmentChannel(StrEnum):
@@ -319,6 +350,12 @@ class SubjectKind(StrEnum):
 
 APPOINTMENT_TRANSITIONS: dict[AppointmentStatus, set[AppointmentStatus]] = {
     AppointmentStatus.SCHEDULED: {
+        AppointmentStatus.CONFIRMED,
+        AppointmentStatus.CHECKED_IN,
+        AppointmentStatus.CANCELLED,
+        AppointmentStatus.NO_SHOW,
+    },
+    AppointmentStatus.CONFIRMED: {
         AppointmentStatus.CHECKED_IN,
         AppointmentStatus.CANCELLED,
         AppointmentStatus.NO_SHOW,
@@ -368,6 +405,8 @@ class MessageTemplate(StrEnum):
     BOOKING_CONFIRMATION = "booking_confirmation"
     APPOINTMENT_RESCHEDULED = "appointment_rescheduled"
     APPOINTMENT_CANCELLED = "appointment_cancelled"
+    #: No longer sent. Kept so the reminders already in a clinic's history
+    #: still load.
     APPOINTMENT_REMINDER = "appointment_reminder"
     FOLLOW_UP = "follow_up"
     CUSTOM = "custom"
@@ -376,13 +415,8 @@ class MessageTemplate(StrEnum):
 class MessageStatus(StrEnum):
     """`queued` is the only state the worker picks up. `failed` is terminal
     until someone retries it; `cancelled` is what a scrapped appointment does
-    to a reminder that had not gone out yet.
+    to a message that had not gone out yet."""
 
-    `scheduled` is a reminder whose day has not come: it has no job yet, and
-    the midnight run queues it when its day arrives. See
-    `app/services/messaging/reminders.py`."""
-
-    SCHEDULED = "scheduled"
     QUEUED = "queued"
     SENDING = "sending"
     SENT = "sent"
@@ -398,10 +432,9 @@ class MessageProvider(StrEnum):
 
 
 class SupportRequestKind(StrEnum):
-    """What a clinic is asking the support desk for. `activation` and
-    `walkthrough` are about one module; `general` is anything else."""
+    """What a clinic is asking the support desk for: a `walkthrough` of the
+    product (or some part of it), or `general` — anything else."""
 
-    ACTIVATION = "activation"
     WALKTHROUGH = "walkthrough"
     GENERAL = "general"
 
@@ -425,3 +458,24 @@ class SupportRequestStatus(StrEnum):
     QUEUED = "queued"
     SENT = "sent"
     FAILED = "failed"
+
+
+class ConsentVersionStatus(StrEnum):
+    """Where one version of a clinic's consent form stands. Only `draft` can be
+    edited; `published` is the one patients are asked to sign; `archived` is a
+    version that was published once and has since been replaced — kept, because
+    a signed record may point at it."""
+
+    DRAFT = "draft"
+    PUBLISHED = "published"
+    ARCHIVED = "archived"
+
+
+class ConsentStatus(StrEnum):
+    """A patient's consent. `signed` and `declined` are final. `expired` is not
+    stored: a `pending` record whose window has passed reads as expired."""
+
+    PENDING = "pending"
+    SIGNED = "signed"
+    DECLINED = "declined"
+    EXPIRED = "expired"

@@ -6,7 +6,9 @@ from app.api.v1 import (
     analytics,
     auth,
     catalog,
+    consent,
     encounters,
+    follow_ups,
     imports,
     jobs,
     messaging,
@@ -29,7 +31,9 @@ api_router.include_router(tenant.router)
 api_router.include_router(subscription.clinic_router)
 api_router.include_router(pricing.router)
 api_router.include_router(patients.router)
+api_router.include_router(consent.router)
 api_router.include_router(scheduling.router)
+api_router.include_router(follow_ups.router)
 api_router.include_router(encounters.router)
 api_router.include_router(encounters.prescriptions_router)
 api_router.include_router(modules.pharmacy_router)

@@ -472,9 +472,8 @@ async def test_a_verified_order_takes_no_more_paper(northgate, northgate_doctor)
 
 
 async def test_another_clinic_cannot_reach_a_report(northgate, northgate_doctor, rowan, clearview):
-    """Rowan runs a lab of its own, so the module guard lets it through and the
-    tenant boundary is what answers. Clearview has no lab at all, and never
-    gets that far."""
+    """Every clinic has the lab, so the tenant boundary is what answers — for
+    Rowan and Clearview alike."""
     order = await _fresh_order(northgate, northgate_doctor)
     body = (
         await northgate.post(
@@ -489,8 +488,10 @@ async def test_another_clinic_cannot_reach_a_report(northgate, northgate_doctor,
     ).status_code == 404
     assert (await rowan.get(f"/v1/lab/orders/{order['id']}/attachments")).status_code == 404
 
-    # And a clinic without the module is stopped one step earlier.
-    assert (await clearview.get(f"/v1/lab/orders/{order['id']}/attachments")).status_code == 403
+    assert (await clearview.get(f"/v1/lab/orders/{order['id']}/attachments")).status_code == 404
+    assert (
+        await clearview.get(f"/v1/lab/orders/{order['id']}/attachments/{body['id']}")
+    ).status_code == 404
 
 
 async def test_uploading_a_report_is_recorded(northgate, northgate_doctor):
@@ -750,20 +751,21 @@ async def test_a_pharmacist_can_open_and_price_a_line(client):
     assert not role_has("lab_tech", Permission.INVENTORY_WRITE)
 
 
-async def test_the_new_stock_routes_are_behind_the_module(rowan):
-    """A clinic without inventory gets 403 from the guard, not a 404 or a row.
+async def test_the_new_stock_routes_are_behind_the_role(rowan, client):
+    """Every clinic has inventory — Rowan Skin, which never had it switched on,
+    opens a line like anyone else. What stops a request is the role: a
+    receptionist holds no `inventory:write`, and is refused for that."""
+    opened = await rowan.post(
+        "/v1/inventory/items", json={"sku": "ROWAN-X-1", "name": "Now open", "category": "medicine"}
+    )
+    assert opened.status_code == 201, opened.text
 
-    Rowan Skin has not bought it, which is what makes this worth asserting.
-    """
-    features = {f["feature_key"]: f["status"] for f in (await rowan.get("/v1/tenant/features")).json()}
-    if features.get("inventory") == "active":
-        pytest.skip("this clinic has bought inventory")
-
-    refused = await rowan.post(
+    reception = await sign_in(client, "northgate_reception")
+    refused = await reception.post(
         "/v1/inventory/items", json={"sku": "X-1", "name": "Blocked", "category": "medicine"}
     )
     assert refused.status_code == 403
-    assert refused.json()["error"]["code"] == "feature_not_enabled"
+    assert refused.json()["error"]["code"] == "forbidden"
 
 
 async def test_signing_in_as_a_second_clinic_still_sees_only_its_own_tariff(client):

@@ -478,8 +478,7 @@ def password_reset(*, to: str, name: str, clinic: str, url: str, expires_in_hour
 
 
 _SUPPORT_ASK = {
-    "activation": ("Enable {module} for {clinic}", "asked for the {module} module to be enabled."),
-    "walkthrough": ("Walkthrough of {module} for {clinic}", "asked for a walkthrough of the {module} module."),
+    "walkthrough": ("Walkthrough for {clinic}", "asked for a walkthrough."),
     "general": ("Support request from {clinic}", "sent a support request."),
 }
 
@@ -490,9 +489,6 @@ def support_request(
     kind: str,
     clinic: str,
     slug: str,
-    module: str | None,
-    module_key: str | None,
-    price: str | None,
     requested_by: str,
     reply_to: str | None,
     message: str,
@@ -501,19 +497,13 @@ def support_request(
 ) -> Email:
     """To the support desk, not to a clinic: one clinic asking for something.
 
-    Everything the desk needs to act is in the body — which clinic, which
-    module, who asked — and a reply goes straight back to the person who asked.
+    Everything the desk needs to act is in the body — which clinic, who asked,
+    what they said — and a reply goes straight back to the person who asked.
     """
-    subject_t, line_t = _SUPPORT_ASK.get(kind, _SUPPORT_ASK["general"])
-    module_name = module or "a module"
-    subject = subject_t.format(module=module_name, clinic=clinic)
-    line = line_t.format(module=module_name)
+    subject_t, line = _SUPPORT_ASK.get(kind, _SUPPORT_ASK["general"])
+    subject = subject_t.format(clinic=clinic)
 
     rows = [("Clinic", f"{clinic} ({slug})")]
-    if module:
-        rows.append(("Module", f"{module} ({module_key})" if module_key else module))
-    if price:
-        rows.append(("Listed", f"{price} per month"))
     rows.append(("Asked by", requested_by))
     rows.append(("Reference", reference))
 
@@ -541,7 +531,7 @@ def support_request(
     if reply_to:
         body += _footnote("Reply to this email to answer the person who asked.")
 
-    eyebrow = {"activation": "Module request", "walkthrough": "Walkthrough request"}.get(
+    eyebrow = {"walkthrough": "Walkthrough request"}.get(
         kind, "Support request"
     )
     html = _shell(
@@ -558,8 +548,8 @@ def support_request(
 _RENT_COPY: dict[str, tuple[str, str, str, str, str | None]] = {
     "issued": (
         "accent", "New bill", "Your {period} bill for {clinic}",
-        "Here is {clinic}'s Astrale subscription bill for {period}. It covers the modules "
-        "switched on for the clinic when the bill was raised.",
+        "Here is {clinic}'s Astrale subscription bill for {period}. It is the flat monthly "
+        "clinic fee, which covers every module.",
         "Please pay by <strong>{due}</strong>.",
     ),
     "due_soon": (
@@ -654,7 +644,7 @@ def rent_notice(
             "",
             *(f"{label + ':':<11}{value}" for label, value in rows),
             "",
-            *(["Modules:", lines_text, ""] if lines else []),
+            *(["Charges:", lines_text, ""] if lines else []),
             *([re.sub(r"<[^>]+>", "", notice_t.format(**fill)), ""] if notice_t else []),
             *([f"View the bill: {url}"] if stage != "paid" else []),
         ]

@@ -20,8 +20,7 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
 
     # The PMS's own clock. New clinics start on it, a clinic with no valid
-    # timezone falls back to it, and the scheduled jobs keep it: "midnight" for
-    # the reminder run is midnight here.
+    # timezone falls back to it, and the scheduled jobs keep it.
     pms_timezone: str = "Asia/Kolkata"
 
     database_url: str = "postgresql+asyncpg://pms_app:app@localhost:5432/pms"
@@ -143,11 +142,11 @@ class Settings(BaseSettings):
     support_request_rate_limit: str = "20/hour"
 
     # ------------------------------------------------------ subscription rent
-    # What each clinic pays the platform for the modules it has switched on.
-    # When it's due, how long the grace period is, and when the reminder
-    # ladder starts are all in `platform_settings` now (see
-    # app/services/platform.py::Timings) — editable from the console, not
-    # env vars.
+    # What each clinic pays the platform: one flat monthly fee covering every
+    # module. The fee itself (`subscription_fee_monthly`), when it's due, how
+    # long the grace period is, and when the reminder ladder starts are all in
+    # `platform_settings` now (see app/services/platform.py::Timings) —
+    # editable from the console, not env vars.
     #
     # Off by default: switched on, the beat raises real bills and emails real
     # admins — including every seeded demo clinic. The console's "Run billing
@@ -216,6 +215,7 @@ class Settings(BaseSettings):
     # setting plus that service's own keys below.
     #   none    the log only; what development and the tests use
     #   sentry  sent to the Sentry project SENTRY_DSN names
+    # Only ENVIRONMENT=production reports; elsewhere this is treated as none.
     error_reporter: Literal["none", "sentry"] = "none"
     #: Which build an error came from — a version or git sha, set by the
     #: deploy — so a regression can be pinned to a release. Blank sends none.

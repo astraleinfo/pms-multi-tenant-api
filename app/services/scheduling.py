@@ -10,13 +10,14 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime, timezone
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import Conflict, NotFound, ValidationFailed
 from app.models.clinical import Appointment, Patient, QueueEntry
 from app.models.enums import (
     APPOINTMENT_TRANSITIONS,
+    BOOKED_STATUSES,
     QUEUE_TRANSITIONS,
     AppointmentStatus,
     QueuePriority,
@@ -161,12 +162,30 @@ async def conflicts_for(
     ]
 
 
+async def hold_diary(
+    session: AsyncSession, tenant_id: uuid.UUID, doctor_id: uuid.UUID, day: date
+) -> None:
+    """Take this clinician's diary for this day until the transaction ends.
+
+    The availability check reads, then the booking writes, so two desks booking
+    the same free slot at the same moment would both see it free. This lock
+    puts them in line: the second waits for the first to commit, and its check
+    then sees the first booking and refuses. It is scoped to one clinician's
+    day, so it never makes a booking for anyone else wait.
+    """
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+        {"key": f"diary:{tenant_id}:{doctor_id}:{day.isoformat()}"},
+    )
+
+
 async def create_appointment(
     session: AsyncSession, tenant_id: uuid.UUID, payload: AppointmentIn
 ) -> Appointment:
     patient = await _require_patient(session, tenant_id, uuid.UUID(payload.patient_id))
     doctor = await _require_doctor(session, tenant_id, uuid.UUID(payload.doctor_id))
 
+    await hold_diary(session, tenant_id, doctor.id, payload.date)
     clashes = await conflicts_for(
         session,
         tenant_id,
@@ -247,6 +266,7 @@ async def reschedule_appointment(
 
     # `ignore_id` keeps the appointment from clashing with itself when only the
     # duration or the clinician changes.
+    await hold_diary(session, tenant_id, doctor_id, day)
     clashes = await conflicts_for(
         session,
         tenant_id,
@@ -334,7 +354,7 @@ async def check_in(
     session: AsyncSession, tenant_id: uuid.UUID, appointment_id: uuid.UUID, *, today: date
 ) -> QueueEntry:
     appointment = await get_appointment(session, tenant_id, appointment_id)
-    if appointment.status != AppointmentStatus.SCHEDULED:
+    if appointment.status not in BOOKED_STATUSES:
         raise Conflict(f"That appointment is already {appointment.status.value.replace('_', ' ')}.")
 
     existing = (

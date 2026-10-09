@@ -1,9 +1,12 @@
-"""Tenants, what they have bought, and how they have configured the product.
+"""Tenants, and how they have configured the product.
 
-The four axes of the reference document live in four separate places, and
-nothing here conflates them: `Tenant.clinical_type` (what workflow applies),
-`TenantFeature` (what is unlocked), `TenantConfig` (how it is set up), and the
-`tenant_id` on every other table (who owns the row).
+Three axes live in three separate places, and nothing here conflates them: the
+`tenant_id` on every other table (who owns the row), `Tenant.clinical_type`
+(what clinical workflow applies), and customisation — `TenantConfig` (how the
+clinic is set up) plus its own `FieldDefinition` rows (what extra it records).
+
+There is no fourth axis for modules. Every tenant has every module; what a
+person can reach inside one is decided by their role's permissions.
 """
 
 from __future__ import annotations
@@ -38,7 +41,6 @@ from app.models.enums import (
     FieldEntity,
     FieldScope,
     FieldType,
-    TenantFeatureStatus,
     TenantStatus,
 )
 
@@ -51,19 +53,6 @@ class ClinicalType(Base):
     exam_label: Mapped[str] = mapped_column(String(120), nullable=False, default="")
     blurb: Mapped[str] = mapped_column(Text, nullable=False, default="")
     complaint_example: Mapped[str] = mapped_column(String(200), nullable=False, default="")
-
-
-class Feature(Base):
-    """The catalogue of modules. Which tenant has which is `TenantFeature`."""
-
-    __tablename__ = "features"
-
-    key: Mapped[str] = mapped_column(String(40), primary_key=True)
-    name: Mapped[str] = mapped_column(String(80), nullable=False)
-    is_core: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    price_monthly: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False, default=0)
-    unlocks: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
 
 
 class Tenant(Base, TimestampMixin):
@@ -98,26 +87,6 @@ class Tenant(Base, TimestampMixin):
     __table_args__ = (
         CheckConstraint("slug ~ '^[a-z0-9][a-z0-9-]{1,39}$'", name="ck_tenants_slug_shape"),
     )
-
-
-class TenantFeature(Base, TenantScoped, TimestampMixin):
-    """§3.2 — entitlement. Never consulted to decide clinical behaviour."""
-
-    __tablename__ = "tenant_features"
-    __extra_table_args__ = (UniqueConstraint("tenant_id", "feature_key", name="uq_tenant_feature"),)
-
-    id: Mapped[uuid.UUID] = uuid_pk()
-    feature_key: Mapped[str] = mapped_column(String(40), ForeignKey("features.key"), nullable=False)
-    status: Mapped[TenantFeatureStatus] = mapped_column(
-        Enum(
-            TenantFeatureStatus,
-            name="tenant_feature_status",
-            values_callable=lambda e: [m.value for m in e],
-        ),
-        nullable=False,
-        default=TenantFeatureStatus.INACTIVE,
-    )
-    activated_at: Mapped[date | None] = mapped_column(Date, nullable=True)
 
 
 class TenantConfig(Base, TenantScoped, TimestampMixin):
@@ -222,10 +191,16 @@ class PlatformSettings(Base, TimestampMixin):
     # Decisions section for why this is a value, not a re-read per call.
     invite_token_ttl_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=604800)
     reset_token_ttl_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=7200)
-    reminder_lead_hours: Mapped[int] = mapped_column(Integer, nullable=False, default=24)
     rent_due_days: Mapped[int] = mapped_column(Integer, nullable=False, default=7)
     rent_grace_days: Mapped[int] = mapped_column(Integer, nullable=False, default=7)
     rent_reminder_days_before_due: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+
+    # the platform's monthly bill — one flat fee per billable clinic, covering
+    # every module. Read into `Timings` with the knobs above, so one billing run
+    # bills every clinic at the same figure.
+    subscription_fee_monthly: Mapped[Decimal] = mapped_column(
+        Numeric(10, 2), nullable=False, default=0, server_default="0"
+    )
 
     # referral programme — what one completed referral is worth. Read
     # directly by `platform.create_tenant`, not folded into `Timings`: it is

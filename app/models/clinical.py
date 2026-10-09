@@ -35,6 +35,7 @@ from app.models.enums import (
     AppointmentStatus,
     DispenseStatus,
     EncounterStatus,
+    FollowUpOutcome,
     LabOrderStatus,
     QueuePriority,
     QueueStatus,
@@ -103,6 +104,74 @@ class Appointment(Base, TenantScoped, TimestampMixin):
     # per page, and the load runs on the same tenant-bound session as the query
     # that produced these rows.
     patient: Mapped[Patient] = relationship("Patient", lazy="selectin")
+
+
+class PatientNote(Base, TenantScoped, TimestampMixin):
+    """A clinician's note on a patient, outside any one consultation.
+
+    Notes are part of the record, so they are never rewritten: a note is
+    corrected by writing another that points at it (`amends_id`), and both stay.
+    A trigger refuses any change to a saved note's words, so no path through
+    the database can quietly overwrite one either.
+    """
+
+    __tablename__ = "patient_notes"
+    __extra_table_args__ = (
+        Index("ix_patient_notes_patient", "tenant_id", "patient_id", "created_at"),
+        CheckConstraint("length(btrim(body)) > 0", name="ck_patient_note_body"),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    patient_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("patients.id", ondelete="CASCADE"), nullable=False
+    )
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    # Who wrote it, as they were then: an account can be renamed, change role
+    # or be removed, and the note must still say who wrote it and in what capacity.
+    author_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    author_label: Mapped[str] = mapped_column(String(160), nullable=False, default="")
+    author_role: Mapped[str] = mapped_column(String(40), nullable=False, default="")
+    #: the earlier note this one corrects, if it is a correction
+    amends_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("patient_notes.id", ondelete="CASCADE"), nullable=True
+    )
+
+
+class FollowUpCall(Base, TenantScoped, TimestampMixin):
+    """One call to a patient about an upcoming appointment, and what came of it.
+
+    The log is append-only and is the whole history of a follow-up: every
+    attempt, who made it, and when. Where the follow-up stands now is worked
+    out from the last of these and the appointment itself, never stored twice.
+    """
+
+    __tablename__ = "follow_up_calls"
+    __extra_table_args__ = (
+        Index("ix_follow_up_calls_appointment", "tenant_id", "appointment_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    appointment_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("appointments.id", ondelete="CASCADE"), nullable=False
+    )
+    patient_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("patients.id", ondelete="CASCADE"), nullable=False
+    )
+    outcome: Mapped[FollowUpOutcome] = mapped_column(
+        _enum(FollowUpOutcome, "follow_up_outcome"), nullable=False
+    )
+    notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # The person, and their name as it was: an account can be renamed or
+    # removed, and the log must still say who rang.
+    called_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    called_by_label: Mapped[str] = mapped_column(String(160), nullable=False, default="")
+    # Only a `rescheduled` call moves anything: `YYYY-MM-DD HH:mm`, either side.
+    moved_from: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    moved_to: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
 
 class QueueEntry(Base, TenantScoped, TimestampMixin):

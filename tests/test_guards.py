@@ -1,4 +1,4 @@
-"""Feature entitlement and role permissions — steps 3 and 4 of the stack."""
+"""Every clinic has every module; role permissions are the gate — step 3 of the stack."""
 
 from __future__ import annotations
 
@@ -6,48 +6,140 @@ import pytest
 
 from tests.conftest import NORTHGATE, ROWAN, patients_of, sign_in
 
+#: One read route per operational module.
+MODULE_PATHS = {
+    "billing": "/v1/billing/invoices",
+    "pharmacy": "/v1/pharmacy/prescriptions",
+    "inventory": "/v1/inventory/items",
+    "lab": "/v1/lab/orders",
+}
 
-async def test_a_module_that_was_never_bought_is_refused(rowan):
-    """Rowan is on trial with lab only: billing, pharmacy and inventory are off."""
-    for path in ("/v1/billing/invoices", "/v1/pharmacy/prescriptions", "/v1/inventory/items"):
-        response = await rowan.get(path)
-        assert response.status_code == 403, path
-        assert response.json()["error"]["code"] == "feature_not_enabled"
-
-
-async def test_a_module_that_was_bought_is_reachable(rowan):
-    response = await rowan.get("/v1/lab/orders")
-    assert response.status_code == 200
+CORE_PATHS = ("/v1/patients", "/v1/appointments", "/v1/queue", "/v1/encounters", "/v1/prescriptions")
 
 
-async def test_core_modules_are_never_gated(rowan):
-    for path in ("/v1/patients", "/v1/appointments", "/v1/queue", "/v1/encounters", "/v1/prescriptions"):
-        assert (await rowan.get(path)).status_code == 200, path
+@pytest.mark.parametrize("module", ["billing", "pharmacy", "inventory", "lab"])
+async def test_every_module_answers_for_rowan(rowan, module):
+    """Rowan (on trial) used to have the lab and nothing else. Now it has all
+    of them: its practice admin holds every permission, so every one answers."""
+    response = await rowan.get(MODULE_PATHS[module])
+    assert response.status_code == 200, response.text
 
 
-async def test_buying_a_module_opens_it_and_dropping_it_closes_it_again(rowan):
-    assert (await rowan.get("/v1/billing/invoices")).status_code == 403
-
-    bought = await rowan.post("/v1/tenant/features/billing/purchase", json={})
-    assert bought.status_code == 200
-    assert bought.json()["status"] == "active"
-
-    assert (await rowan.get("/v1/billing/invoices")).status_code == 200
-
-    dropped = await rowan.post("/v1/tenant/features/billing/deactivate", json=None)
-    assert dropped.status_code == 200
-    assert (await rowan.get("/v1/billing/invoices")).status_code == 403
+@pytest.mark.parametrize("module", ["lab", "pharmacy", "billing", "inventory"])
+async def test_every_module_answers_for_clearview(clearview, module):
+    """Clearview never had the lab or the pharmacy switched on. It does not need to."""
+    response = await clearview.get(MODULE_PATHS[module])
+    assert response.status_code == 200, response.text
 
 
-async def test_core_modules_cannot_be_switched_off(rowan):
-    response = await rowan.post("/v1/tenant/features/patient/deactivate", json=None)
-    assert response.status_code == 409
+async def test_the_core_answers_for_every_clinic(northgate, clearview, rowan):
+    for signed in (northgate, clearview, rowan):
+        for path in CORE_PATHS:
+            assert (await signed.get(path)).status_code == 200, (signed.host, path)
 
 
-async def test_entitlement_is_per_clinic(rowan, northgate):
-    """Northgate bought pharmacy; Rowan did not. Same code, same route."""
-    assert (await northgate.get("/v1/pharmacy/prescriptions")).status_code == 200
-    assert (await rowan.get("/v1/pharmacy/prescriptions")).status_code == 403
+async def test_a_module_write_works_where_it_used_to_be_switched_off(rowan):
+    """Not just reads: Rowan can stock an item now, which inventory refused before."""
+    created = await rowan.post(
+        "/v1/inventory/items",
+        json={
+            "sku": "EVERY-MODULE-1", "name": "Every-module test gauze",
+            "unit": "pack", "category": "consumable", "reorder_level": 2,
+        },
+    )
+    assert created.status_code == 201, created.text
+
+
+@pytest.mark.parametrize(
+    ("account", "path"),
+    [
+        ("northgate_reception", "/v1/inventory/items"),
+        ("northgate_reception", "/v1/lab/orders"),
+        ("northgate_reception", "/v1/pharmacy/prescriptions"),
+        ("northgate_pharmacist", "/v1/lab/orders"),
+        ("northgate_lab", "/v1/pharmacy/prescriptions"),
+    ],
+)
+async def test_a_role_without_the_permission_is_still_refused(client, account, path):
+    """Having the module is not the same as being allowed in it."""
+    signed = await sign_in(client, account)
+    response = await signed.get(path)
+    assert response.status_code == 403, response.text
+    assert response.json()["error"]["code"] == "forbidden"
+
+
+async def test_another_clinics_module_row_is_not_found(northgate, rowan, clearview):
+    """Every clinic reaching every module does not mean reaching each other's
+    rows: Rowan asking for one of Northgate's invoices, or Clearview for one of
+    Northgate's lab orders, finds nothing — not a 403 that would confirm it."""
+    invoices = (await northgate.get("/v1/billing/invoices", params={"limit": 1})).json()["items"]
+    assert invoices
+    response = await rowan.get(f"/v1/billing/invoices/{invoices[0]['id']}")
+    assert response.status_code == 404
+
+    orders = (await northgate.get("/v1/lab/orders", params={"limit": 1})).json()["items"]
+    assert orders
+    response = await clearview.get(f"/v1/lab/orders/{orders[0]['id']}")
+    assert response.status_code == 404
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("GET", "/v1/tenant/features"),
+        ("GET", "/v1/tenant/feature-catalog"),
+        ("POST", "/v1/tenant/features/billing/purchase"),
+        ("POST", "/v1/tenant/features/billing/deactivate"),
+        ("GET", "/v1/catalog/features"),
+    ],
+)
+async def test_the_entitlement_routes_are_gone_from_the_clinic(rowan, method, path):
+    response = await (rowan.get(path) if method == "GET" else rowan.post(path, json={}))
+    assert response.status_code in (404, 405), (path, response.status_code)
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("GET", "/v1/platform/tenants/{tid}/features"),
+        ("PUT", "/v1/platform/tenants/{tid}/features/billing"),
+        ("GET", "/v1/platform/catalog/features"),
+        ("PATCH", "/v1/platform/catalog/features/billing"),
+    ],
+)
+async def test_the_entitlement_routes_are_gone_from_the_console(console, method, path):
+    tenants = (await console.get("/v1/platform/tenants")).json()
+    url = path.format(tid=tenants[0]["id"])
+    if method == "GET":
+        response = await console.get(url)
+    elif method == "PUT":
+        response = await console.put(url, json={"status": "active"})
+    else:
+        response = await console.patch(url, json={"price_monthly": 1})
+    assert response.status_code in (404, 405), (url, response.status_code)
+
+
+async def test_no_clinic_route_answers_feature_not_enabled(rowan, clearview):
+    """Walk every parameter-free GET a clinic can call: whatever each answers,
+    it is never the old entitlement refusal."""
+    from app.core import errors
+    from app.main import app
+
+    assert not hasattr(errors, "FeatureNotEnabled")
+
+    paths = sorted(
+        path
+        for path, operations in app.openapi()["paths"].items()
+        if "get" in operations
+        and path.startswith("/v1/")
+        and "{" not in path
+        and not path.startswith(("/v1/platform", "/v1/public"))
+    )
+    assert "/v1/billing/invoices" in paths
+    for signed in (rowan, clearview):
+        for path in paths:
+            response = await signed.get(path)
+            assert "feature_not_enabled" not in response.text, (signed.host, path)
 
 
 @pytest.mark.parametrize(

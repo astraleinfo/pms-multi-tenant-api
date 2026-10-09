@@ -1,4 +1,4 @@
-"""RBAC — step 4 of the middleware stack.
+"""RBAC — step 3 of the middleware stack.
 
 Permissions are named after what they let someone do, and each role gets an
 explicit set. Route handlers ask for a permission, never for a role, so adding
@@ -28,7 +28,8 @@ class Permission(str, Enum):
     # practice administration
     TENANT_CONFIG_READ = "tenant:config:read"
     TENANT_CONFIG_WRITE = "tenant:config:write"
-    TENANT_FEATURE_MANAGE = "tenant:feature:manage"
+    #: the clinic's own bill from the platform — the flat monthly fee
+    TENANT_SUBSCRIPTION_MANAGE = "tenant:subscription:manage"
     TENANT_FIELD_MANAGE = "tenant:field:manage"
     USER_READ = "user:read"
     USER_MANAGE = "user:manage"
@@ -45,7 +46,7 @@ class Permission(str, Enum):
     PRESCRIPTION_READ = "prescription:read"
     PRESCRIPTION_WRITE = "prescription:write"
 
-    # purchasable modules
+    # the operational modules — every clinic has them; the role decides who uses them
     PHARMACY_READ = "pharmacy:read"
     PHARMACY_DISPENSE = "pharmacy:dispense"
     LAB_ORDER = "lab:order"
@@ -68,6 +69,13 @@ class Permission(str, Enum):
     # see what went out without being able to send anything new.
     MESSAGE_READ = "message:read"
     MESSAGE_SEND = "message:send"
+
+    # Consent. Reading a form or a patient's consents, asking a patient for one
+    # (and taking their signature on the clinic's device), and changing the
+    # clinic's forms themselves — the last the practice admin's alone.
+    CONSENT_READ = "consent:read"
+    CONSENT_REQUEST = "consent:request"
+    CONSENT_MANAGE = "consent:manage"
 
 
 _CLINICAL_READ = {
@@ -97,6 +105,8 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.ANALYTICS_READ,
             Permission.MESSAGE_READ,
             Permission.MESSAGE_SEND,
+            Permission.CONSENT_READ,
+            Permission.CONSENT_REQUEST,
         }
     ),
     Role.DOCTOR: frozenset(
@@ -118,6 +128,8 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.ANALYTICS_READ,
             Permission.MESSAGE_READ,
             Permission.MESSAGE_SEND,
+            Permission.CONSENT_READ,
+            Permission.CONSENT_REQUEST,
         }
     ),
     Role.PHARMACIST: frozenset(

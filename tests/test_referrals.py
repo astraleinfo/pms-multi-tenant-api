@@ -253,8 +253,8 @@ async def test_settling_the_referred_clinics_first_bill_vests_the_referral(
     from app.services import rent as rent_service
 
     referred_id = await _referred_clinic(console, northgate, slug="vest-test-one")
-    # Give the referred clinic something billable, then raise and settle its bill.
-    await console.put(f"/v1/platform/tenants/{referred_id}/features/billing", json={"status": "active"})
+    # Make the referred clinic billable, then raise and settle its bill.
+    await console.patch(f"/v1/platform/tenants/{referred_id}/status", json={"status": "active"})
     today = date(2026, 10, 1)
     await rent_service.run_cycle(session_factory, today=today, tenant_ids=[referred_id])
     async with tenant_session(referred_id) as session:
@@ -281,7 +281,7 @@ async def test_vesting_a_second_bill_does_not_double_credit(console, northgate):
     from app.services import rent as rent_service
 
     referred_id = await _referred_clinic(console, northgate, slug="vest-test-two")
-    await console.put(f"/v1/platform/tenants/{referred_id}/features/billing", json={"status": "active"})
+    await console.patch(f"/v1/platform/tenants/{referred_id}/status", json={"status": "active"})
 
     for month in (date(2026, 10, 1), date(2026, 11, 1)):
         await rent_service.run_cycle(session_factory, today=month, tenant_ids=[referred_id])
@@ -332,7 +332,7 @@ async def _vested_referrer_with_balance(console, referrer, *, slug: str) -> None
     from app.services import rent as rent_service
 
     referred_id = await _referred_clinic(console, referrer, slug=slug)
-    await console.put(f"/v1/platform/tenants/{referred_id}/features/billing", json={"status": "active"})
+    await console.patch(f"/v1/platform/tenants/{referred_id}/status", json={"status": "active"})
     today = date(2026, 10, 1)
     await rent_service.run_cycle(session_factory, today=today, tenant_ids=[referred_id])
     async with tenant_session(referred_id) as session:
@@ -351,13 +351,11 @@ async def _vested_referrer_with_balance(console, referrer, *, slug: str) -> None
 async def test_a_vested_credit_comes_off_the_referrers_next_bill(console, northgate, northgate_id):
     await console.patch("/v1/platform/settings", json={"referral_credit_amount": 50})
     await _vested_referrer_with_balance(console, northgate, slug="redeem-test-small")
-
-    await console.put(f"/v1/platform/tenants/{northgate_id}/features/billing", json={"status": "active"})
     today = date(2026, 10, 1)
     await rent.run_cycle(session_factory, today=today, tenant_ids=[northgate_id])
 
     [bill] = await _bills(northgate_id)
-    credit_line = next(line for line in bill.lines if line["feature_key"] == "referral_credit")
+    credit_line = next(line for line in bill.lines if line.get("feature_key") == "referral_credit")
     assert credit_line["amount"] == -50.0
 
     program = (await northgate.get("/v1/tenant/referrals")).json()
@@ -370,15 +368,13 @@ async def test_a_credit_larger_than_the_bill_clamps_at_zero_and_carries_forward(
 ):
     await console.patch("/v1/platform/settings", json={"referral_credit_amount": 999999})
     await _vested_referrer_with_balance(console, northgate, slug="redeem-test-large")
-
-    await console.put(f"/v1/platform/tenants/{northgate_id}/features/billing", json={"status": "active"})
     today = date(2026, 10, 1)
     await rent.run_cycle(session_factory, today=today, tenant_ids=[northgate_id])
 
     [bill] = await _bills(northgate_id)
     assert float(bill.amount) == 0.0
-    credit_line = next(line for line in bill.lines if line["feature_key"] == "referral_credit")
-    gross = sum(line["amount"] for line in bill.lines if line["feature_key"] != "referral_credit")
+    credit_line = next(line for line in bill.lines if line.get("feature_key") == "referral_credit")
+    gross = sum(line["amount"] for line in bill.lines if line.get("feature_key") != "referral_credit")
     assert credit_line["amount"] == pytest.approx(-gross)
 
     program = (await northgate.get("/v1/tenant/referrals")).json()
@@ -399,7 +395,6 @@ async def test_a_bill_covered_in_full_by_credit_is_born_paid_and_never_puts_the_
     await console.patch("/v1/platform/settings", json={"referral_credit_amount": 999999})
     try:
         await _vested_referrer_with_balance(console, northgate, slug="redeem-test-born-paid")
-        await console.put(f"/v1/platform/tenants/{northgate_id}/features/billing", json={"status": "active"})
         outbox.clear()
 
         issued = date(2026, 10, 1)
@@ -446,7 +441,6 @@ async def test_running_the_cycle_twice_does_not_redeem_the_credit_twice(
     console, northgate, northgate_id
 ):
     await _vested_referrer_with_balance(console, northgate, slug="redeem-test-idempotent")
-    await console.put(f"/v1/platform/tenants/{northgate_id}/features/billing", json={"status": "active"})
     today = date(2026, 10, 1)
 
     await rent.run_cycle(session_factory, today=today, tenant_ids=[northgate_id])
@@ -463,7 +457,6 @@ async def test_the_next_bill_preview_agrees_with_the_bill_that_gets_raised(
     console, northgate, northgate_id
 ):
     await _vested_referrer_with_balance(console, northgate, slug="redeem-test-preview")
-    await console.put(f"/v1/platform/tenants/{northgate_id}/features/billing", json={"status": "active"})
 
     preview = (await northgate.get("/v1/tenant/subscription")).json()["plan"]
     await rent.run_cycle(session_factory, today=date(2026, 10, 1), tenant_ids=[northgate_id])
@@ -483,7 +476,6 @@ async def test_one_clinics_redemption_never_touches_another_clinics_balance(
     assert before == 0
 
     await _vested_referrer_with_balance(console, northgate, slug="isolation-test")
-    await console.put(f"/v1/platform/tenants/{northgate_id}/features/billing", json={"status": "active"})
     await rent.run_cycle(session_factory, today=date(2026, 10, 1), tenant_ids=[northgate_id])
 
     after = (await clearview.get("/v1/tenant/referrals")).json()["balance"]
@@ -495,7 +487,6 @@ async def test_one_clinics_redemption_never_touches_another_clinics_balance(
 
 async def test_voiding_a_bill_returns_its_redeemed_credit(console, northgate, northgate_id):
     await _vested_referrer_with_balance(console, northgate, slug="void-test")
-    await console.put(f"/v1/platform/tenants/{northgate_id}/features/billing", json={"status": "active"})
     await rent.run_cycle(session_factory, today=date(2026, 10, 1), tenant_ids=[northgate_id])
 
     [bill] = await _bills(northgate_id)
@@ -510,7 +501,7 @@ async def test_voiding_a_bill_returns_its_redeemed_credit(console, northgate, no
     after = (await northgate.get("/v1/tenant/referrals")).json()["balance"]
     assert after == pytest.approx(
         before + next(
-            -line["amount"] for line in bill.lines if line["feature_key"] == "referral_credit"
+            -line["amount"] for line in bill.lines if line.get("feature_key") == "referral_credit"
         )
     )
 
@@ -524,7 +515,6 @@ async def test_a_bill_paid_in_full_by_credit_can_still_be_voided_and_returns_the
     await console.patch("/v1/platform/settings", json={"referral_credit_amount": 999999})
     try:
         await _vested_referrer_with_balance(console, northgate, slug="void-test-born-paid")
-        await console.put(f"/v1/platform/tenants/{northgate_id}/features/billing", json={"status": "active"})
         await rent.run_cycle(session_factory, today=date(2026, 10, 1), tenant_ids=[northgate_id])
 
         [bill] = await _bills(northgate_id)
@@ -541,14 +531,13 @@ async def test_a_bill_paid_in_full_by_credit_can_still_be_voided_and_returns_the
         assert bill_after.paid_at is None
         after = (await northgate.get("/v1/tenant/referrals")).json()["balance"]
         assert after == pytest.approx(before + next(
-            -line["amount"] for line in bill.lines if line["feature_key"] == "referral_credit"
+            -line["amount"] for line in bill.lines if line.get("feature_key") == "referral_credit"
         ))
     finally:
         await console.patch("/v1/platform/settings", json={"referral_credit_amount": 100})
 
 
 async def test_a_bill_paid_with_real_money_still_cannot_be_voided(console, northgate_id):
-    await console.put(f"/v1/platform/tenants/{northgate_id}/features/billing", json={"status": "active"})
     await rent.run_cycle(session_factory, today=date(2026, 10, 1), tenant_ids=[northgate_id])
     [bill] = await _bills(northgate_id)
     settled = await console.post(

@@ -6,7 +6,7 @@ from typing import Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Query, Response, status
 
-from app.api.deps import TenantContext, parse_uuid, require_feature, require_permission
+from app.api.deps import TenantContext, parse_uuid, require_permission
 from app.core.events import broker
 from app.core.permissions import Permission
 from app.models.enums import DispenseStatus, FieldEntity
@@ -190,14 +190,14 @@ async def create_prescription(
     return PrescriptionOut.of(prescription, ctx.tz)
 
 
-# --- lab orders from a consultation (§3.10, feature-gated) -------------------
+# --- lab orders from a consultation (§3.10) -----------------------------------
 
 
 @router.post("/{encounter_id}/lab-orders", response_model=list[LabOrderOut], status_code=201)
 async def order_labs(
     encounter_id: str,
     payload: LabOrderIn,
-    ctx: TenantContext = Depends(require_feature("lab", Permission.LAB_ORDER)),
+    ctx: TenantContext = Depends(require_permission(Permission.LAB_ORDER)),
 ) -> list[LabOrderOut]:
     orders = await lab_service.create_orders(
         ctx.session,
@@ -218,7 +218,7 @@ async def order_labs(
 async def encounter_lab_results(
     encounter_id: str,
     include_unverified: bool = Query(default=False),
-    ctx: TenantContext = Depends(require_feature("lab", Permission.LAB_READ)),
+    ctx: TenantContext = Depends(require_permission(Permission.LAB_READ)),
 ) -> list[LabOrderOut]:
     """Verified results only by default — that is what "verified" is for."""
     orders = await lab_service.results_for_encounter(

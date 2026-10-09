@@ -42,11 +42,6 @@ BODIES: dict[MessageTemplate, str] = {
         "{clinic_name}: Hi {patient_name}, your appointment on {weekday} {date} at {time} "
         "has been cancelled. To book a new time, {contact}."
     ),
-    MessageTemplate.APPOINTMENT_REMINDER: (
-        "{clinic_name}: Reminder, {patient_name} - you're seeing {doctor_name} "
-        "{weekday} {date} at {time}. Please arrive 10 min early. "
-        "Can't make it? Please {contact}."
-    ),
     MessageTemplate.FOLLOW_UP: (
         "{clinic_name}: Hi {patient_name}, thank you for visiting. Any questions about "
         "your visit or treatment? Please {contact}."

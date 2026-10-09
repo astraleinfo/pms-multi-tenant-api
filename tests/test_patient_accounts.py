@@ -638,9 +638,9 @@ async def test_another_clinics_patient_has_no_account_here(northgate, clearview)
     ).status_code == 404
 
 
-async def test_reading_an_account_needs_the_billing_module(rowan):
-    """Rowan has not bought billing, so the guard answers before anything runs."""
+async def test_every_clinic_can_read_its_own_patients_accounts(rowan):
+    """Rowan never had billing switched on. Every clinic has it now: its
+    practice admin reads a patient's account like any other clinic's would."""
     patient = (await rowan.get("/v1/patients", params={"limit": 1})).json()["items"][0]
-    refused = await rowan.get(f"/v1/billing/patients/{patient['id']}/account")
-    assert refused.status_code == 403
-    assert refused.json()["error"]["code"] == "feature_not_enabled"
+    account = await rowan.get(f"/v1/billing/patients/{patient['id']}/account")
+    assert account.status_code == 200, account.text

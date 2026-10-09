@@ -154,36 +154,6 @@ async def test_booking_queues_a_confirmation(northgate):
     assert "11:15" in confirmations[0]["body"]
 
 
-async def test_cancelling_an_appointment_cancels_its_reminder(northgate):
-    await _enable_console(northgate)
-    patient = await _patient_with_phone(northgate)
-    doctors = (await northgate.get("/v1/users/doctors")).json()
-
-    booking = (
-        await northgate.post(
-            "/v1/appointments",
-            json={
-                "patient_id": patient["id"], "doctor_id": doctors[0]["id"],
-                "date": "2027-04-08", "time": "09:40", "duration_min": 20,
-                "reason": "cancellation test", "created_via": "front_desk",
-            },
-        )
-    ).json()
-
-    await northgate.patch(f"/v1/appointments/{booking['id']}/status", json={"status": "cancelled"})
-
-    messages = (await northgate.get("/v1/messages", params={"patient_id": patient["id"]})).json()
-    mine = [m for m in messages["items"] if m["appointment_id"] == booking["id"]]
-
-    # The reminder is stood down...
-    reminders = [m for m in mine if m["template"] == "appointment_reminder"]
-    assert reminders and all(m["status"] == "cancelled" for m in reminders)
-
-    # ...but the notice telling the patient it was cancelled is itself sendable.
-    notices = [m for m in mine if m["template"] == "appointment_cancelled"]
-    assert notices and all(m["status"] in ("queued", "sent") for m in notices)
-
-
 # ------------------------------------------------------------------- isolation
 
 
@@ -235,37 +205,6 @@ async def test_worker_delivers_and_respects_tenant_binding(northgate):
     assert sent["status"] == "sent"
     assert sent["provider"] == "console"
     assert sent["sent_at"]
-
-
-async def test_a_reminder_is_not_sent_before_it_is_due(northgate):
-    from app.services.messaging.worker import drain
-
-    await _enable_console(northgate)
-    patient = await _patient_with_phone(northgate)
-    doctors = (await northgate.get("/v1/users/doctors")).json()
-
-    booking = (
-        await northgate.post(
-            "/v1/appointments",
-            json={
-                "patient_id": patient["id"], "doctor_id": doctors[0]["id"],
-                "date": "2027-09-21", "time": "10:30", "duration_min": 20,
-                "reason": "reminder timing", "created_via": "front_desk",
-            },
-        )
-    ).json()
-
-    await drain()
-
-    messages = (await northgate.get("/v1/messages", params={"patient_id": patient["id"]})).json()
-    reminder = next(
-        m for m in messages["items"]
-        if m["appointment_id"] == booking["id"] and m["template"] == "appointment_reminder"
-    )
-    # Still waiting, a year out - scheduled, with no job, and the sweep must
-    # not have sent it early.
-    assert reminder["status"] == "scheduled"
-    assert reminder["job_id"] is None
 
 
 async def test_a_refused_send_is_parked_not_retried(northgate, monkeypatch):
@@ -354,6 +293,24 @@ async def _book(signed, date: str, time: str, reason: str) -> dict:
     return response.json()
 
 
+async def test_booking_queues_no_reminder(northgate):
+    await _enable_console(northgate)
+    booking = await _book(northgate, "2027-04-08", "09:40", "no reminder")
+
+    messages = (await northgate.get("/v1/messages", params={"limit": 0})).json()["items"]
+    mine = [m for m in messages if m["appointment_id"] == booking["id"]]
+    assert [m["template"] for m in mine] == ["booking_confirmation"]
+
+
+async def test_a_reminder_cannot_be_sent_by_hand(northgate):
+    await _enable_console(northgate)
+    patient = await _patient_with_phone(northgate)
+    response = await northgate.post(
+        "/v1/messages", json={"patient_id": patient["id"], "template": "appointment_reminder"}
+    )
+    assert response.status_code == 409
+
+
 async def test_moving_an_appointment_tells_the_patient_both_slots(northgate):
     await _enable_console(northgate)
     booking = await _book(northgate, "2027-11-09", "09:20", "reschedule notice")
@@ -373,25 +330,6 @@ async def test_moving_an_appointment_tells_the_patient_both_slots(northgate):
     # The message is only useful if it names where it moved from and to.
     assert "09 Nov 2027" in notice["body"] and "09:20" in notice["body"]
     assert "16 Nov 2027" in notice["body"] and "14:40" in notice["body"]
-
-
-async def test_moving_an_appointment_re_times_the_reminder(northgate):
-    await _enable_console(northgate)
-    booking = await _book(northgate, "2027-12-02", "10:00", "reminder re-timing")
-
-    await northgate.patch(f"/v1/appointments/{booking['id']}", json={"date": "2028-01-20"})
-
-    messages = (await northgate.get("/v1/messages", params={"limit": 0})).json()["items"]
-    reminders = [
-        m for m in messages
-        if m["appointment_id"] == booking["id"] and m["template"] == "appointment_reminder"
-    ]
-    # One reminder, moved with the appointment rather than replaced: still
-    # waiting for its day, and now naming the new slot.
-    assert len(reminders) == 1
-    assert reminders[0]["status"] == "scheduled"
-    assert "20 Jan 2028" in reminders[0]["body"]
-    assert reminders[0]["send_after"].startswith("2028-01-19")
 
 
 async def test_an_appointment_can_be_moved_twice(northgate):
@@ -470,52 +408,3 @@ async def test_another_clinic_cannot_move_our_appointment(northgate, clearview):
     booking = await _book(northgate, "2028-07-19", "09:40", "isolation")
     response = await clearview.patch(f"/v1/appointments/{booking['id']}", json={"time": "10:40"})
     assert response.status_code == 404
-
-
-async def test_a_shorter_reminder_lead_time_moves_the_send_after(console, northgate):
-    """`queue_message` must read the patched setting, not the old 24-hour
-    default it used to reach for as a module-level global."""
-    import uuid
-    from datetime import date, datetime, timedelta, time as time_t, timezone
-
-    from sqlalchemy import select
-
-    from app.db.session import tenant_session
-    from app.models.enums import MessageTemplate
-    from app.models.messaging import Message
-    from app.models.tenancy import Tenant
-    from app.schemas.common import zone
-
-    await console.patch("/v1/platform/settings", json={"reminder_lead_hours": 2})
-
-    await _enable_console(northgate)
-    patient = await _patient_with_phone(northgate)
-    doctors = (await northgate.get("/v1/users/doctors")).json()
-    booking = (
-        await northgate.post(
-            "/v1/appointments",
-            json={
-                "patient_id": patient["id"], "doctor_id": doctors[0]["id"],
-                "date": "2027-11-02", "time": "14:00", "duration_min": 20,
-                "reason": "timing knob test", "created_via": "front_desk",
-            },
-        )
-    ).json()
-
-    tenant_id = uuid.UUID((await northgate.get("/v1/auth/me")).json()["tenant_id"])
-    async with tenant_session(tenant_id) as session:
-        tenant = await session.get(Tenant, tenant_id)
-        reminder = (
-            await session.execute(
-                select(Message).where(
-                    Message.appointment_id == uuid.UUID(booking["id"]),
-                    Message.template == MessageTemplate.APPOINTMENT_REMINDER,
-                )
-            )
-        ).scalar_one()
-
-    slot = datetime.combine(date(2027, 11, 2), time_t(14, 0), tzinfo=zone(tenant.timezone))
-    expected = slot.astimezone(timezone.utc) - timedelta(hours=2)
-    assert abs((reminder.send_after - expected).total_seconds()) < 1, (
-        "reminder should now lead the slot by 2 hours (the patched setting), not the 24-hour default"
-    )

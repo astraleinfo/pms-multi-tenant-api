@@ -14,6 +14,7 @@ from datetime import datetime
 from sqlalchemy import DateTime, ForeignKey, Index, func
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, declared_attr, mapped_column
+from uuid_utils.compat import uuid7
 
 
 class Base(DeclarativeBase):
@@ -21,7 +22,11 @@ class Base(DeclarativeBase):
 
 
 def uuid_pk() -> Mapped[uuid.UUID]:
-    return mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    """UUIDv7: time-ordered, so a new row lands at the end of the primary-key
+    index instead of a random page of it — what keeps inserts and the index
+    size in check once a table runs to millions of rows. Rows made before the
+    switch keep their v4 ids; the two mix freely."""
+    return mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid7)
 
 
 class TimestampMixin:

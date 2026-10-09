@@ -79,8 +79,9 @@ tenant in the topbar becomes a link to the other clinic's subdomain, which it al
 | `setUserPassword` | `POST /v1/users/{id}/password` — an admin setting a colleague's; the first one accepts an invitation, and none of them unlock a locked account |
 | `setUserStatus` | `PATCH /v1/users/{id}/status` |
 | `savePreferences` | `PATCH /v1/auth/me/preferences` — the signed-in person's own interface state |
-| `listFeatures` | `GET /v1/tenant/features` |
-| `purchaseFeature` / `deactivateFeature` | `POST /v1/tenant/features/{key}/purchase` / `.../deactivate` |
+| `listFeatures` / `purchaseFeature` / `deactivateFeature` | **removed, no replacement** — every clinic has every module. `GET /v1/tenant/features`, `/tenant/feature-catalog`, `/tenant/features/{key}/purchase`, `.../deactivate` and `/catalog/features` answer `404`/`405` |
+| `getSubscription` | `GET /v1/tenant/subscription` — `plan` is `{price_monthly, billed, not_billed_reason, monthly_total}`: one flat clinic fee, no per-module list; bill `lines` are `{name, amount}` |
+| `createSupportRequest` | `POST /v1/tenant/support-requests` — `kind` is `walkthrough` or `general` (no `activation`, no `feature_key`) |
 | `getConfig` / `updateConfig` | `GET` / `PATCH /v1/tenant/config` |
 | `listFieldDefinitions` | `GET /v1/tenant/fields` |
 | `getSchema` | `GET /v1/tenant/schema/{entity}` — the clinical type is the server's, so the argument goes away |
@@ -88,10 +89,13 @@ tenant in the topbar becomes a link to the other clinic's subdomain, which it al
 | `listPatients` | `GET /v1/patients?search=&limit=&offset=&sort=&order=` — returns `{items, total, limit, offset}` |
 | `getPatient` / `createPatient` / `updatePatient` | `GET|POST /v1/patients`, `PATCH /v1/patients/{id}` |
 | `getPatientHistory` | `GET /v1/patients/{id}/history` |
+| `listPatientNotes` / `addPatientNote` | `GET|POST /v1/patients/{id}/notes` — read under `encounter:read`, written under `encounter:write`; no edit or delete, a correction sends `amends_id` (its author only) |
 | `listAppointments` / `createAppointment` | `GET|POST /v1/appointments` — paged; also `date=`, `doctor_id=`, `search=` |
 | `conflictsFor` | `GET /v1/appointments/availability` — now async |
 | `setAppointmentStatus` | `PATCH /v1/appointments/{id}/status` |
 | `checkIn` | `POST /v1/appointments/{id}/checkin` |
+| `listFollowUps` | `GET /v1/follow-ups?days=&date=&status=&doctor_id=&search=&limit=&offset=` — the call list; `{items, total, counts, today}`, counts taken before `date`/`status` |
+| `listFollowUpCalls` / `recordFollowUpCall` | `GET|POST /v1/follow-ups/{appointment_id}/calls` — a `rescheduled` call carries `new_slot` and is checked against the diary under a lock (409 if taken, 422 if past or outside the clinic's day); `declined` may set `cancel_appointment` |
 | `listQueue` / `addWalkIn` / `setQueueStatus` | `GET /v1/queue`, `POST /v1/queue/walkin`, `PATCH /v1/queue/{id}/status` |
 | `listEncounters` / `getEncounter` | `GET /v1/encounters` (paged; `search=`, `patient_id=`), `GET /v1/encounters/{id}` |
 | `createEncounter` | `POST /v1/encounters` — `sign` is a field on the body |
@@ -106,7 +110,8 @@ tenant in the topbar becomes a link to the other clinic's subdomain, which it al
 | `recordStockMovement` | `POST /v1/inventory/transactions` |
 | `listInvoices` / `getInvoice` / `createInvoice` | `GET /v1/billing/invoices` (paged; `status=`, `unpaid=`, `search=`, `counts`), `GET|POST /v1/billing/invoices/{id}` |
 | `addPayment` / `issueInvoice` / `voidInvoice` | `POST /v1/billing/invoices/{id}/payments`, `.../issue`, `.../void` |
-| `createTenant` / `setTenantStatus` | `POST /v1/platform/tenants`, `PATCH /v1/platform/tenants/{id}/status` |
+| `createTenant` / `setTenantStatus` | `POST /v1/platform/tenants`, `PATCH /v1/platform/tenants/{id}/status` — a new clinic has every module at once; nothing is seeded or switched on |
+| console module switches and prices | **removed, no replacement** — `/v1/platform/tenants/{id}/features[/{key}]` and `/v1/platform/catalog/features[/{key}]` are gone. The one price is `subscription_fee_monthly` on `GET|PATCH /v1/platform/settings` (super admin), echoed as `fee_monthly` on `GET /v1/platform/billing` |
 | `listJobs` / `getJob` (console) | `GET /v1/platform/jobs`, `GET /v1/platform/jobs/tasks/{id}` — super admin only |
 | `openFlowerSession` / `closeFlowerSession` | `POST` / `DELETE /v1/platform/jobs/flower-session` |
 
@@ -194,8 +199,9 @@ filtering, sorting and slicing what it was handed, and reports each change back 
 Searching is debounced before it is sent.
 
 **Nothing derives analytics in the browser any more.** `useAnalytics(days)` is one request, and
-the panels that render are the ones the API sent — a module a clinic never bought has no key in
-the response, so the client does not need a feature check to decide what to compute. The old
+the panels that render are the ones the API sent — and since every clinic has every module,
+`modules` always carries `pharmacy`, `lab`, `inventory`, `billing` and `advanced_reports` (with the
+money taken out for a role without `revenue:read`). The client never decides what to compute. The old
 `src/lib/analytics.ts` is gone, along with `dashboardMetrics` and the client-side patient
 history: `GET /patients/{id}/history` composes that across every module server-side.
 
@@ -215,18 +221,18 @@ Small, and all of it in the same direction — the server is now the authority:
   `p1`/`e3` become UUIDs.
 * **`User.password` is gone.** The **Demo accounts** disclosure on the login screens should list
   the accounts as text rather than reading them from a row.
-* **`initialData` seeds come off.** The entitlements, configuration and tenant queries now start
-  as pending, and the shell shows its loading state instead — the front-end README already
+* **`initialData` seeds come off.** The configuration and tenant queries now start as pending, and the shell shows its loading state instead — the front-end README already
   anticipates this.
 * **`conflictsFor` becomes async.** It is a request now, so the booking dialog awaits it.
-* **`hasFeature` still shapes the UI**, but the server is the enforcement: a gated route answers
-  `403 feature_not_enabled` regardless of what the nav shows.
+* **There is no `hasFeature`.** Every clinic has every module, and `GET /v1/auth/me` carries no
+  `features` list. What shapes the UI is `permissions`; the server enforces the same ones, so a
+  route a role may not use answers `403 forbidden` regardless of what the nav shows.
 * **Errors have a shape.** `{ "error": { "code", "message", "details" }, "request_id" }` —
   `message` is written to be shown to a person, so a toast can print it directly. Worth handling
-  by code: `feature_not_enabled` (offer the upgrade), `forbidden` (role), `account_locked`,
+  by code: `forbidden` (role), `account_on_hold` (unpaid subscription bill), `account_locked`,
   `rate_limited`, `conflict` (a state machine or a booking clash refused the change).
 * **Analytics can come from the server.** `GET /v1/analytics/dashboard` returns the core metrics,
-  module panels for active features only, and clinical-type figures from `clinical_ext`. The
+  every module panel, and clinical-type figures from `clinical_ext`. The
   client-side `lib/analytics.ts` derivations stay for the charts that need per-day series.
 * **"Today" is the clinic's.** `GET /v1/tenant` carries `today` and `timezone`, and the app sets
   its formatter from those — so a practice and the screen in its waiting room never disagree

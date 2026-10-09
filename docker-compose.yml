@@ -74,7 +74,7 @@ services:
       # The web app serves this API under /api, so that is the path Flower's
       # own links have to be built from. Both containers are told the same one.
       FLOWER_URL_PREFIX: api/v1/platform/jobs/flower
-      # Off unless set in the shell or .env — e.g. to try a Sentry project.
+      # Ignored here: only ENVIRONMENT=production reports errors.
       ERROR_REPORTER: ${ERROR_REPORTER:-none}
       SENTRY_DSN: ${SENTRY_DSN:-}
     ports:

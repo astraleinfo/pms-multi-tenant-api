@@ -17,14 +17,11 @@ from decimal import Decimal
 from reportlab.graphics.charts.barcharts import VerticalBarChart
 from reportlab.graphics.shapes import Drawing, Rect, String
 from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.platypus import (
-    HRFlowable,
     KeepTogether,
     Paragraph,
-    SimpleDocTemplate,
     Spacer,
     Table,
     TableStyle,
@@ -39,8 +36,6 @@ from app.services.pdf import (
     _ACCENT_SOFT,
     _BODY,
     _BODY_SM,
-    _CLINIC,
-    _EYEBROW,
     _FOOT,
     _HEADER_BG,
     _INK,
@@ -54,6 +49,13 @@ from app.services.pdf import (
     _TD,
     _TH,
     _TITLE,
+    _logo_flowable,
+    document,
+    esc,
+    letterhead,
+    monogram,
+    paged,
+    person,
 )
 
 _OK = colors.HexColor("#1f7a4d")
@@ -97,9 +99,7 @@ def money(amount: float | Decimal | int | None, code: str) -> str:
     return f"{code} {float(amount or 0):,.2f}".strip()
 
 
-def _esc(text: str | None) -> str:
-    """Paragraph text is a mini-markup, so user text is escaped before it goes in."""
-    return (text or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+_esc = esc
 
 
 def _plain(table: Table, extra: list | None = None) -> Table:
@@ -128,40 +128,6 @@ def _grid(rows: list[list], widths: list[float], *, numeric_from: int | None = N
     return table
 
 
-def _letterhead(doc, *, clinic: str, config: TenantConfig | None, right: list) -> Table:
-    """Clinic name and contact on the left, the document's own facts on the right."""
-    contact = []
-    if config is not None:
-        if config.address:
-            contact.append(_esc(config.address).replace("\n", "<br/>"))
-        line = " · ".join(_esc(v) for v in (config.contact_phone, config.contact_email) if v)
-        if line:
-            contact.append(line)
-    left = [Paragraph(_esc(clinic or "Clinic").upper(), _CLINIC)]
-    if contact:
-        left.append(Spacer(1, 3))
-        left.append(Paragraph("<br/>".join(contact), _BODY_SM))
-    return _plain(
-        Table([[left, right]], colWidths=[doc.width * 0.58, doc.width * 0.42]),
-    )
-
-
-def _footer_for(note: str):
-    def draw(canvas, doc) -> None:  # noqa: ANN001 - reportlab's callback signature
-        canvas.saveState()
-        canvas.setStrokeColor(_LINE)
-        canvas.setLineWidth(0.5)
-        y = 14 * mm
-        canvas.line(doc.leftMargin, y + 8, doc.pagesize[0] - doc.rightMargin, y + 8)
-        canvas.setFont("Helvetica", 7.5)
-        canvas.setFillColor(_INK_3)
-        canvas.drawString(doc.leftMargin, y - 2, note)
-        canvas.drawRightString(doc.pagesize[0] - doc.rightMargin, y - 2, f"Page {doc.page}")
-        canvas.restoreState()
-
-    return draw
-
-
 def _stamp(label: str, ink, ground) -> Table:
     stamp = Table([[Paragraph(
         label,
@@ -187,39 +153,21 @@ def build_invoice_pdf(
     clinic: str,
     config: TenantConfig | None,
     currency: str,
+    logo: bytes | None = None,
 ) -> bytes:
     """One invoice, as the patient is handed it."""
     buf = io.BytesIO()
-    doc = SimpleDocTemplate(
-        buf, pagesize=A4,
-        topMargin=16 * mm, bottomMargin=22 * mm, leftMargin=18 * mm, rightMargin=18 * mm,
-        title=f"Invoice {invoice.number}", author=clinic,
-    )
+    doc = document(buf, title=f"Invoice {invoice.number}", author=clinic)
     status = InvoiceStatus(invoice.status)
     label, ink, ground = _STATUS_LOOK[status]
-    story: list = []
-
-    facts = _plain(
-        Table(
-            [
-                [Paragraph("INVOICE", ParagraphStyle(
-                    "InvWord", parent=_TITLE, alignment=2, textColor=_ACCENT, fontSize=20, leading=23,
-                ))],
-                [Paragraph(f"<b>{_esc(invoice.number)}</b>", _RIGHT)],
-                [Paragraph(
-                    f"Issued {invoice.issued_at.strftime('%d %b %Y')}<br/>"
-                    f"Due {invoice.due_at.strftime('%d %b %Y')}",
-                    ParagraphStyle("Dates", parent=_BODY_SM, alignment=2, textColor=_INK_2),
-                )],
-            ],
-            colWidths=[doc.width * 0.42],
-        ),
-        [("TOPPADDING", (0, 1), (-1, -1), 2)],
+    story: list = letterhead(
+        doc, clinic=clinic, config=config, logo=logo,
+        kind="Invoice", ref=invoice.number,
+        facts=[
+            f"Issued {invoice.issued_at.strftime('%d %b %Y')}",
+            f"Due <b>{invoice.due_at.strftime('%d %b %Y')}</b>",
+        ],
     )
-    story.append(_letterhead(doc, clinic=clinic, config=config, right=[facts]))
-    story.append(Spacer(1, 10))
-    story.append(HRFlowable(width="100%", thickness=1.4, color=_ACCENT))
-    story.append(Spacer(1, 12))
 
     patient = invoice.patient
     bill_to = [
@@ -311,11 +259,7 @@ def build_invoice_pdf(
         terms.append(f"Questions about this invoice: {_esc(config.contact_phone)}.")
     story.append(KeepTogether([Paragraph(" ".join(terms), _FOOT)]))
 
-    doc.build(
-        story,
-        onFirstPage=_footer_for(f"{clinic} · Invoice {invoice.number}"),
-        onLaterPages=_footer_for(f"{clinic} · Invoice {invoice.number}"),
-    )
+    doc.build(story, canvasmaker=paged(f"{clinic} · Invoice {invoice.number}"))
     return buf.getvalue()
 
 
@@ -403,15 +347,12 @@ def build_report_pdf(
     currency: str,
     generated_by: str,
     tz: str | None = None,
+    logo: bytes | None = None,
 ) -> bytes:
     """The practice report for one window — the figures the reports page shows,
     in a form that can be filed, emailed to an owner, or printed for a meeting."""
     buf = io.BytesIO()
-    doc = SimpleDocTemplate(
-        buf, pagesize=A4,
-        topMargin=16 * mm, bottomMargin=22 * mm, leftMargin=18 * mm, rightMargin=18 * mm,
-        title=f"Practice report — {clinic}", author=clinic,
-    )
+    doc = document(buf, title=f"Practice report — {clinic}", author=clinic)
     rng = data["range"]
     start, end = date.fromisoformat(rng["from"]), date.fromisoformat(rng["to"])
     core = data["core"]
@@ -420,20 +361,14 @@ def build_report_pdf(
     money_shown = data.get("revenue_visible", True)
     cash = lambda v: money(v, currency)  # noqa: E731 - a one-line formatter
 
-    story: list = []
-    period = _plain(Table([
-        [Paragraph(
-            f"{start.strftime('%d %b %Y')} – {end.strftime('%d %b %Y')}<br/>"
-            f"{rng['days']} days · generated {local_now(tz).strftime('%d %b %Y, %H:%M')}",
-            ParagraphStyle("Period", parent=_BODY_SM, alignment=2, textColor=_INK_2),
-        )],
-    ], colWidths=[doc.width * 0.42]))
-    story.append(_letterhead(doc, clinic=clinic, config=config, right=[period]))
-    story.append(Spacer(1, 8))
-    story.append(Paragraph("PRACTICE REPORT", _EYEBROW))
+    story: list = letterhead(
+        doc, clinic=clinic, config=config, logo=logo,
+        kind="Practice report",
+        ref=f"{start.strftime('%d %b')} – {end.strftime('%d %b %Y')}",
+        facts=[f"{rng['days']} days", f"Generated {local_now(tz).strftime('%d %b %Y, %H:%M')}"],
+        gap=4,
+    )
     story.append(Paragraph("How the practice ran", _TITLE))
-    story.append(Spacer(1, 8))
-    story.append(HRFlowable(width="100%", thickness=1.4, color=_ACCENT))
     story.append(Spacer(1, 12))
 
     story.append(_kpis(doc, [
@@ -535,27 +470,27 @@ def build_report_pdf(
 
     story.append(Spacer(1, 16))
     story.append(Paragraph(
-        f"Prepared for {_esc(generated_by)}. Figures are computed from the clinic's own records "
+        f"Prepared for {_esc(person(generated_by))}. Figures are computed from the clinic's own records "
         "for the period shown; totals on other screens for the same period will match.",
         _FOOT,
     ))
 
-    note = f"{clinic} · Practice report {start.isoformat()} to {end.isoformat()}"
-    doc.build(story, onFirstPage=_footer_for(note), onLaterPages=_footer_for(note))
+    note = f"{clinic} · Practice report {start.strftime('%d %b %Y')} – {end.strftime('%d %b %Y')}"
+    doc.build(story, canvasmaker=paged(note))
     return buf.getvalue()
 
 
 # --- the platform's own bill to a clinic ---------------------------------------------
 
 
-def build_subscription_invoice_pdf(bill, *, clinic: str, hold_on: date) -> bytes:
-    """The monthly subscription bill, from the platform to one clinic."""
+def build_subscription_invoice_pdf(
+    bill, *, clinic: str, hold_on: date, clinic_logo: bytes | None = None,
+) -> bytes:
+    """The monthly subscription bill, from the platform to one clinic. The
+    letterhead is the platform's — it is the one sending the bill — and the
+    clinic it is addressed to carries its own mark in the billed-to block."""
     buf = io.BytesIO()
-    doc = SimpleDocTemplate(
-        buf, pagesize=A4,
-        topMargin=16 * mm, bottomMargin=22 * mm, leftMargin=18 * mm, rightMargin=18 * mm,
-        title=f"Subscription bill {bill.number}", author="Astrale Practice OS",
-    )
+    doc = document(buf, title=f"Subscription bill {bill.number}", author="Astrale Practice OS")
     status = str(getattr(bill.status, "value", bill.status))
     look = {
         "open": ("DUE", _ACCENT, _ACCENT_SOFT),
@@ -563,40 +498,31 @@ def build_subscription_invoice_pdf(bill, *, clinic: str, hold_on: date) -> bytes
         "void": ("VOID", _VOID, _VOID_SOFT),
     }[status]
     code = bill.currency
-    story: list = []
+    story: list = letterhead(
+        doc, clinic="Astrale Practice OS", config=None, logo=None,
+        kind="Subscription bill", ref=bill.number,
+        facts=[
+            f"Issued {bill.issued_on.strftime('%d %b %Y')}",
+            f"Due <b>{bill.due_on.strftime('%d %b %Y')}</b>",
+        ],
+    )
 
-    facts = _plain(Table([
-        [Paragraph("BILL", ParagraphStyle(
-            "BillWord", parent=_TITLE, alignment=2, textColor=_ACCENT, fontSize=20, leading=23,
-        ))],
-        [Paragraph(f"<b>{_esc(bill.number)}</b>", _RIGHT)],
-        [Paragraph(
-            f"Issued {bill.issued_on.strftime('%d %b %Y')}<br/>Due {bill.due_on.strftime('%d %b %Y')}",
-            ParagraphStyle("BillDates", parent=_BODY_SM, alignment=2, textColor=_INK_2),
-        )],
-    ], colWidths=[doc.width * 0.42]), [("TOPPADDING", (0, 1), (-1, -1), 2)])
-    issuer = [
-        Paragraph("ASTRALE PRACTICE OS", _CLINIC),
-        Spacer(1, 3),
-        Paragraph("Monthly subscription for the modules switched on for your clinic.", _BODY_SM),
-    ]
-    story.append(_plain(Table([[issuer, [facts]]], colWidths=[doc.width * 0.58, doc.width * 0.42])))
-    story.append(Spacer(1, 10))
-    story.append(HRFlowable(width="100%", thickness=1.4, color=_ACCENT))
-    story.append(Spacer(1, 12))
-
-    story.append(_plain(Table([[
-        [Paragraph("BILLED TO", _LABEL), Paragraph(f"<b>{_esc(clinic)}</b>", _BODY),
-         Paragraph(
-             f"Period {bill.period_start.strftime('%d %b %Y')} – "
-             f"{bill.period_end.strftime('%d %b %Y')}",
-             _BODY_SM,
-         )],
-        [Spacer(1, 12), _stamp(*look)],
-    ]], colWidths=[doc.width * 0.7, doc.width * 0.3])))
+    mark = _logo_flowable(clinic_logo, size=12 * mm) or monogram(clinic, size=12 * mm)
+    addressee = _plain(Table([[mark, [
+        Paragraph("BILLED TO", _LABEL),
+        Paragraph(f"<b>{_esc(clinic)}</b>", _BODY),
+        Paragraph(
+            f"Period {bill.period_start.strftime('%d %b %Y')} – {bill.period_end.strftime('%d %b %Y')}",
+            _BODY_SM,
+        ),
+    ]]], colWidths=[16 * mm, doc.width * 0.7 - 16 * mm]))
+    story.append(_plain(Table(
+        [[addressee, [Spacer(1, 10), _stamp(*look)]]],
+        colWidths=[doc.width * 0.7, doc.width * 0.3],
+    )))
     story.append(Spacer(1, 14))
 
-    rows: list[list] = [[Paragraph("Module", _TH), Paragraph("Monthly", _TH_RIGHT)]]
+    rows: list[list] = [[Paragraph("Item", _TH), Paragraph("Monthly", _TH_RIGHT)]]
     rows += [
         [Paragraph(_esc(line["name"]), _TD), Paragraph(money(line["amount"], code), _TD_RIGHT)]
         for line in bill.lines or []
@@ -629,6 +555,5 @@ def build_subscription_invoice_pdf(bill, *, clinic: str, hold_on: date) -> bytes
         )
     story.append(Paragraph(note, _FOOT))
 
-    footer = _footer_for(f"Astrale Practice OS · Subscription bill {bill.number}")
-    doc.build(story, onFirstPage=footer, onLaterPages=footer)
+    doc.build(story, canvasmaker=paged(f"Astrale Practice OS · Subscription bill {bill.number} · {clinic}"))
     return buf.getvalue()

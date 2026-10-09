@@ -116,7 +116,6 @@ class MeOut(ApiModel):
     tenant_id: str | None = None
     role: str | None = None
     permissions: list[str] = []
-    features: list[str] = []
     preferences: UserPreferences = UserPreferences()
     must_change_password: bool = False
     #: Platform staff working inside this clinic. The interface shows a banner

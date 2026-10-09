@@ -2,9 +2,12 @@
 
 The cycle, run by the beat (and by hand from the console):
 
-1.  **Raise.** On the first run in a month, a clinic that has paid modules
-    switched on gets a bill for that month: one line per module at today's
-    catalogue price, due `rent_due_days` days later (see `platform_settings`). Nothing on, nothing billed.
+1.  **Raise.** On the first run in a month, every billable clinic gets a bill
+    for that month: one line, the flat monthly clinic fee
+    (`platform_settings.subscription_fee_monthly`), which covers every module,
+    due `rent_due_days` days later. A clinic is billable when it is `active`
+    (not on `trial`, not `suspended`), not `billing_exempt`, and the fee is
+    above zero; anything else gets no bill.
 2.  **Remind.** The clinic's admins are emailed as the bill moves along the
     ladder — raised, due soon, due today, overdue, last day — each rung once.
 3.  **Hold.** A bill still open `rent_grace_days` days after its due date (see
@@ -44,12 +47,11 @@ from app.models.enums import (
     AccountStatus,
     RentReminder,
     SubscriptionInvoiceStatus,
-    TenantFeatureStatus,
     TenantStatus,
 )
 from app.models.identity import User
 from app.models.rent import SubscriptionInvoice
-from app.models.tenancy import Feature, Tenant, TenantConfig, TenantFeature
+from app.models.tenancy import Tenant, TenantConfig
 from app.schemas.common import zone
 from app.services import mailer
 from app.services import referrals as referral_service
@@ -106,67 +108,48 @@ def _further(stage: RentReminder | str, than: str) -> bool:
 # --- what a clinic is charged ---------------------------------------------------
 
 
-async def billable_lines(session: AsyncSession, tenant_id: uuid.UUID) -> list[dict]:
-    """One line per paid module switched on, at today's price. A trial is not
-    billed; a core module has no price. The caller has the clinic bound."""
-    rows = (
-        await session.execute(
-            select(Feature)
-            .join(TenantFeature, TenantFeature.feature_key == Feature.key)
-            .where(
-                TenantFeature.tenant_id == tenant_id,
-                TenantFeature.status == TenantFeatureStatus.ACTIVE,
-                Feature.is_core.is_(False),
-                Feature.price_monthly > 0,
-            )
-            .order_by(Feature.name)
-        )
-    ).scalars()
-    return [
-        {
-            "feature_key": f.key,
-            "name": f.name,
-            "amount": float(Decimal(f.price_monthly).quantize(CENTS)),
-        }
-        for f in rows
-    ]
+#: The one line on every bill.
+SUBSCRIPTION_LINE_NAME = "Astrale PMS subscription"
 
 
-async def plan_for(session: AsyncSession, tenant: Tenant) -> dict:
-    """Every module the clinic has on, what each costs a month, and whether it
-    is on the bill — the same rule `billable_lines` bills by, so the clinic's
-    plan and its next bill cannot disagree. The caller has the clinic bound."""
-    billed = {line["feature_key"]: line["amount"] for line in await billable_lines(session, tenant.id)}
+def not_billed_reason(tenant: Tenant, fee: Decimal) -> str | None:
+    """Why this clinic gets no bill this month, or None when it does.
+
+    The one rule both `billable_lines` and `plan_for` read, so what a clinic
+    is told it pays and what it is billed cannot disagree."""
     if tenant.billing_exempt:
-        billed = {}
-    rows = (
-        await session.execute(
-            select(Feature, TenantFeature)
-            .join(TenantFeature, TenantFeature.feature_key == Feature.key)
-            .where(
-                TenantFeature.tenant_id == tenant.id,
-                TenantFeature.status.in_([TenantFeatureStatus.ACTIVE, TenantFeatureStatus.TRIAL]),
-            )
-            .order_by(Feature.is_core.desc(), Feature.name)
-        )
-    ).all()
-    modules = [
-        {
-            "feature_key": f.key,
-            "name": f.name,
-            "is_core": f.is_core,
-            "status": tf.status.value,
-            "activated_at": tf.activated_at.isoformat() if tf.activated_at else None,
-            "price_monthly": float(Decimal(f.price_monthly).quantize(CENTS)),
-            "billed": f.key in billed,
-        }
-        for f, tf in rows
-    ]
-    total = sum((Decimal(str(amount)) for amount in billed.values()), Decimal("0")).quantize(CENTS)
+        return "exempt"
+    if tenant.status == TenantStatus.SUSPENDED:
+        return "suspended"
+    if tenant.status != TenantStatus.ACTIVE:
+        return "trial"
+    if fee <= 0:
+        return "no_fee"
+    return None
+
+
+def billable_lines(tenant: Tenant, fee: Decimal) -> list[dict]:
+    """The lines this month's bill would carry: the flat clinic fee, or
+    nothing when the clinic is not billed. Every module is included in the fee;
+    there is no per-module line."""
+    if not_billed_reason(tenant, fee) is not None:
+        return []
+    return [{"name": SUBSCRIPTION_LINE_NAME, "amount": float(Decimal(fee).quantize(CENTS))}]
+
+
+async def plan_for(session: AsyncSession, tenant: Tenant, fee: Decimal) -> dict:
+    """What the clinic pays a month, and if nothing, why not — and what the
+    next bill comes to once referral credit is spent, by the same rule
+    `raise_bill` applies. The caller has the clinic bound."""
+    price = Decimal(fee).quantize(CENTS)
+    reason = not_billed_reason(tenant, price)
+    total = price if reason is None else Decimal("0.00")
     balance = await referral_service.balance_for(session, tenant.id)
     amount_due, _ = referral_service.apply_credit(total, balance)
     return {
-        "modules": modules,
+        "price_monthly": float(price),
+        "billed": reason is None,
+        "not_billed_reason": reason,
         "monthly_total": float(total),
         "credit_balance": float(balance),
         "amount_due": float(amount_due),
@@ -190,7 +173,7 @@ async def raise_bill(
     if existing is not None:
         return existing
 
-    lines = await billable_lines(session, tenant.id)
+    lines = billable_lines(tenant, timings.subscription_fee_monthly)
     if not lines:
         return None
     subtotal = sum((Decimal(str(line["amount"])) for line in lines), Decimal("0")).quantize(CENTS)
@@ -394,7 +377,9 @@ class ClinicOutcome:
     hold: str | None = None
 
 
-async def cycle_for_tenant(session: AsyncSession, tenant: Tenant, today: date, timings: Timings) -> ClinicOutcome:
+async def cycle_for_tenant(
+    session: AsyncSession, tenant: Tenant, today: date, timings: Timings
+) -> ClinicOutcome:
     """Raise, remind and hold for one clinic. The caller has the clinic bound
     and commits."""
     outcome = ClinicOutcome()
@@ -457,7 +442,7 @@ async def run_cycle(
     """The whole platform, one clinic per transaction — a failure at one clinic
     is logged and does not stop the rest. One `Timings` value is resolved here
     and used for every clinic in this run, so a setting changed mid-run cannot
-    split one billing cycle across two grace periods."""
+    split one billing cycle across two grace periods or two fees."""
     async with factory() as session:
         statement = select(Tenant.id)
         if tenant_ids:

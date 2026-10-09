@@ -1,4 +1,4 @@
-"""Tenant, entitlement, configuration and dynamic-field payloads."""
+"""Tenant, configuration, dynamic-field and subscription payloads."""
 
 from __future__ import annotations
 
@@ -14,7 +14,6 @@ from app.models.enums import (
     FieldEntity,
     FieldScope,
     FieldType,
-    TenantFeatureStatus,
     TenantStatus,
 )
 from app.schemas.common import ApiModel, InputModel, iso_date, local_iso, money, zone
@@ -68,46 +67,6 @@ class ClinicalTypeOut(ApiModel):
         return cls(
             key=c.key, label=c.label, examLabel=c.exam_label,
             blurb=c.blurb, complaintExample=c.complaint_example,
-        )
-
-
-class FeatureOut(ApiModel):
-    key: str
-    name: str
-    is_core: bool
-    summary: str
-    price_monthly: float
-    unlocks: list[str]
-
-    @classmethod
-    def of(cls, f) -> FeatureOut:
-        return cls(
-            key=f.key, name=f.name, is_core=f.is_core, summary=f.summary,
-            price_monthly=money(f.price_monthly), unlocks=list(f.unlocks or []),
-        )
-
-
-class FeaturePriceIn(InputModel):
-    """A module's list price, set from the console by a super admin.
-
-    `Numeric(10, 2)` holds eight whole digits; the bound is that column's, so
-    an absurd figure is a 422 here rather than a database error on flush.
-    """
-
-    price_monthly: float = Field(ge=0, le=99_999_999.99)
-
-
-class TenantFeatureOut(ApiModel):
-    tenant_id: str
-    feature_key: str
-    status: TenantFeatureStatus
-    activated_at: str | None
-
-    @classmethod
-    def of(cls, tf) -> TenantFeatureOut:
-        return cls(
-            tenant_id=str(tf.tenant_id), feature_key=tf.feature_key,
-            status=tf.status, activated_at=iso_date(tf.activated_at),
         )
 
 
@@ -215,10 +174,11 @@ class PlatformSettingsOut(ApiModel):
     default_currency: Currency
     invite_token_ttl_seconds: int
     reset_token_ttl_seconds: int
-    reminder_lead_hours: int
     rent_due_days: int
     rent_grace_days: int
     rent_reminder_days_before_due: int
+    #: the flat monthly fee every billable clinic pays; covers every module
+    subscription_fee_monthly: float
     #: what one completed referral earns its referrer
     referral_credit_amount: float
 
@@ -238,10 +198,10 @@ class PlatformSettingsOut(ApiModel):
             default_currency=row.default_currency,
             invite_token_ttl_seconds=row.invite_token_ttl_seconds,
             reset_token_ttl_seconds=row.reset_token_ttl_seconds,
-            reminder_lead_hours=row.reminder_lead_hours,
             rent_due_days=row.rent_due_days,
             rent_grace_days=row.rent_grace_days,
             rent_reminder_days_before_due=row.rent_reminder_days_before_due,
+            subscription_fee_monthly=money(row.subscription_fee_monthly),
             referral_credit_amount=money(row.referral_credit_amount),
         )
 
@@ -260,10 +220,12 @@ class PlatformSettingsPatch(InputModel):
     default_currency: Currency | None = None
     invite_token_ttl_seconds: int | None = Field(default=None, ge=86400, le=2592000)
     reset_token_ttl_seconds: int | None = Field(default=None, ge=3600, le=259200)
-    reminder_lead_hours: int | None = Field(default=None, ge=1, le=72)
     rent_due_days: int | None = Field(default=None, ge=1, le=60)
     rent_grace_days: int | None = Field(default=None, ge=0, le=60)
     rent_reminder_days_before_due: int | None = Field(default=None, ge=0, le=30)
+    #: `Numeric(10, 2)` — the bound is the column's, so an absurd figure is a
+    #: 422 here rather than a database error on flush
+    subscription_fee_monthly: float | None = Field(default=None, ge=0, le=99_999_999.99)
     referral_credit_amount: float | None = Field(default=None, ge=0, le=999_999.99)
 
 
@@ -469,12 +431,6 @@ class SlugCheckOut(ApiModel):
     url: str
 
 
-class TenantFeatureSetIn(InputModel):
-    """The platform's own hand on a module switch."""
-
-    status: TenantFeatureStatus
-
-
 class ImpersonationOut(ApiModel):
     """A support session, opened from the console.
 
@@ -491,15 +447,8 @@ class ImpersonationOut(ApiModel):
     url: str
 
 
-class FeaturePurchaseIn(InputModel):
-    """Payment happens elsewhere (§3.2); this records the outcome."""
-
-    payment_reference: str | None = Field(default=None, max_length=120)
-
-
 class PlatformTenantSummary(ApiModel):
     tenant: TenantOut
-    active_features: list[str]
     users: int
     patients: int
     appointments: int
@@ -578,9 +527,16 @@ class ConsoleReferralsOut(ApiModel):
 
 
 class SubscriptionLineOut(ApiModel):
-    feature_key: str
+    """One charge on a bill. Today that is always the flat clinic fee; a bill
+    raised before the flat fee may still carry a `feature_key` in its stored
+    JSON, which is ignored."""
+
     name: str
     amount: float
+
+    @classmethod
+    def of(cls, line: dict) -> SubscriptionLineOut:
+        return cls(name=str(line.get("name", "")), amount=float(line.get("amount", 0)))
 
 
 class SubscriptionInvoiceOut(ApiModel):
@@ -609,7 +565,7 @@ class SubscriptionInvoiceOut(ApiModel):
             id=str(b.id), tenant_id=str(b.tenant_id), number=b.number,
             period_start=iso_date(b.period_start) or "", period_end=iso_date(b.period_end) or "",
             currency=b.currency, amount=money(b.amount),
-            lines=[SubscriptionLineOut(**line) for line in (b.lines or [])],
+            lines=[SubscriptionLineOut.of(line) for line in (b.lines or [])],
             issued_on=iso_date(b.issued_on) or "", due_on=iso_date(b.due_on) or "",
             hold_on=iso_date(hold_on) or "", status=b.status.value,
             reminder_stage=b.reminder_stage, reminders_sent=b.reminders_sent,
@@ -632,24 +588,17 @@ class SubscriptionSummaryOut(ApiModel):
     grace_days: int
 
 
-class SubscribedModuleOut(ApiModel):
-    feature_key: str
-    name: str
-    is_core: bool
-    #: `active`, or `trial` — a trial is on but not billed
-    status: str
-    activated_at: str | None = None
-    #: the catalogue's monthly price today; 0 for a core module
-    price_monthly: float
-    #: whether next month's bill charges for it
-    billed: bool
-
-
 class SubscriptionPlanOut(ApiModel):
-    """What the clinic has switched on, and what that comes to a month."""
+    """What the clinic pays the platform a month. One flat fee covers every
+    module; there is nothing to switch on or price per module."""
 
-    modules: list[SubscribedModuleOut]
-    #: the sum of the billed modules, before any referral credit
+    #: the platform's flat monthly clinic fee today
+    price_monthly: float
+    #: whether next month's bill charges this clinic
+    billed: bool
+    #: why not, when `billed` is false
+    not_billed_reason: Literal["exempt", "trial", "suspended", "no_fee"] | None = None
+    #: `price_monthly` when billed, else 0 — the bill before any referral credit
     monthly_total: float
     #: spendable referral credit right now
     credit_balance: float
@@ -686,6 +635,8 @@ class PlatformBillingRowOut(ApiModel):
 class PlatformBillingOut(ApiModel):
     enabled: bool
     currency: str
+    #: the flat monthly clinic fee (`platform_settings.subscription_fee_monthly`)
+    fee_monthly: float
     due_days: int
     grace_days: int
     reminder_days_before_due: int

@@ -65,10 +65,8 @@ class MessagingConfig(Base, TenantScoped, TimestampMixin):
     # clinic that has not finished setting its provider up.
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
-    # Which templates send themselves. A clinic that wants to confirm bookings
-    # but not chase reminders just turns one off.
+    # Whether a booking confirms itself to the patient.
     send_booking_confirmation: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    send_appointment_reminder: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
     sender_id: Mapped[str] = mapped_column(String(40), nullable=False, default="")
     """The from-number or alphanumeric sender the provider sends as."""
@@ -91,10 +89,9 @@ class Message(Base, TenantScoped, TimestampMixin):
         # The worker's sweep: due, queued, oldest first.
         Index("ix_messages_due", "status", "send_after"),
         Index("ix_messages_tenant_created", "tenant_id", "created_at"),
-        # At most one *live* confirmation and one *live* reminder per
-        # appointment, so a retry cannot double-send either. Notices about a
-        # change ("moved", "cancelled") are events and may repeat; a cancelled
-        # reminder frees its slot so a reschedule can queue a fresh one.
+        # At most one *live* confirmation per appointment, so a retry cannot
+        # double-send it. Notices about a change ("moved", "cancelled") are
+        # events and may repeat.
         Index(
             "uq_messages_appointment_template",
             "appointment_id",
@@ -102,7 +99,7 @@ class Message(Base, TenantScoped, TimestampMixin):
             unique=True,
             postgresql_where=text(
                 "appointment_id IS NOT NULL "
-                "AND template IN ('booking_confirmation', 'appointment_reminder') "
+                "AND template = 'booking_confirmation' "
                 "AND status <> 'cancelled'"
             ),
         ),
@@ -148,11 +145,6 @@ class Message(Base, TenantScoped, TimestampMixin):
 
     provider_message_id: Mapped[str] = mapped_column(String(120), nullable=False, default="")
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-
-    job_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    """The Celery job that sends this message, when one does — today, the
-    appointment reminders. A row with a job belongs to that job and the outbox
-    sweep leaves it alone; a job acts only while the row still names it."""
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"<Message {self.template} {self.status} -> {self.to_address}>"

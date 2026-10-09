@@ -22,7 +22,6 @@ class MessagingConfigOut(ApiModel):
     provider: MessageProvider
     enabled: bool
     send_booking_confirmation: bool
-    send_appointment_reminder: bool
     sender_id: str
     account_sid: str
     auth_token_set: bool
@@ -34,7 +33,6 @@ class MessagingConfigOut(ApiModel):
             provider=config.provider,
             enabled=config.enabled,
             send_booking_confirmation=config.send_booking_confirmation,
-            send_appointment_reminder=config.send_appointment_reminder,
             sender_id=config.sender_id,
             account_sid=config.account_sid,
             auth_token_set=bool(config.auth_token_encrypted),
@@ -51,7 +49,6 @@ class MessagingConfigIn(InputModel):
     provider: MessageProvider | None = None
     enabled: bool | None = None
     send_booking_confirmation: bool | None = None
-    send_appointment_reminder: bool | None = None
     sender_id: str | None = Field(default=None, max_length=40)
     account_sid: str | None = Field(default=None, max_length=120)
     auth_token: str | None = Field(default=None, max_length=200)
@@ -70,10 +67,8 @@ class MessageOut(ApiModel):
     attempts: int
     last_error: str
     provider: MessageProvider | None
-    #: when it is due to go out — for a reminder, `reminder_lead_hours` before the slot
+    #: when it is due to go out
     send_after: str | None
-    #: the Celery job that will send it, while one does
-    job_id: str | None
     sent_at: str | None
     created_at: str
 
@@ -93,7 +88,6 @@ class MessageOut(ApiModel):
             last_error=m.last_error,
             provider=m.provider,
             send_after=stamp(m.send_after, tz) if m.send_after else None,
-            job_id=m.job_id,
             sent_at=stamp(m.sent_at, tz) if m.sent_at else None,
             created_at=stamp(m.created_at, tz) or "",
         )

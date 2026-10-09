@@ -6,9 +6,8 @@ the practice admin's alone, which is why the write routes ask for
 `tenant:config:write` — the same permission that governs every other decision
 about how this clinic runs.
 
-Nothing here is behind a feature guard. A tariff is configuration, not a
-module: a clinic that has not bought the lab can still be told what it would
-charge for a scan.
+A tariff is configuration, not a module: who may change it is decided by the
+permission above, the same as every other setting.
 """
 
 from __future__ import annotations

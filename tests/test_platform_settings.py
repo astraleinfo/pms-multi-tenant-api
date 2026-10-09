@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from app.db.session import tenant_session
 from app.models.enums import Currency
 from app.models.tenancy import PlatformSettings
+from app.seed.loader import DEMO_SUBSCRIPTION_FEE
 
 _PLATFORM_SETTINGS_ID = _uuid.UUID("00000000-0000-0000-0000-000000000001")
 
@@ -31,10 +32,11 @@ async def _reset_platform_settings() -> None:
             row.default_currency = Currency.INR
             row.invite_token_ttl_seconds = 604800
             row.reset_token_ttl_seconds = 7200
-            row.reminder_lead_hours = 24
             row.rent_due_days = 7
             row.rent_grace_days = 7
             row.rent_reminder_days_before_due = 3
+            # not a schema default: the demo seeds a fee, and the rent tests bill at it
+            row.subscription_fee_monthly = DEMO_SUBSCRIPTION_FEE
 
 
 @pytest.fixture(autouse=True)
@@ -163,19 +165,18 @@ async def test_the_timing_fields_are_readable_and_writable(console):
     body = read.json()
     assert body["invite_token_ttl_seconds"] == 604800
     assert body["reset_token_ttl_seconds"] == 7200
-    assert body["reminder_lead_hours"] == 24
     assert body["rent_due_days"] == 7
     assert body["rent_grace_days"] == 7
     assert body["rent_reminder_days_before_due"] == 3
 
     changed = await console.patch("/v1/platform/settings", json={
-        "rent_grace_days": 10, "reminder_lead_hours": 12,
+        "rent_grace_days": 10, "rent_due_days": 12,
     })
     assert changed.status_code == 200, changed.text
     assert changed.json()["rent_grace_days"] == 10
-    assert changed.json()["reminder_lead_hours"] == 12
+    assert changed.json()["rent_due_days"] == 12
     # untouched fields keep their value
-    assert changed.json()["rent_due_days"] == 7
+    assert changed.json()["rent_reminder_days_before_due"] == 3
 
 
 async def test_a_bad_timing_value_is_refused(console):
@@ -184,3 +185,30 @@ async def test_a_bad_timing_value_is_refused(console):
 
     response = await console.patch("/v1/platform/settings", json={"invite_token_ttl_seconds": 30})
     assert response.status_code == 422, "a few seconds is not a usable invitation link"
+
+
+async def test_the_flat_clinic_fee_is_readable_and_writable(console):
+    body = (await console.get("/v1/platform/settings")).json()
+    assert body["subscription_fee_monthly"] == float(DEMO_SUBSCRIPTION_FEE)
+
+    changed = await console.patch("/v1/platform/settings", json={"subscription_fee_monthly": 4999.5})
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["subscription_fee_monthly"] == 4999.5
+    assert (await console.get("/v1/platform/settings")).json()["subscription_fee_monthly"] == 4999.5
+    # the console's billing overview reads the same figure
+    assert (await console.get("/v1/platform/billing")).json()["fee_monthly"] == 4999.5
+
+    # untouched by a PATCH that does not name it
+    other = await console.patch("/v1/platform/settings", json={"rent_grace_days": 9})
+    assert other.json()["subscription_fee_monthly"] == 4999.5
+
+
+@pytest.mark.parametrize("fee", [-1, 100_000_000, "free"])
+async def test_a_bad_fee_is_refused(console, fee):
+    response = await console.patch("/v1/platform/settings", json={"subscription_fee_monthly": fee})
+    assert response.status_code == 422
+
+
+async def test_the_support_desk_cannot_set_the_fee(console_support):
+    response = await console_support.patch("/v1/platform/settings", json={"subscription_fee_monthly": 1})
+    assert response.status_code == 403

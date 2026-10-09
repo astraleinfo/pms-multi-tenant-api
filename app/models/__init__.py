@@ -3,13 +3,16 @@
 from app.models.clinical import (  # noqa: F401
     Appointment,
     Encounter,
+    FollowUpCall,
     LabAttachment,
     LabOrder,
     Patient,
+    PatientNote,
     Prescription,
     PrescriptionItem,
     QueueEntry,
 )
+from app.models.consent import ConsentForm, ConsentFormVersion, PatientConsent  # noqa: F401
 from app.models.identity import (  # noqa: F401
     AuthToken,
     LoginAttempt,
@@ -33,21 +36,20 @@ from app.models.support import SupportRequest  # noqa: F401
 from app.models.tenancy import (  # noqa: F401
     AuditEvent,
     ClinicalType,
-    Feature,
     FieldDefinition,
     LabTest,
     MedicineSuggestion,
     Tenant,
     TenantConfig,
-    TenantFeature,
 )
 
 __all__ = [
-    "Appointment", "AuditEvent", "AuthToken", "ClinicalType", "Encounter", "Feature", "FieldDefinition",
+    "Appointment", "AuditEvent", "AuthToken", "ClinicalType",
+    "ConsentForm", "ConsentFormVersion", "Encounter", "FieldDefinition", "FollowUpCall",
     "InventoryBatch", "InventoryItem", "InventoryTransaction", "Invoice", "InvoiceLineItem",
     "LabAttachment", "LabOrder", "LabTest", "LoginAttempt", "MedicineSuggestion", "Message",
-    "MessagingConfig", "Patient", "Payment",
+    "MessagingConfig", "Patient", "PatientConsent", "PatientNote", "Payment",
     "PlatformUser", "Prescription", "PrescriptionItem", "QueueEntry", "RefreshToken",
     "ServicePrice", "SubscriptionInvoice", "SupportRequest", "Tenant",
-    "TenantConfig", "TenantFeature", "User",
+    "TenantConfig", "User",
 ]

@@ -249,7 +249,6 @@ async def me(ctx: TenantContext = Depends(current_tenant)) -> MeOut:
         tenant_id=str(ctx.tenant_id),
         role=ctx.user.role,
         permissions=permissions_for(ctx.user.role),
-        features=sorted(ctx.active_features),
         preferences=UserPreferences(**(ctx.user.ui_preferences or {})),
         must_change_password=ctx.user.must_change_password,
         impersonated=ctx.impersonated,

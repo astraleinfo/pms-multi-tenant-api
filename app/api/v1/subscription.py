@@ -54,6 +54,7 @@ from app.services import audit
 from app.services import platform as platform_service
 from app.services import referrals as referral_service
 from app.services import rent as rent_service
+from app.services import tenants as tenant_service
 from app.services.documents import build_subscription_invoice_pdf
 from app.services.platform import Timings
 
@@ -61,20 +62,25 @@ clinic_router = APIRouter(prefix="/tenant/subscription", tags=["subscription"])
 console_router = APIRouter(prefix="/platform", tags=["platform"])
 
 
-async def _subscription(session: AsyncSession, tenant: Tenant) -> SubscriptionOut:
+async def _subscription(
+    session: AsyncSession, tenant: Tenant, timings: Timings | None = None
+) -> SubscriptionOut:
     bills = await rent_service.list_bills(session, tenant.id)
     today = rent_service.clinic_today(tenant)
-    timings = await platform_service.get_timings(session)
+    if timings is None:
+        timings = await platform_service.get_timings(session)
     return SubscriptionOut(
         summary=SubscriptionSummaryOut(**rent_service.summary_for(tenant, bills, today, timings)),
         invoices=[SubscriptionInvoiceOut.of(b, rent_service.hold_date(b, timings)) for b in bills],
-        plan=SubscriptionPlanOut(**await rent_service.plan_for(session, tenant)),
+        plan=SubscriptionPlanOut(
+            **await rent_service.plan_for(session, tenant, timings.subscription_fee_monthly)
+        ),
     )
 
 
-def _pdf(bill, tenant: Tenant, timings: Timings) -> Response:
+def _pdf(bill, tenant: Tenant, timings: Timings, logo: bytes | None) -> Response:
     content = build_subscription_invoice_pdf(
-        bill, clinic=tenant.name, hold_on=rent_service.hold_date(bill, timings)
+        bill, clinic=tenant.name, hold_on=rent_service.hold_date(bill, timings), clinic_logo=logo,
     )
     safe = "".join(ch for ch in bill.number if ch.isalnum() or ch in "-_") or "bill"
     return Response(
@@ -92,7 +98,7 @@ def _pdf(bill, tenant: Tenant, timings: Timings) -> Response:
 
 @clinic_router.get("", response_model=SubscriptionOut)
 async def my_subscription(
-    ctx: TenantContext = Depends(require_permission(Permission.TENANT_FEATURE_MANAGE)),
+    ctx: TenantContext = Depends(require_permission(Permission.TENANT_SUBSCRIPTION_MANAGE)),
 ) -> SubscriptionOut:
     """What this clinic owes the platform, and every bill it has been sent."""
     return await _subscription(ctx.session, ctx.tenant)
@@ -101,11 +107,11 @@ async def my_subscription(
 @clinic_router.get("/invoices/{bill_id}/pdf")
 async def my_bill_pdf(
     bill_id: str,
-    ctx: TenantContext = Depends(require_permission(Permission.TENANT_FEATURE_MANAGE)),
+    ctx: TenantContext = Depends(require_permission(Permission.TENANT_SUBSCRIPTION_MANAGE)),
 ) -> Response:
     bill = await rent_service.get_bill(ctx.session, ctx.tenant_id, parse_uuid(bill_id, what="bill"))
     timings = await platform_service.get_timings(ctx.session)
-    return _pdf(bill, ctx.tenant, timings)
+    return _pdf(bill, ctx.tenant, timings, await tenant_service.logo_for(ctx.session, ctx.tenant_id))
 
 
 # --- the console ------------------------------------------------------------------------
@@ -124,20 +130,22 @@ async def platform_billing(
     staff: PlatformUser = Depends(current_platform_user),
     session: AsyncSession = Depends(db_session, scope="function"),
 ) -> PlatformBillingOut:
-    """Every clinic's bills, gathered one clinic at a time with it bound."""
+    """Every clinic's bills, gathered one clinic at a time with it bound, and
+    the flat monthly clinic fee they are raised at."""
+    timings = await platform_service.get_timings(session)
     clinics = list((await session.execute(select(Tenant).order_by(Tenant.name))).scalars())
     rows = []
     for clinic in clinics:
         await set_tenant(session, clinic.id)
-        sub = await _subscription(session, clinic)
+        sub = await _subscription(session, clinic, timings)
         rows.append(
             PlatformBillingRowOut(tenant=TenantOut.of(clinic), summary=sub.summary, invoices=sub.invoices)
         )
     await set_tenant(session, None)
-    timings = await platform_service.get_timings(session)
     return PlatformBillingOut(
         enabled=settings.rent_billing_enabled,
         currency=settings.rent_currency,
+        fee_monthly=float(timings.subscription_fee_monthly),
         due_days=timings.rent_due_days,
         grace_days=timings.rent_grace_days,
         reminder_days_before_due=timings.rent_reminder_days_before_due,
@@ -187,7 +195,8 @@ async def tenant_bill_pdf(
     clinic = await _clinic(session, tenant_id)
     bill = await rent_service.get_bill(session, clinic.id, parse_uuid(bill_id, what="bill"))
     timings = await platform_service.get_timings(session)
-    return _pdf(bill, clinic, timings)
+    # `_clinic` has bound this session to the clinic, so its settings are visible
+    return _pdf(bill, clinic, timings, await tenant_service.logo_for(session, clinic.id))
 
 
 @console_router.get("/tenants/{tenant_id}/referrals", response_model=ConsoleReferralsOut)
