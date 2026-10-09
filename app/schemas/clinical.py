@@ -5,13 +5,15 @@ from __future__ import annotations
 from datetime import date as date_t
 from typing import Any, Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from app.models.enums import (
     AppointmentChannel,
     AppointmentStatus,
     DispenseStatus,
     EncounterStatus,
+    FollowUpOutcome,
+    FollowUpStatus,
     LabOrderStatus,
     QueuePriority,
     QueueStatus,
@@ -181,6 +183,121 @@ class AvailabilityQuery(InputModel):
 class AvailabilityOut(ApiModel):
     available: bool
     conflicts: list[AppointmentOut]
+
+
+# --- patient notes -----------------------------------------------------------
+
+
+class PatientNoteOut(ApiModel):
+    id: str
+    patient_id: str
+    body: str
+    author_id: str | None
+    author_name: str
+    #: the author's role when they wrote it
+    author_role: str
+    #: `YYYY-MM-DD HH:mm`, on the clinic's clock
+    created_at: str
+    #: the note this one corrects, if it is a correction
+    amends_id: str | None = None
+
+    @classmethod
+    def of(cls, n, tz: str) -> PatientNoteOut:
+        return cls(
+            id=str(n.id), patient_id=str(n.patient_id), body=n.body,
+            author_id=str(n.author_id) if n.author_id else None,
+            author_name=n.author_label, author_role=n.author_role,
+            created_at=stamp(n.created_at, tz) or "",
+            amends_id=str(n.amends_id) if n.amends_id else None,
+        )
+
+
+class PatientNoteIn(InputModel):
+    body: str = Field(min_length=1, max_length=4000)
+    #: write this as a correction to an earlier note of your own
+    amends_id: IdStr | None = None
+
+
+# --- follow-up calls ---------------------------------------------------------
+
+
+class FollowUpCallOut(ApiModel):
+    id: str
+    appointment_id: str
+    outcome: FollowUpOutcome
+    notes: str
+    called_by_id: str | None
+    called_by_name: str
+    #: `YYYY-MM-DD HH:mm`, on the clinic's clock
+    called_at: str
+    #: only on a call that moved the booking, `YYYY-MM-DD HH:mm` either side
+    moved_from: str | None = None
+    moved_to: str | None = None
+
+    @classmethod
+    def of(cls, c, tz: str) -> FollowUpCallOut:
+        return cls(
+            id=str(c.id), appointment_id=str(c.appointment_id), outcome=c.outcome, notes=c.notes,
+            called_by_id=str(c.called_by_id) if c.called_by_id else None,
+            called_by_name=c.called_by_label, called_at=stamp(c.created_at, tz) or "",
+            moved_from=c.moved_from, moved_to=c.moved_to,
+        )
+
+
+class FollowUpOut(ApiModel):
+    """One booking on the call list: the appointment, the number to ring, and
+    where its follow-up stands."""
+
+    appointment: AppointmentOut
+    patient_phone: str
+    status: FollowUpStatus
+    attempts: int
+    last_call: FollowUpCallOut | None = None
+
+
+class FollowUpPageOut(ApiModel):
+    """One page of the call list.
+
+    `counts` is keyed by follow-up status and `today` is the bookings on the
+    clinic's today — both taken over the whole window before the tab's own
+    filter, so every tab's number is true whichever tab is open.
+    """
+
+    items: list[FollowUpOut]
+    total: int
+    limit: int
+    offset: int
+    counts: dict[str, int]
+    today: int
+
+
+class FollowUpSlotIn(InputModel):
+    """Where a `rescheduled` call moves the booking. The clinician and the
+    length default to the booking's own."""
+
+    date: date_t
+    time: str = Field(pattern=_HHMM)
+    doctor_id: IdStr | None = None
+    duration_min: int | None = Field(default=None, ge=5, le=480)
+
+
+class FollowUpCallIn(InputModel):
+    outcome: FollowUpOutcome
+    notes: str = Field(default="", max_length=1000)
+    #: required for `rescheduled`, refused for anything else
+    new_slot: FollowUpSlotIn | None = None
+    #: `declined` only — let the slot go as well as noting the refusal
+    cancel_appointment: bool = False
+
+    @model_validator(mode="after")
+    def _fits_outcome(self) -> FollowUpCallIn:
+        if self.outcome == FollowUpOutcome.RESCHEDULED and self.new_slot is None:
+            raise ValueError("Choose the new slot to reschedule to.")
+        if self.outcome != FollowUpOutcome.RESCHEDULED and self.new_slot is not None:
+            raise ValueError("Only a rescheduled call moves the appointment.")
+        if self.cancel_appointment and self.outcome != FollowUpOutcome.DECLINED:
+            raise ValueError("Only a declined call cancels the appointment.")
+        return self
 
 
 # --- queue ------------------------------------------------------------------

@@ -39,6 +39,9 @@ dependencies = [
     # Error reporting to Sentry. Imported only when ERROR_REPORTER=sentry, and a
     # dependency for the same reason as boto3: turning it on is configuration.
     "sentry-sdk>=2.0",
+    # UUIDv7 primary keys (`app/db/base.py`). The standard library has
+    # `uuid.uuid7` only from Python 3.14; `compat` returns stdlib `uuid.UUID`s.
+    "uuid-utils>=0.9",
 ]
 
 [project.optional-dependencies]

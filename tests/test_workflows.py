@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from tests.conftest import patients_of, sign_in
 
+#: Every clinic has every module, so every dashboard carries every panel.
+ALL_PANELS = {"pharmacy", "lab", "inventory", "billing", "advanced_reports"}
+
 
 async def _doctor(signed) -> dict:
     return (await signed.get("/v1/users/doctors")).json()[0]
@@ -408,11 +411,11 @@ async def test_an_invoice_can_be_voided_but_not_paid_afterwards(northgate):
     assert payment.status_code == 409
 
 
-async def test_analytics_follows_entitlements_and_clinical_type(northgate, clearview, rowan):
+async def test_analytics_has_every_module_and_follows_clinical_type(northgate, clearview, rowan):
     dental = (await northgate.get("/v1/analytics/dashboard")).json()
     assert dental["core"]["patients"] > 0
     assert dental["clinical"]["type"] == "dental"
-    assert {"billing", "pharmacy", "lab", "inventory"} <= set(dental["modules"])
+    assert set(dental["modules"]) == ALL_PANELS
 
     eyes = (await clearview.get("/v1/analytics/dashboard")).json()
     assert eyes["clinical"]["type"] == "ophthalmology"
@@ -420,12 +423,12 @@ async def test_analytics_follows_entitlements_and_clinical_type(northgate, clear
 
     skin = (await rowan.get("/v1/analytics/dashboard")).json()
     assert skin["clinical"]["type"] == "dermatology"
-    assert "pharmacy" not in skin["modules"], "a module that was not bought produces no panel"
-    assert "lab" in skin["modules"]
+    assert set(skin["modules"]) == ALL_PANELS, "every clinic gets every module panel"
+    assert set(eyes["modules"]) == ALL_PANELS
 
 
 async def test_analytics_is_computed_from_the_rows_it_describes(northgate):
-    """Every panel the reports page renders, and nothing a clinic did not buy."""
+    """Every panel the reports page renders."""
     body = (await northgate.get("/v1/analytics/dashboard", params={"days": 30})).json()
 
     core = body["core"]
@@ -443,7 +446,7 @@ async def test_analytics_is_computed_from_the_rows_it_describes(northgate):
     assert page["total"] == core["patients"]
 
     modules = body["modules"]
-    assert {"pharmacy", "lab", "inventory", "billing"} <= set(modules)
+    assert set(modules) == ALL_PANELS
     assert modules["billing"]["billed"] >= modules["billing"]["paid"]
     assert modules["lab"]["total"] >= modules["lab"]["verified"]
     assert isinstance(modules["inventory"]["below_reorder"], list)
@@ -452,15 +455,24 @@ async def test_analytics_is_computed_from_the_rows_it_describes(northgate):
     assert "breakdown" in body["clinical"]
 
 
-async def test_analytics_hides_what_a_clinic_never_bought(rowan):
+async def test_analytics_has_every_panel_even_where_a_module_was_never_on(rowan):
+    """Rowan only ever had the lab switched on. Every panel is computed for it now."""
     body = (await rowan.get("/v1/analytics/dashboard")).json()
-    assert set(body["modules"]) == {"lab"}, "only the module Rowan actually has"
+    assert set(body["modules"]) == ALL_PANELS
     assert body["clinical"]["type"] == "dermatology"
-    assert "advanced_reports" not in body["modules"]
+    assert {"age_cohort", "sex_split", "clinicians"} <= set(body["modules"]["advanced_reports"])
+    assert "billed" in body["modules"]["billing"], "the practice admin sees the money"
 
 
-async def test_advanced_reports_unlocks_the_cohort_panels(clearview):
-    """Clearview bought advanced reports; the extra panels come with it."""
+async def test_analytics_is_the_same_shape_for_a_role_without_revenue(client):
+    """Redaction takes the money out of the panels; it never takes a panel away."""
+    doctor = await sign_in(client, "northgate_doctor")
+    body = (await doctor.get("/v1/analytics/dashboard")).json()
+    assert body["revenue_visible"] is False
+    assert set(body["modules"]) == ALL_PANELS
+
+
+async def test_advanced_reports_carries_the_cohort_panels(clearview):
     body = (await clearview.get("/v1/analytics/dashboard")).json()
     advanced = body["modules"]["advanced_reports"]
 

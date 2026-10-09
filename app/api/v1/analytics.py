@@ -9,6 +9,7 @@ from app.api.deps import TenantContext, require_permission
 from app.core.permissions import Permission, role_has
 from app.schemas.ops import AnalyticsOut
 from app.services import analytics as analytics_service
+from app.services import tenants as tenant_service
 from app.services.documents import build_report_pdf
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
@@ -21,8 +22,8 @@ async def dashboard(
 ) -> AnalyticsOut:
     """Every figure the dashboard and the reports page show.
 
-    Core metrics always; module panels only where the feature is active;
-    clinical panels driven by `clinical_ext` alone. All of it is aggregated in
+    Core metrics and every module panel, always; clinical panels driven by
+    `clinical_ext` alone. All of it is aggregated in
     PostgreSQL under this clinic's policy, so the client is sent figures rather
     than the rows behind them.
     """
@@ -31,7 +32,6 @@ async def dashboard(
         ctx.tenant_id,
         today=ctx.today,
         days=days,
-        active_features=ctx.active_features,
         clinical_type=ctx.tenant.clinical_type,
     )
     # The takings are the practice admin's. Taken out here, on the server, so
@@ -47,14 +47,13 @@ async def report_pdf(
     ctx: TenantContext = Depends(require_permission(Permission.ANALYTICS_READ)),
 ) -> Response:
     """The reports page as a PDF — the same read model, so the printed figures
-    are the figures on screen. Module sections appear only for what the clinic
-    has, exactly as on the page."""
+    are the figures on screen, every module section included, exactly as on
+    the page."""
     data = await analytics_service.dashboard(
         ctx.session,
         ctx.tenant_id,
         today=ctx.today,
         days=days,
-        active_features=ctx.active_features,
         clinical_type=ctx.tenant.clinical_type,
     )
     if not role_has(ctx.user.role, Permission.REVENUE_READ):
@@ -66,6 +65,7 @@ async def report_pdf(
         currency=ctx.config.currency.value if ctx.config.currency else "",
         generated_by=ctx.principal.label,
         tz=ctx.tz,
+        logo=await tenant_service.logo_for(ctx.session, ctx.tenant_id),
     )
     return Response(
         content=content,

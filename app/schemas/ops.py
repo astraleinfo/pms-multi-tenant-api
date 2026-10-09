@@ -518,10 +518,11 @@ class LabCatalogueImportIn(InputModel):
 class AnalyticsOut(ApiModel):
     """§3.14's read model.
 
-    `core` is computed for every clinic; `modules` holds a key only for
-    features that are actually active; `clinical` is driven by `clinical_ext`
+    `core` and `modules` are computed for every clinic — every clinic has every
+    module, so `modules` always carries `pharmacy`, `lab`, `inventory`,
+    `billing` and `advanced_reports`; `clinical` is driven by `clinical_ext`
     alone. A client renders what it is given rather than deciding what to
-    compute — which is why a locked module is simply absent here.
+    compute.
     """
 
     range: dict[str, Any]

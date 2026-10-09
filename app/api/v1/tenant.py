@@ -1,5 +1,5 @@
-"""The clinic itself: its record, its entitlements, its configuration, its
-dynamic-form schema, and its staff."""
+"""The clinic itself: its record, its configuration, its dynamic-form schema,
+its support desk requests, and its staff."""
 
 from __future__ import annotations
 
@@ -24,18 +24,15 @@ from app.core.rate_limit import Rate, limiter
 from app.core.security import hash_password
 from app.models.enums import AccountStatus, AuthTokenPurpose, FieldEntity, FieldScope
 from app.models.identity import User
-from app.models.tenancy import Feature, FieldDefinition
+from app.models.tenancy import FieldDefinition
 from app.schemas.identity import PasswordSetIn, UserCreateIn, UserOut, UserStatusIn, UserUpdateIn
 from app.schemas.ops import ImportJobOut
 from app.schemas.support import SupportRequestIn, SupportRequestOut
 from app.schemas.tenancy import (
-    FeatureOut,
-    FeaturePurchaseIn,
     FieldDefinitionIn,
     FieldDefinitionOut,
     TenantConfigOut,
     TenantConfigPatch,
-    TenantFeatureOut,
     TenantOut,
 )
 from app.services import audit, import_jobs, invitations, mailer, staff_io
@@ -54,60 +51,11 @@ async def current_clinic(ctx: TenantContext = Depends(current_tenant)) -> Tenant
     return TenantOut.of(ctx.tenant)
 
 
-# --- entitlements (§3.2) -----------------------------------------------------
-
-
-@router.get("/tenant/features", response_model=list[TenantFeatureOut])
-async def list_features(ctx: TenantContext = Depends(current_tenant)) -> list[TenantFeatureOut]:
-    rows = await tenant_service.list_features(ctx.session, ctx.tenant_id)
-    return [TenantFeatureOut.of(r) for r in rows]
-
-
-@router.get("/tenant/feature-catalog", response_model=list[FeatureOut])
-async def feature_catalog(ctx: TenantContext = Depends(current_tenant)) -> list[FeatureOut]:
-    rows = (
-        await ctx.session.execute(select(Feature).order_by(Feature.is_core.desc(), Feature.name))
-    ).scalars()
-    return [FeatureOut.of(f) for f in rows]
-
-
-@router.post("/tenant/features/{feature_key}/purchase", response_model=TenantFeatureOut)
-async def purchase_feature(
-    feature_key: str,
-    payload: FeaturePurchaseIn,
-    ctx: TenantContext = Depends(require_permission(Permission.TENANT_FEATURE_MANAGE)),
-) -> TenantFeatureOut:
-    row = await tenant_service.set_feature(
-        ctx.session, ctx.tenant_id, feature_key, active=True, today=ctx.today
-    )
-    await audit.record(
-        ctx.session, action="feature.purchase", tenant_id=ctx.tenant_id, actor_kind=ctx.actor_kind,
-        actor_id=ctx.actor_id, actor_label=ctx.principal.label, entity="feature", entity_id=feature_key,
-        meta={"payment_reference": payload.payment_reference},
-    )
-    return TenantFeatureOut.of(row)
-
-
-@router.post("/tenant/features/{feature_key}/deactivate", response_model=TenantFeatureOut)
-async def deactivate_feature(
-    feature_key: str,
-    ctx: TenantContext = Depends(require_permission(Permission.TENANT_FEATURE_MANAGE)),
-) -> TenantFeatureOut:
-    row = await tenant_service.set_feature(
-        ctx.session, ctx.tenant_id, feature_key, active=False, today=ctx.today
-    )
-    await audit.record(
-        ctx.session, action="feature.deactivate", tenant_id=ctx.tenant_id, actor_kind=ctx.actor_kind,
-        actor_id=ctx.actor_id, actor_label=ctx.principal.label, entity="feature", entity_id=feature_key,
-    )
-    return TenantFeatureOut.of(row)
-
-
 # --- the support desk ---------------------------------------------------------
 #
-# A clinic cannot switch a module on for itself; it asks, and a super admin
-# grants it from the console. The ask is stored here and the desk is emailed by
-# the Celery worker, so a slow or broken mail server never holds up the clinic.
+# A clinic asks the platform for a walkthrough or for help with anything else.
+# The ask is stored here and the desk is emailed by the Celery worker, so a slow
+# or broken mail server never holds up the clinic.
 
 
 @router.post(
@@ -122,7 +70,7 @@ async def create_support_request(
     tasks: BackgroundTasks,
     ctx: TenantContext = Depends(current_tenant),
 ) -> SupportRequestOut:
-    """Ask the platform for a module, a walkthrough of one, or anything else.
+    """Ask the platform for a walkthrough, or for help with anything else.
 
     Any signed-in member of staff may ask; the email says who did. The same
     person repeating the same ask inside a few minutes gets the earlier request
@@ -136,7 +84,6 @@ async def create_support_request(
         actor_kind=ctx.actor_kind,
         actor_label=ctx.principal.label,
         kind=payload.kind,
-        feature_key=payload.feature_key,
         message=payload.message,
         ip=client_ip(request),
         user_agent=user_agent(request),
@@ -158,7 +105,7 @@ async def create_support_request(
 async def list_support_requests(
     ctx: TenantContext = Depends(current_tenant),
 ) -> list[SupportRequestOut]:
-    """This clinic's recent asks, newest first — so a module page can say
+    """This clinic's recent asks, newest first — so a page can say
     "requested on …" instead of offering the same button again."""
     rows = await support_service.list_for_tenant(ctx.session, ctx.tenant_id)
     return [SupportRequestOut.of(r, ctx.tz) for r in rows]
@@ -215,7 +162,9 @@ async def set_logo(
 
 
 @router.get("/tenant/config/logo")
-async def get_logo(ctx: TenantContext = Depends(require_permission(Permission.TENANT_CONFIG_READ))) -> Response:
+async def get_logo(
+    ctx: TenantContext = Depends(require_permission(Permission.TENANT_CONFIG_READ)),
+) -> Response:
     """The logo itself. Every role may read it — it is the clinic's own
     branding, not a setting only an admin should see."""
     config = await tenant_service.config_with_logo(ctx.session, ctx.tenant_id)
@@ -255,7 +204,7 @@ async def list_fields(ctx: TenantContext = Depends(current_tenant)) -> list[Fiel
 async def entity_schema(
     entity: FieldEntity, ctx: TenantContext = Depends(current_tenant)
 ) -> list[FieldDefinitionOut]:
-    """common → clinical_type → tenant, merged on `field_key` (step 5)."""
+    """common → clinical_type → tenant, merged on `field_key` (step 4)."""
     rows = await tenant_service.effective_schema(ctx.session, ctx.tenant, entity)
     return [FieldDefinitionOut.of(r) for r in rows]
 

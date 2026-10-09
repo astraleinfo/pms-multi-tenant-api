@@ -1,7 +1,8 @@
 """§3.1 — what the platform console can do.
 
-Creating a clinic claims its subdomain, seeds the core entitlements, writes a
-default configuration, and mints the first admin credential. Cross-tenant reads
+Creating a clinic claims its subdomain, writes a default configuration, and
+mints the first admin credential. There is nothing to switch on: every clinic
+has every module from the moment it exists. Cross-tenant reads
 are done one tenant at a time with that tenant bound to the session, so even
 the console never runs a query that could span two clinics by accident — there
 is no RLS bypass role anywhere in this application.
@@ -22,39 +23,37 @@ from app.core.permissions import Role
 from app.core.tenancy import slug_problem
 from app.db.session import set_tenant
 from app.models.clinical import Appointment, Encounter, Patient
-from app.models.enums import AccountStatus, TenantFeatureStatus, TenantStatus
+from app.models.enums import AccountStatus, TenantStatus
 from app.models.identity import PlatformUser, User
 from app.models.ops import Invoice, Payment
 from app.models.tenancy import (
     ClinicalType,
-    Feature,
     LabTest,
     MedicineSuggestion,
     PlatformSettings,
     Tenant,
     TenantConfig,
-    TenantFeature,
 )
 from app.schemas.tenancy import TenantCreateIn, TenantPatchIn
-from app.services.tenants import CORE_FEATURES
 
 PLATFORM_SETTINGS_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
 
 @dataclass(frozen=True)
 class Timings:
-    """The six operational knobs `platform_settings` carries, resolved once
-    per unit of work (one billing run, one invitation, one queued reminder)
-    and passed down as a plain value from there — never read from a
-    module-level global inside a pure function, so a run already in
-    progress cannot see two different configs partway through."""
+    """The operational knobs `platform_settings` carries, resolved once per
+    unit of work (one billing run, one invitation) and passed down as a plain
+    value from there — never read from a module-level global inside a pure
+    function, so a run already in progress cannot see two different configs
+    partway through (or bill one clinic at one fee and the next at another)."""
 
     invite_token_ttl_seconds: int
     reset_token_ttl_seconds: int
-    reminder_lead_hours: int
     rent_due_days: int
     rent_grace_days: int
     rent_reminder_days_before_due: int
+    #: the flat monthly clinic fee — one figure for every module, every clinic
+    subscription_fee_monthly: Decimal = Decimal("0")
 
 
 async def get_platform_settings(session: AsyncSession) -> PlatformSettings:
@@ -73,10 +72,10 @@ async def get_timings(session: AsyncSession) -> Timings:
     return Timings(
         invite_token_ttl_seconds=row.invite_token_ttl_seconds,
         reset_token_ttl_seconds=row.reset_token_ttl_seconds,
-        reminder_lead_hours=row.reminder_lead_hours,
         rent_due_days=row.rent_due_days,
         rent_grace_days=row.rent_grace_days,
         rent_reminder_days_before_due=row.rent_reminder_days_before_due,
+        subscription_fee_monthly=Decimal(str(row.subscription_fee_monthly or 0)).quantize(Decimal("0.01")),
     )
 
 
@@ -221,17 +220,6 @@ async def create_tenant(
         )
     )
 
-    core = set(CORE_FEATURES)
-    for feature in (await session.execute(select(Feature))).scalars():
-        session.add(
-            TenantFeature(
-                tenant_id=tenant.id,
-                feature_key=feature.key,
-                status=TenantFeatureStatus.ACTIVE if feature.key in core else TenantFeatureStatus.INACTIVE,
-                activated_at=today if feature.key in core else None,
-            )
-        )
-
     # No password is chosen here, by anyone. The account exists, has no hash,
     # and cannot be signed into; the caller mints an invitation and emails a
     # link, and the person who receives it picks their own.
@@ -246,6 +234,14 @@ async def create_tenant(
     )
     session.add(admin)
     await session.flush()
+
+    # the consent form for its kind of practice, copied from the system template
+    from app.services import consent as consent_service  # deferred: consent imports tenancy models
+
+    await consent_service.create_form(
+        session, tenant, consent_service.consent_templates.default_for(tenant.clinical_type).key,
+        actor_label="System", actor_id=None,
+    )
     return tenant, admin
 
 
@@ -288,82 +284,6 @@ async def update_tenant(
         setattr(tenant, key, value)
     await session.flush()
     return tenant
-
-
-async def set_tenant_feature(
-    session: AsyncSession,
-    tenant_id: uuid.UUID,
-    feature_key: str,
-    *,
-    status: TenantFeatureStatus,
-    today: date,
-) -> TenantFeature:
-    """Switch a module on or off for one clinic, from the console.
-
-    The clinic-side route (`/tenant/features/{key}/purchase`) records a clinic
-    buying something. This one is the platform's own hand on the switch — for
-    onboarding, for a trial, and for turning something off that was never paid
-    for. Both write the same row, so there is one answer to "is this on".
-
-    A core feature cannot be taken away: the product does not work without it.
-    """
-    if feature_key in CORE_FEATURES and status != TenantFeatureStatus.ACTIVE:
-        raise Conflict("That module is part of the core product and cannot be switched off.")
-
-    feature = await session.get(Feature, feature_key)
-    if feature is None:
-        raise NotFound("No such module.")
-
-    await set_tenant(session, tenant_id)
-    row = (
-        await session.execute(
-            select(TenantFeature).where(
-                TenantFeature.tenant_id == tenant_id, TenantFeature.feature_key == feature_key
-            )
-        )
-    ).scalar_one_or_none()
-
-    was_active = row is not None and row.status == TenantFeatureStatus.ACTIVE
-    if row is None:
-        row = TenantFeature(tenant_id=tenant_id, feature_key=feature_key, status=status)
-        session.add(row)
-    else:
-        row.status = status
-
-    # `activated_at` records when it was last switched on — the console counts
-    # billing from it, so a module switched back on starts again from today
-    # rather than looking billed for the months it was off. Re-sending "on"
-    # for a module already on leaves it alone, and a deactivation leaves the
-    # last date in place.
-    if status == TenantFeatureStatus.ACTIVE and not was_active:
-        row.activated_at = today
-
-    await session.flush()
-    return row
-
-
-async def set_feature_price(
-    session: AsyncSession, feature_key: str, price_monthly: float
-) -> tuple[Feature, Decimal]:
-    """Change what a module costs, for every clinic at once.
-
-    The catalogue is the platform's, not a clinic's, so this is one row and no
-    tenant is bound. A core module carries no price — it is in every plan and
-    cannot be bought or dropped — so pricing one is refused rather than stored
-    and then contradicted by every screen that says "included".
-
-    Returns the row and the price it replaced, for the audit line.
-    """
-    feature = await session.get(Feature, feature_key)
-    if feature is None:
-        raise NotFound("No such module.")
-    if feature.is_core or feature_key in CORE_FEATURES:
-        raise Conflict("That module is part of the core product and carries no price.")
-
-    previous = Decimal(feature.price_monthly or 0)
-    feature.price_monthly = Decimal(str(price_monthly)).quantize(Decimal("0.01"))
-    await session.flush()
-    return feature, previous
 
 
 SUPPORT_EMAIL_DOMAIN = "platform.invalid"
@@ -467,21 +387,9 @@ async def snapshot(session: AsyncSession) -> dict:
                 select(func.max(Encounter.date)).where(Encounter.tenant_id == tenant.id)
             )
         ).scalar()
-        active = set(
-            (
-                await session.execute(
-                    select(TenantFeature.feature_key).where(
-                        TenantFeature.tenant_id == tenant.id,
-                        TenantFeature.status == TenantFeatureStatus.ACTIVE,
-                    )
-                )
-            ).scalars()
-        )
-
         rows.append(
             {
                 "tenant": tenant,
-                "active_features": sorted(active),
                 "revenue": round(revenue, 2),
                 "last_activity": last_activity.isoformat() if last_activity else None,
                 **counts,

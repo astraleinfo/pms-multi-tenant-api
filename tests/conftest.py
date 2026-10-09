@@ -241,36 +241,6 @@ def token_from(url: str) -> str:
     return parse_qs(urlparse(url).query)["token"][0]
 
 
-class ReminderBroker:
-    """What the reminder jobs would have told Celery. No test reaches the real
-    broker: a worker from a development stack could be listening on it."""
-
-    def __init__(self) -> None:
-        self.published: list[dict] = []
-        self.revoked: list[str] = []
-
-    def publish(self, tenant_id: str, message_id: str, job_id: str, eta) -> None:
-        self.published.append(
-            {"tenant_id": tenant_id, "message_id": message_id, "job_id": job_id, "eta": eta}
-        )
-
-    def revoke(self, job_id: str) -> None:
-        self.revoked.append(job_id)
-
-    def jobs_for(self, message_id: str) -> list[str]:
-        return [p["job_id"] for p in self.published if p["message_id"] == message_id]
-
-
-@pytest.fixture(autouse=True)
-def reminder_broker(monkeypatch) -> ReminderBroker:
-    from app.services.messaging import reminders
-
-    broker = ReminderBroker()
-    monkeypatch.setattr(reminders, "_publish", broker.publish)
-    monkeypatch.setattr(reminders, "_revoke", broker.revoke)
-    return broker
-
-
 @pytest.fixture(autouse=True)
 def reset_rate_limiter():
     from app.core.rate_limit import limiter

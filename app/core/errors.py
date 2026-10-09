@@ -48,11 +48,6 @@ class PermissionDenied(AppError):
     code = "forbidden"
 
 
-class FeatureNotEnabled(AppError):
-    status_code = status.HTTP_403_FORBIDDEN
-    code = "feature_not_enabled"
-
-
 class NotFound(AppError):
     status_code = status.HTTP_404_NOT_FOUND
     code = "not_found"

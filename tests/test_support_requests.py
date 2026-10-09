@@ -48,20 +48,6 @@ def outbox(monkeypatch) -> list[mailer.Email]:
     return sent
 
 
-async def _locked_module(signed) -> dict:
-    """A paid module this clinic does not have switched on."""
-    catalog = (await signed.get("/v1/tenant/feature-catalog")).json()
-    active = {
-        f["feature_key"]
-        for f in (await signed.get("/v1/tenant/features")).json()
-        if f["status"] == "active"
-    }
-    for feature in catalog:
-        if not feature["is_core"] and feature["key"] not in active:
-            return feature
-    pytest.skip("every paid module is already active for this clinic")
-
-
 async def _row(tenant_id: str, request_id: str) -> SupportRequest:
     async with tenant_session(uuid.UUID(tenant_id)) as session:
         return await session.get(SupportRequest, uuid.UUID(request_id))
@@ -70,34 +56,39 @@ async def _row(tenant_id: str, request_id: str) -> SupportRequest:
 # ------------------------------------------------------------------ asking
 
 
-async def test_asking_for_a_module_is_stored_audited_and_queued(northgate, queued):
-    module = await _locked_module(northgate)
+async def test_asking_for_a_walkthrough_is_stored_audited_and_queued(northgate, queued):
     response = await northgate.post(
         "/v1/tenant/support-requests",
-        json={"kind": "activation", "feature_key": module["key"], "message": "From next month."},
+        json={"kind": "walkthrough", "message": "Show the front desk the lab bench."},
     )
     assert response.status_code == 201, response.text
     body = response.json()
     assert body["status"] == "queued"
-    assert body["feature_key"] == module["key"]
+    assert body["kind"] == "walkthrough"
+    assert "feature_key" not in body
     assert "admin@northgate.clinic" in body["requested_by"]
 
     # Handed to the worker, not sent from the request.
     assert (uuid.UUID(northgate.tenant_id), uuid.UUID(body["id"])) in queued
 
-    trail = await audit_lines(northgate.tenant_id, action="support.request_activation")
+    trail = await audit_lines(northgate.tenant_id, action="support.request_walkthrough")
     assert any(line["entity_id"] == body["id"] for line in trail)
 
     listed = (await northgate.get("/v1/tenant/support-requests")).json()
     assert body["id"] in {r["id"] for r in listed}
 
 
+async def test_a_walkthrough_needs_no_message(northgate, queued):
+    response = await northgate.post("/v1/tenant/support-requests", json={"kind": "walkthrough"})
+    assert response.status_code == 201, response.text
+
+
 async def test_the_same_ask_twice_returns_the_first_and_queues_nothing(
     northgate, queued, monkeypatch
 ):
+    """Deduplicated on who asked and what kind of ask it is."""
     monkeypatch.setattr(settings, "support_request_dedupe_minutes", 10)
-    module = await _locked_module(northgate)
-    ask = {"kind": "walkthrough", "feature_key": module["key"]}
+    ask = {"kind": "walkthrough"}
 
     first = await northgate.post("/v1/tenant/support-requests", json=ask)
     queued.clear()
@@ -106,6 +97,24 @@ async def test_the_same_ask_twice_returns_the_first_and_queues_nothing(
     assert second.status_code == 200, second.text
     assert second.json()["id"] == first.json()["id"]
     assert queued == []
+
+    # A different kind of ask from the same person is a new request.
+    other = await northgate.post(
+        "/v1/tenant/support-requests", json={"kind": "general", "message": "Something else."}
+    )
+    assert other.status_code == 201
+
+
+async def test_a_general_ask_that_says_something_new_is_not_a_repeat(northgate, queued, monkeypatch):
+    monkeypatch.setattr(settings, "support_request_dedupe_minutes", 10)
+    first = await northgate.post(
+        "/v1/tenant/support-requests", json={"kind": "general", "message": "First question."}
+    )
+    second = await northgate.post(
+        "/v1/tenant/support-requests", json={"kind": "general", "message": "Second question."}
+    )
+    assert first.status_code == 201 and second.status_code == 201
+    assert first.json()["id"] != second.json()["id"]
 
 
 async def test_any_member_of_staff_may_ask(northgate_doctor, queued):
@@ -119,30 +128,17 @@ async def test_any_member_of_staff_may_ask(northgate_doctor, queued):
 @pytest.mark.parametrize(
     "payload",
     [
-        {"kind": "activation"},  # which module?
         {"kind": "general"},  # asking for nothing
-        {"kind": "activation", "feature_key": "pharmacy", "tenant_id": str(uuid.uuid4())},
+        {"kind": "general", "message": "   "},
+        # there is nothing left to activate, and no module to name
+        {"kind": "activation", "message": "Switch the lab on"},
+        {"kind": "walkthrough", "feature_key": "lab"},
+        {"kind": "general", "message": "Hi", "tenant_id": str(uuid.uuid4())},
     ],
 )
 async def test_malformed_asks_are_refused(northgate, queued, payload):
     response = await northgate.post("/v1/tenant/support-requests", json=payload)
     assert response.status_code == 422, response.text
-
-
-async def test_an_unknown_module_is_not_found(northgate, queued):
-    response = await northgate.post(
-        "/v1/tenant/support-requests", json={"kind": "activation", "feature_key": "teleportation"}
-    )
-    assert response.status_code == 404
-
-
-async def test_asking_for_what_the_clinic_already_has_is_a_conflict(northgate, queued):
-    catalog = (await northgate.get("/v1/tenant/feature-catalog")).json()
-    core = next(f for f in catalog if f["is_core"])
-    response = await northgate.post(
-        "/v1/tenant/support-requests", json={"kind": "activation", "feature_key": core["key"]}
-    )
-    assert response.status_code == 409
 
 
 # --------------------------------------------------------------- isolation
@@ -151,10 +147,9 @@ async def test_asking_for_what_the_clinic_already_has_is_a_conflict(northgate, q
 async def test_a_clinic_sees_only_its_own_asks_and_the_console_sees_each(
     northgate, clearview, console, queued
 ):
-    module = await _locked_module(northgate)
     mine = (
         await northgate.post(
-            "/v1/tenant/support-requests", json={"kind": "walkthrough", "feature_key": module["key"]}
+            "/v1/tenant/support-requests", json={"kind": "walkthrough", "message": "Mine."}
         )
     ).json()
 
@@ -170,11 +165,10 @@ async def test_a_clinic_sees_only_its_own_asks_and_the_console_sees_each(
 
 
 async def test_the_worker_emails_the_desk_once(northgate, queued, outbox):
-    module = await _locked_module(northgate)
     body = (
         await northgate.post(
             "/v1/tenant/support-requests",
-            json={"kind": "activation", "feature_key": module["key"], "message": "Please & thanks"},
+            json={"kind": "walkthrough", "message": "Please & thanks"},
         )
     ).json()
     tenant_id, request_id = uuid.UUID(northgate.tenant_id), uuid.UUID(body["id"])
@@ -187,8 +181,10 @@ async def test_the_worker_emails_the_desk_once(northgate, queued, outbox):
     email = outbox[0]
     assert email.to == settings.support_email
     assert email.reply_to == "admin@northgate.clinic"
-    assert module["name"] in email.subject
+    assert email.subject == "Walkthrough for Northgate Dental Studio"
     assert body["id"] in email.text
+    # nothing about modules or what they cost
+    assert "Module" not in email.text and "per month" not in email.text
     assert "Please &amp; thanks" in (email.html or "")
 
     row = await _row(northgate.tenant_id, body["id"])
@@ -205,10 +201,9 @@ async def test_a_mail_failure_backs_off_then_parks(northgate, queued, monkeypatc
     monkeypatch.setattr(mailer, "send", broken)
     monkeypatch.setattr(settings, "support_request_max_attempts", 2)
 
-    module = await _locked_module(northgate)
     body = (
         await northgate.post(
-            "/v1/tenant/support-requests", json={"kind": "walkthrough", "feature_key": module["key"]}
+            "/v1/tenant/support-requests", json={"kind": "walkthrough", "message": "Retry me."}
         )
     ).json()
     tenant_id, request_id = uuid.UUID(northgate.tenant_id), uuid.UUID(body["id"])

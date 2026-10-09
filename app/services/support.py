@@ -30,12 +30,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import settings
-from app.core.errors import Conflict, NotFound
 from app.db.session import set_tenant
-from app.models.enums import SupportRequestKind, SupportRequestStatus, TenantFeatureStatus
+from app.models.enums import SupportRequestKind, SupportRequestStatus
 from app.models.identity import User
 from app.models.support import SupportRequest
-from app.models.tenancy import Feature, Tenant, TenantConfig, TenantFeature
+from app.models.tenancy import Tenant
 from app.services import audit, mailer
 from app.services import platform as platform_service
 
@@ -53,7 +52,6 @@ async def create(
     actor_kind: str,
     actor_label: str,
     kind: SupportRequestKind,
-    feature_key: str | None,
     message: str,
     ip: str = "",
     user_agent: str = "",
@@ -64,24 +62,6 @@ async def create(
     gets their earlier request back rather than a second email — a double click
     or an impatient retry should not page the desk twice.
     """
-    if feature_key is not None:
-        feature = await session.get(Feature, feature_key)
-        if feature is None:
-            raise NotFound("No such module.")
-        if kind == SupportRequestKind.ACTIVATION:
-            if feature.is_core:
-                raise Conflict(f"{feature.name} is a core module; every clinic already has it.")
-            current = (
-                await session.execute(
-                    select(TenantFeature.status).where(
-                        TenantFeature.tenant_id == tenant.id,
-                        TenantFeature.feature_key == feature_key,
-                    )
-                )
-            ).scalar_one_or_none()
-            if current == TenantFeatureStatus.ACTIVE:
-                raise Conflict(f"{feature.name} is already enabled for this clinic.")
-
     since = datetime.now(timezone.utc) - timedelta(minutes=settings.support_request_dedupe_minutes)
     earlier = (
         await session.execute(
@@ -89,9 +69,6 @@ async def create(
             .where(
                 SupportRequest.requested_by_id == user.id,
                 SupportRequest.kind == kind,
-                SupportRequest.feature_key.is_(None)
-                if feature_key is None
-                else SupportRequest.feature_key == feature_key,
                 SupportRequest.created_at >= since,
             )
             .order_by(SupportRequest.created_at.desc())
@@ -105,7 +82,6 @@ async def create(
     row = SupportRequest(
         tenant_id=tenant.id,
         kind=kind,
-        feature_key=feature_key,
         message=message,
         requested_by_id=user.id,
         requested_by_label=actor_label,
@@ -118,7 +94,7 @@ async def create(
     await audit.record(
         session, action=f"support.request_{kind.value}", tenant_id=tenant.id, actor_kind=actor_kind,
         actor_id=user.id, actor_label=actor_label, entity="support_request", entity_id=str(row.id),
-        ip=ip, user_agent=user_agent, meta={"feature_key": feature_key},
+        ip=ip, user_agent=user_agent,
     )
     return row, True
 
@@ -150,30 +126,12 @@ def _console_url(tenant_id: uuid.UUID) -> str:
 
 async def _email_for(session: AsyncSession, row: SupportRequest) -> mailer.Email:
     tenant = await session.get(Tenant, row.tenant_id)
-    feature = await session.get(Feature, row.feature_key) if row.feature_key else None
-    # Read, never created: `tenants.get_config` would insert a missing row, and
-    # sending an email is no reason to write clinic configuration.
-    currency = (
-        await session.execute(
-            select(TenantConfig.currency).where(TenantConfig.tenant_id == row.tenant_id)
-        )
-    ).scalar_one_or_none()
-    price = None
-    if feature and feature.price_monthly:
-        # The ISO code, not a symbol: it reads the same in every mail client.
-        # Whole figures print whole; a price the console set in paise keeps them.
-        amount = float(feature.price_monthly)
-        figure = f"{amount:,.0f}" if amount.is_integer() else f"{amount:,.2f}"
-        price = f"{currency.value if currency else ''} {figure}".strip()
     desk = await platform_service.get_platform_settings(session)
     return mailer.support_request(
         to=desk.support_email,
         kind=row.kind.value,
         clinic=tenant.name if tenant else "A clinic",
         slug=tenant.slug if tenant else "",
-        module=feature.name if feature else None,
-        module_key=feature.key if feature else None,
-        price=price,
         requested_by=row.requested_by_label or "Unknown",
         reply_to=row.reply_to or None,
         message=row.message,

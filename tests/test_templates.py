@@ -52,8 +52,8 @@ def test_a_clinic_without_a_phone_still_gets_a_way_to_reply():
 
 
 def test_a_booking_without_a_doctor_still_reads_as_a_sentence():
-    body = render(MessageTemplate.APPOINTMENT_REMINDER, {**FULL, "doctor_name": ""})
-    assert "seeing the clinic" in body
+    body = render(MessageTemplate.BOOKING_CONFIRMATION, {**FULL, "doctor_name": ""})
+    assert "booked with the clinic" in body
     assert "  " not in body
 
 
@@ -70,8 +70,8 @@ def _emails() -> list[mailer.Email]:
     rent = [
         mailer.rent_notice(
             to="admin@clinic.example", name="Priya", clinic="Northgate <Dental>", stage=stage,
-            number="AST-202610-NORTHGATE", period="October 2026", amount="INR 8,996.00",
-            lines=[("Billing", "INR 2,999.00")], due_on=due, hold_on=hold, reference="UPI 1",
+            number="AST-202610-NORTHGATE", period="October 2026", amount="INR 9,999.00",
+            lines=[("Astrale PMS subscription", "INR 9,999.00")], due_on=due, hold_on=hold, reference="UPI 1",
             url="https://northgate.example/settings?tab=subscription",
         )
         for stage in ("issued", "due_soon", "due", "overdue", "final", "blocked", "paid")
@@ -82,8 +82,8 @@ def _emails() -> list[mailer.Email]:
         mailer.password_reset(to="p@clinic.example", name="Priya", clinic="Northgate <Dental>",
                               url="https://x.example/reset?token=a", expires_in_hours=2),
         mailer.support_request(
-            to="support@astrale.health", kind="activation", clinic="Northgate <Dental>", slug="northgate",
-            module="Lab", module_key="lab", price="INR 1,999", requested_by="Priya", reply_to="p@clinic.example",
+            to="support@astrale.health", kind="walkthrough", clinic="Northgate <Dental>", slug="northgate",
+            requested_by="Priya", reply_to="p@clinic.example",
             message="<script>alert(1)</script>", console_url="https://admin.example/t", reference="SR-1",
         ),
         *rent,

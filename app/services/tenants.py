@@ -1,7 +1,9 @@
-"""Tenant lookup, entitlements, configuration, and the field-resolution engine.
+"""Tenant lookup, configuration, and the field-resolution engine.
 
-The four axes stay separate here on purpose: `is_feature_active` never reads
-`clinical_type`, and `resolve_schema` never reads an entitlement.
+There is no per-tenant module switch: every clinic has every module. What a
+clinic sees differently comes from its clinical type (which shared field set
+and exam workflow apply) and its own customisation (configuration and custom
+fields) — `resolve_schema` reads those two and nothing else.
 """
 
 from __future__ import annotations
@@ -14,12 +16,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import undefer
 
-from app.core.errors import Conflict, NotFound, ValidationFailed
-from app.models.enums import FieldEntity, FieldScope, FieldType, TenantFeatureStatus, TenantStatus
-from app.models.tenancy import Feature, FieldDefinition, Tenant, TenantConfig, TenantFeature
+from app.core.errors import NotFound, ValidationFailed
+from app.models.enums import FieldEntity, FieldScope, FieldType, TenantStatus
+from app.models.tenancy import FieldDefinition, Tenant, TenantConfig
 from app.services import storage
-
-CORE_FEATURES = ("patient", "appointment", "queue", "consultation", "prescription")
 
 _SCOPE_RANK = {FieldScope.COMMON: 0, FieldScope.CLINICAL_TYPE: 1, FieldScope.TENANT: 2}
 
@@ -41,64 +41,6 @@ async def require_active_tenant(session: AsyncSession, slug: str) -> Tenant:
     if tenant.status == TenantStatus.SUSPENDED:
         raise NotFound("This clinic is suspended.")
     return tenant
-
-
-# --- entitlements (§3.2) ----------------------------------------------------
-
-
-async def list_features(session: AsyncSession, tenant_id: uuid.UUID) -> list[TenantFeature]:
-    rows = await session.execute(
-        select(TenantFeature).where(TenantFeature.tenant_id == tenant_id).order_by(TenantFeature.feature_key)
-    )
-    return list(rows.scalars())
-
-
-async def active_feature_keys(session: AsyncSession, tenant_id: uuid.UUID) -> set[str]:
-    rows = await session.execute(
-        select(TenantFeature.feature_key).where(
-            TenantFeature.tenant_id == tenant_id,
-            TenantFeature.status == TenantFeatureStatus.ACTIVE,
-        )
-    )
-    return set(rows.scalars())
-
-
-async def is_feature_active(session: AsyncSession, tenant_id: uuid.UUID, key: str) -> bool:
-    row = await session.execute(
-        select(TenantFeature.id).where(
-            TenantFeature.tenant_id == tenant_id,
-            TenantFeature.feature_key == key,
-            TenantFeature.status == TenantFeatureStatus.ACTIVE,
-        )
-    )
-    return row.scalar_one_or_none() is not None
-
-
-async def set_feature(
-    session: AsyncSession, tenant_id: uuid.UUID, key: str, *, active: bool, today: date
-) -> TenantFeature:
-    feature = await session.get(Feature, key)
-    if feature is None:
-        raise NotFound("No such feature.")
-    if feature.is_core and not active:
-        raise Conflict("Core modules cannot be switched off.")
-
-    row = (
-        await session.execute(
-            select(TenantFeature).where(
-                TenantFeature.tenant_id == tenant_id, TenantFeature.feature_key == key
-            )
-        )
-    ).scalar_one_or_none()
-
-    if row is None:
-        row = TenantFeature(tenant_id=tenant_id, feature_key=key)
-        session.add(row)
-
-    row.status = TenantFeatureStatus.ACTIVE if active else TenantFeatureStatus.INACTIVE
-    row.activated_at = today if active else None
-    await session.flush()
-    return row
 
 
 # --- configuration (§3.3) ---------------------------------------------------
@@ -229,6 +171,20 @@ async def logo_bytes(config: TenantConfig) -> bytes | None:
     if config.logo_storage_key:
         return await storage.get(config.logo_storage_key)
     return config.logo_data
+
+
+async def logo_for(session: AsyncSession, tenant_id: uuid.UUID) -> bytes | None:
+    """The clinic's logo for printing, or `None`. Unlike `config_with_logo`, it
+    never creates a config row for a clinic that has none — printing a document
+    is a read, and must not write. `session` must be bound to `tenant_id`."""
+    row = (
+        await session.execute(
+            select(TenantConfig)
+            .options(undefer(TenantConfig.logo_data))
+            .where(TenantConfig.tenant_id == tenant_id)
+        )
+    ).scalar_one_or_none()
+    return await logo_bytes(row) if row is not None else None
 
 
 async def remove_logo(session: AsyncSession, config: TenantConfig) -> None:

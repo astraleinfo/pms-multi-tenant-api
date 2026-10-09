@@ -75,15 +75,14 @@ async def test_the_practice_report_prints_the_dashboard_figures(northgate, days)
     assert "PRACTICE REPORT" in text
     assert f"{dashboard['core']['patients']:,}" in text
     assert f"{days} days" in text
-    if "billing" in dashboard["modules"]:
-        assert f"{dashboard['modules']['billing']['outstanding']:,.2f}" in text
+    assert f"{dashboard['modules']['billing']['outstanding']:,.2f}" in text
 
 
-async def test_the_report_leaves_out_modules_the_clinic_does_not_have(rowan):
-    dashboard = (await rowan.get("/v1/analytics/dashboard")).json()
+async def test_the_report_prints_every_module_for_every_clinic(rowan):
+    """Rowan only ever had the lab switched on; its report has every section."""
     text = _text((await rowan.get("/v1/analytics/report.pdf")).content)
-    for key, heading in (("billing", "BILLING"), ("pharmacy", "PHARMACY"), ("lab", "LAB\n")):
-        assert (heading in text) == (key in dashboard["modules"])
+    for heading in ("BILLING", "PHARMACY", "LAB\n"):
+        assert heading in text, heading
 
 
 async def test_the_report_is_refused_where_the_dashboard_is(client):

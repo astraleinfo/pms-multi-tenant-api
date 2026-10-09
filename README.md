@@ -57,19 +57,36 @@ Two supporting details, both deliberate:
 
 ---
 
-## The four axes
+## The three axes
 
-The reference document's first rule is that tenancy, clinical type, entitlement and
-customisation are never conflated. They live in four separate places here:
+The reference document's first rule is that tenancy, clinical type and customisation are never
+conflated. They live in three separate places here:
 
 | Axis | Where | What it decides |
 |---|---|---|
 | **Tenant** | `tenant_id` on every row, `app.tenant_id`, the RLS policies | which rows exist at all |
 | **Clinical type** | `Tenant.clinical_type`, `clinical_ext`, `resolve_schema` | which fields and which exam payload |
-| **Entitlement** | `TenantFeature`, `require_feature(...)` | which routes answer at all |
-| **Customisation** | tenant-scoped `FieldDefinition` rows | extra fields on the dynamic forms |
+| **Customisation** | `TenantConfig` and tenant-scoped `FieldDefinition` rows | how the clinic is configured, and extra fields on the dynamic forms |
 
-`is_feature_active` never reads `clinical_type`; `resolve_schema` never reads an entitlement.
+There is no per-tenant module axis. **Every tenant has every module** — patients, appointments,
+queue, consultation, prescriptions, pharmacy, lab, inventory, billing, advanced reports,
+configuration and team. The API is a modular monolith: each module is its own router and service
+in one codebase (`app/api/v1/modules.py`, `app/services/pharmacy.py`, `lab.py`, `inventory.py`,
+`billing.py`, …), not something switched on per clinic. What a person reaches inside a module is
+decided by their role's permissions alone.
+
+### What a clinic pays
+
+The platform bills each clinic one flat monthly fee that covers every module —
+`platform_settings.subscription_fee_monthly`, set by a super admin with
+`PATCH /v1/platform/settings` and shown to the whole console as `fee_monthly` on
+`GET /v1/platform/billing`. The rent cycle (`app/services/rent.py`) raises a one-line bill
+("Astrale PMS subscription") for every clinic that is `active`, not `billing_exempt`, while the
+fee is above zero; a clinic on `trial` or `suspended` is not billed. The clinic reads the same rule
+back as `plan` on `GET /v1/tenant/subscription` —
+`{price_monthly, billed, not_billed_reason: "exempt"|"trial"|"suspended"|"no_fee"|null, monthly_total}`
+— so its plan and its next bill cannot disagree. Reminders, the grace period, the hold and
+settling a bill from the console work as before.
 
 ---
 
@@ -79,10 +96,11 @@ Applied in this order, as dependencies in `app/api/deps.py`:
 
 1. **Auth** — resolve the subject from the token alone.
 2. **Tenant isolation** — bind the session to that clinic; from here the database enforces it.
-3. **Feature guard** — `require_feature("billing")` on every purchasable module.
-4. **RBAC** — `require_permission(Permission.PATIENT_WRITE)`. Handlers name a permission, never
+3. **RBAC** — `require_permission(Permission.PATIENT_WRITE)`. Handlers name a permission, never
    a role, so roles are a table (`app/core/permissions.py`) rather than a sweep through routers.
-5. **Schema resolver** — common → clinical_type → tenant, merged on `field_key`, for the
+   Every module route — pharmacy, lab, inventory, billing included — is guarded this way and
+   nothing else.
+4. **Schema resolver** — common → clinical_type → tenant, merged on `field_key`, for the
    dynamic-form routes.
 
 ---
@@ -93,7 +111,7 @@ Applied in this order, as dependencies in `app/api/deps.py`:
 make install     # virtualenv + dependencies
 make db          # PostgreSQL in docker, with both roles created
 make migrate     # schema, then the row-level security policies
-make seed        # the three demo clinics from the front end's seed
+make seed        # the three demo clinics from the front end's seed (all modules, a 9,999 fee)
 make run         # http://localhost:8000 — docs at /docs
 ```
 
@@ -126,6 +144,11 @@ then `-2026`:
 | `rowan.localhost` | `owner@rowanskin.co` | `owner-2026` |
 | `admin.localhost` (console) | `ines@astrale.health` (super admin) | `ines-2026` |
 | `admin.localhost` (console) | `rafael@astrale.health` (support desk) | `rafael-2026` |
+
+All three demo clinics have every module. They differ by clinical type (Northgate is dental,
+Clearview ophthalmology, Rowan dermatology), configuration, data and custom fields. The seed sets
+the flat clinic fee to 9,999.00, so Northgate and Clearview (`active`) are billed it and Rowan
+(`trial`) is not.
 
 They are hashed with Argon2 on the way into the database. Five wrong passwords lock an account;
 a practice admin releases it from `PATCH /v1/users/{id}/status`, which also clears the counter
@@ -488,26 +511,30 @@ Everything is under `/v1`. The full list is at `/docs`; this is the shape of it.
 | Area | Routes |
 |---|---|
 | **Auth** | `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, `GET /auth/me`, `POST /platform/auth/login` |
-| **Tenant** (§3.2, §3.3) | `GET /tenant`, `GET|PATCH /tenant/config`, `GET /tenant/features`, `POST /tenant/features/{key}/purchase`, `.../deactivate`, `GET|POST /tenant/fields`, `DELETE /tenant/fields/{id}`, `GET /tenant/schema/{entity}` |
+| **Tenant** (§3.3) | `GET /tenant`, `GET|PATCH /tenant/config`, `GET|POST|DELETE /tenant/config/logo`, `GET|POST /tenant/fields`, `DELETE /tenant/fields/{id}`, `GET /tenant/schema/{entity}`, `GET|POST /tenant/support-requests` (`walkthrough` or `general`) |
+| **Subscription** | `GET /tenant/subscription`, `GET /tenant/subscription/invoices/{id}/pdf` (`tenant:subscription:manage`) |
 | **Staff** | `GET /users`, `GET /users/doctors`, `POST /users`, `PATCH /users/{id}/status`, `GET /users/permissions` |
 | **Me** | `GET /auth/me`, `PATCH /auth/me/preferences` |
 | **Patients** (§3.4, §3.13) | `GET /patients` (paged), `POST /patients`, `GET|PATCH /patients/{id}`, `GET /patients/{id}/history` |
 | **Scheduling** (§3.5, §3.6) | `GET|POST /appointments`, `GET /appointments/availability`, `PATCH /appointments/{id}/status`, `POST /appointments/{id}/checkin`, `GET /queue`, `POST /queue/walkin`, `PATCH /queue/{id}/status`, `GET /queue/display` |
 | **Consultation** (§3.7, §3.8) | `GET /encounters/schema`, `GET|POST /encounters`, `GET|PATCH /encounters/{id}`, `POST /encounters/{id}/prescriptions`, `GET /prescriptions` |
-| **Pharmacy** (§3.9) 🔒 | `GET /pharmacy/prescriptions`, `POST /pharmacy/prescriptions/{id}/dispense` |
-| **Lab** (§3.10) 🔒 | `POST /encounters/{id}/lab-orders`, `GET /encounters/{id}/lab-results`, `GET /lab/orders`, `POST /lab/orders/{id}/start`, `POST /lab/orders/{id}/results`, `PATCH /lab/orders/{id}`, `GET|POST /lab/orders/{id}/attachments`, `GET|DELETE /lab/orders/{id}/attachments/{aid}` |
-| **Inventory** (§3.11) 🔒 | `GET|POST /inventory/items`, `PATCH /inventory/items/{id}`, `/batches`, `/levels`, `/expiring`, `GET|POST /inventory/transactions` |
-| **Billing** (§3.12) 🔒 | `GET|POST /billing/invoices` (`?department=clinic\|lab\|pharmacy`), `GET /billing/invoices/suggestions`, `GET /billing/invoices/{id}`, `POST .../issue`, `.../void`, `.../payments` |
+| **Pharmacy** (§3.9) | `GET /pharmacy/prescriptions`, `POST /pharmacy/prescriptions/{id}/dispense` |
+| **Lab** (§3.10) | `POST /encounters/{id}/lab-orders`, `GET /encounters/{id}/lab-results`, `GET /lab/orders`, `POST /lab/orders/{id}/start`, `POST /lab/orders/{id}/results`, `PATCH /lab/orders/{id}`, `GET|POST /lab/orders/{id}/attachments`, `GET|DELETE /lab/orders/{id}/attachments/{aid}` |
+| **Inventory** (§3.11) | `GET|POST /inventory/items`, `PATCH /inventory/items/{id}`, `/batches`, `/levels`, `/expiring`, `GET|POST /inventory/transactions` |
+| **Billing** (§3.12) | `GET|POST /billing/invoices` (`?department=clinic\|lab\|pharmacy`), `GET /billing/invoices/suggestions`, `GET /billing/invoices/{id}`, `POST .../issue`, `.../void`, `.../payments` |
 | **Pricing** (§3.12) | `GET|POST /pricing/services`, `PATCH|DELETE /pricing/services/{id}`, `POST /pricing/services/import-lab-catalogue` |
-| **Accounts** (§3.12) 🔒 | `GET /billing/patients/{id}/account`, `GET /billing/patients/{id}/charges`, `POST /billing/patients/{id}/invoices`, `POST /billing/patients/{id}/payments` |
+| **Accounts** (§3.12) | `GET /billing/patients/{id}/account`, `GET /billing/patients/{id}/charges`, `POST /billing/patients/{id}/invoices`, `POST /billing/patients/{id}/payments` |
 | **Realtime** (§3.6) | `WS /ws/queue?access_token=…` |
 | **Analytics** (§3.14) | `GET /analytics/dashboard` |
-| **Platform** (§3.1) | `GET|POST /platform/tenants`, `PATCH /platform/tenants/{id}/status`, `GET /platform/snapshot`, `GET /platform/me` |
+| **Platform** (§3.1) | `GET|POST /platform/tenants`, `PATCH /platform/tenants/{id}/status`, `GET /platform/snapshot`, `GET /platform/me`, `GET|PATCH /platform/settings` (incl. `subscription_fee_monthly`), `GET /platform/billing`, `POST /platform/billing/run` |
 | **Background jobs** (§3.1) 👑 | `GET /platform/jobs`, `GET /platform/jobs/tasks/{id}`, `POST|DELETE /platform/jobs/flower-session`, `GET|POST /platform/jobs/flower/{path}` |
 | **Public** | `GET /v1/public/tenant`, `GET /health`, `GET /health/db` |
 
-🔒 = behind an entitlement. A clinic that has not bought the module gets `403 feature_not_enabled`,
-whatever its staff's roles say.
+Every clinic reaches every module; a role without the route's permission gets `403 forbidden`, and
+another clinic's row is `404`. There are no module-switch routes: `/tenant/features`,
+`/tenant/feature-catalog`, `/tenant/features/{key}/purchase|deactivate`, `/catalog/features`,
+`/platform/tenants/{id}/features[/{key}]` and `/platform/catalog/features[/{key}]` were removed
+with no replacement, and `GET /auth/me` no longer carries a `features` list.
 
 👑 = platform super admins only. Everyone else gets `403 forbidden`, including a practice admin
 with a perfectly good session and a member of the platform's own support desk. See
@@ -739,6 +766,9 @@ its own — a broker hiccup the sweep covers, a carrier refusing one number — 
 | `none` (default) | the log only | — |
 | `sentry` | the Sentry project | `SENTRY_DSN` (production refuses to start without it) |
 
+Only `ENVIRONMENT=production` reports. In development, staging and the test suite every process
+keeps the null reporter, whatever `ERROR_REPORTER` and `SENTRY_DSN` say.
+
 Each process starts reporting itself and is tagged with what it is — `api`, `worker`, `beat`,
 `outbox`. Inside the API, `RequestContextMiddleware` binds each request, so anything logged at
 `ERROR` while it is served — in a route, a service, a background task — is reported with its
@@ -776,7 +806,7 @@ rows, that a `WHERE tenant_id = <someone else>` returns nothing, that the app ro
 disable a policy, and that it does not hold `BYPASSRLS`.
 
 The rest: `test_auth.py` (enumeration, lockout, rotation, reuse detection, cross-host tokens),
-`test_guards.py` (entitlements and roles, suspension, self-lockout), `test_workflows.py` (the
+`test_guards.py` (every module for every clinic, roles, suspension, self-lockout), `test_workflows.py` (the
 whole loop from registration to a paid invoice, plus the state machines and the ledger),
 `test_schema_and_platform.py` (field resolution, clinic creation, and the checks that keep the
 isolation machinery honest), and `test_realtime.py` (the socket: refused at another clinic's
@@ -848,5 +878,5 @@ scripts/
   shared limiter in front and swap the broker for Redis (see above).
 * Analytics reads the transactional tables directly, as §3.14 prescribes. When a clinic's
   history outgrows that, cache the aggregations rather than adding a second store.
-* Feature purchase records the outcome of a payment; the payment itself belongs to whatever
-  processor the platform uses.
+* Settling a subscription bill records the outcome of a payment; the payment itself belongs to
+  whatever processor the platform uses.

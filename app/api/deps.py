@@ -2,9 +2,11 @@
 
     1. auth              — who is this, from the token alone
     2. tenant isolation   — bind the session to their clinic, and only theirs
-    3. feature guard      — is the module they are asking for switched on
-    4. RBAC guard         — does their role allow this action
-    5. schema resolver    — merge the field definitions for dynamic-form routes
+    3. RBAC guard         — does their role allow this action
+    4. schema resolver    — merge the field definitions for dynamic-form routes
+
+Every clinic has every module, so there is no per-module switch between
+isolation and RBAC: what a person may reach is decided by their role alone.
 
 Nothing downstream may re-derive the tenant: `TenantContext.tenant` is the only
 tenant a handler can see, and it came from the host and the token agreeing.
@@ -26,7 +28,6 @@ from app.core.config import settings
 from app.core.errors import (
     AccountOnHold,
     AuthError,
-    FeatureNotEnabled,
     NotFound,
     PermissionDenied,
 )
@@ -104,7 +105,6 @@ class TenantContext:
     config: TenantConfig
     user: User
     session: AsyncSession
-    active_features: set[str]
 
     @property
     def tenant_id(self) -> uuid.UUID:
@@ -133,9 +133,6 @@ class TenantContext:
     @property
     def actor_id(self) -> uuid.UUID:
         return self.user.id
-
-    def has_feature(self, key: str) -> bool:
-        return key in self.active_features
 
 
 def _token_from(request: Request, credentials: HTTPAuthorizationCredentials | None) -> str:
@@ -241,7 +238,6 @@ async def current_tenant(
         )
 
     config = await tenant_service.get_config(session, tenant.id)
-    active = await tenant_service.active_feature_keys(session, tenant.id)
 
     request.state.tenant_id = str(tenant.id)
     request.state.actor_id = str(user.id)
@@ -252,7 +248,6 @@ async def current_tenant(
         config=config,
         user=user,
         session=session,
-        active_features=active,
     )
 
 
@@ -378,7 +373,7 @@ async def current_super_admin(
 
 
 def require_permission(permission: Permission):
-    """Step 4 — RBAC. Handlers name a permission, never a role."""
+    """Step 3 — RBAC. Handlers name a permission, never a role."""
 
     async def guard(ctx: TenantContext = Depends(current_tenant)) -> TenantContext:
         if not role_has(ctx.user.role, permission):
@@ -388,27 +383,8 @@ def require_permission(permission: Permission):
     return guard
 
 
-def require_feature(feature_key: str, permission: Permission | None = None):
-    """Step 3 — entitlement, then step 4 if a permission is named.
-
-    The front end hides modules it has not bought; this is what actually stops
-    a request reaching one.
-    """
-
-    async def guard(ctx: TenantContext = Depends(current_tenant)) -> TenantContext:
-        if not ctx.has_feature(feature_key):
-            raise FeatureNotEnabled(
-                "That module is not enabled for this clinic.", details={"feature": feature_key}
-            )
-        if permission is not None and not role_has(ctx.user.role, permission):
-            raise PermissionDenied("Your role does not allow that.")
-        return ctx
-
-    return guard
-
-
 async def resolved_schema(entity: FieldEntity, ctx: TenantContext) -> list:
-    """Step 5 — the schema resolver, for routes that render dynamic forms."""
+    """Step 4 — the schema resolver, for routes that render dynamic forms."""
     return await tenant_service.effective_schema(ctx.session, ctx.tenant, entity)
 
 

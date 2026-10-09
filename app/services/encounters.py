@@ -2,7 +2,7 @@
 
 One `Encounter` table serves every discipline; the clinical type only decides
 what `clinical_ext` carries and which extra fields the schema resolver returns.
-Prescriptions are core: they exist whether or not Pharmacy has been bought.
+Prescriptions belong to the consultation: Pharmacy reads them, it does not own them.
 """
 
 from __future__ import annotations

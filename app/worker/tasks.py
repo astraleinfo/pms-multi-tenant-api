@@ -21,7 +21,6 @@ from sqlalchemy.pool import NullPool
 from app.core.config import settings
 from app.db import guard  # noqa: F401 - the ORM tenant guard applies to jobs too
 from app.services import import_jobs, rent, support
-from app.services.messaging import reminders
 from app.worker.celery_app import celery_app
 
 log = logging.getLogger("pms.worker")
@@ -121,45 +120,6 @@ def rent_cycle() -> dict:
     if summary["raised"] or summary["held"] or summary["lifted"] or summary["failed"]:
         log.info("rent cycle: %s", summary)
     return summary
-
-
-@celery_app.task(
-    name="pms.reminders.send",
-    bind=True,
-    # Only for `missing`: the booking that queued this may not have committed
-    # yet, or another delivery of this job holds the row. A failed send is not
-    # a Celery retry — the row gets a backoff and a new job.
-    max_retries=3,
-    default_retry_delay=10,
-)
-def send_reminder(self, tenant_id: str, message_id: str) -> str:
-    """Send one appointment reminder — if the row still names this job."""
-    outcome = _run(
-        lambda factory: reminders.send(
-            factory, uuid.UUID(tenant_id), uuid.UUID(message_id), self.request.id
-        )
-    )
-    if outcome == "missing" and self.request.retries < self.max_retries:
-        raise self.retry()
-    return outcome
-
-
-@celery_app.task(name="pms.reminders.promote")
-def promote_reminders() -> int:
-    """The midnight run: queue each clinic's reminders for its new day."""
-    queued = _run(lambda factory: reminders.promote(factory))
-    if queued:
-        log.info("queued %s reminder(s) for today", queued)
-    return queued
-
-
-@celery_app.task(name="pms.reminders.sweep")
-def sweep_reminders() -> int:
-    """Give a new job to every queued reminder whose job was lost."""
-    requeued = _run(lambda factory: reminders.sweep(factory))
-    if requeued:
-        log.info("sweep re-queued %s reminder(s)", requeued)
-    return requeued
 
 
 def enqueue_support_request(tenant_id: uuid.UUID, request_id: uuid.UUID) -> bool:

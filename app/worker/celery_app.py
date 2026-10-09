@@ -32,7 +32,6 @@ A broker wiped clean delays delivery by one sweep; it loses nothing.
 from __future__ import annotations
 
 from celery import Celery, signals
-from celery.schedules import crontab
 
 from app.core import error_reporting
 from app.core.config import settings
@@ -73,16 +72,6 @@ celery_app.conf.update(
         },
         "sweep-imports": {
             "task": "pms.imports.sweep",
-            "schedule": float(settings.celery_sweep_seconds),
-        },
-        # Appointment reminders due today move to the queue at midnight, on
-        # the PMS's clock (see `timezone` above).
-        "reminders-midnight": {
-            "task": "pms.reminders.promote",
-            "schedule": crontab(hour=0, minute=0),
-        },
-        "sweep-reminders": {
-            "task": "pms.reminders.sweep",
             "schedule": float(settings.celery_sweep_seconds),
         },
         # The monthly bills and their reminders. Only when switched on: with

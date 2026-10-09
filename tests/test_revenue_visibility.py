@@ -25,8 +25,7 @@ async def test_a_practice_admin_sees_the_takings(northgate):
     data = await _analytics(northgate)
     assert data["revenue_visible"] is True
     assert MONEY_CORE <= set(data["core"])
-    if "billing" in data["modules"]:
-        assert MONEY_BILLING <= set(data["modules"]["billing"])
+    assert MONEY_BILLING <= set(data["modules"]["billing"])
 
 
 @pytest.mark.parametrize("who", ["northgate_doctor", "northgate_reception"])
@@ -36,14 +35,13 @@ async def test_anyone_else_is_sent_the_counts_and_not_the_money(client, who):
     assert not MONEY_CORE & set(data["core"])
     assert "patients" in data["core"], "the rest of the read model is untouched"
 
-    billing = data["modules"].get("billing")
-    if billing is not None:
-        assert not MONEY_BILLING & set(billing)
-        assert {"count", "unpaid", "drafts"} <= set(billing), "the counter's work list stays"
-    pharmacy = data["modules"].get("pharmacy")
-    if pharmacy is not None:
-        assert "dispensed_value" not in pharmacy
-    for clinician in data["modules"].get("advanced_reports", {}).get("clinicians", []):
+    # Every panel is still there — redaction removes figures, never panels.
+    assert {"pharmacy", "lab", "inventory", "billing", "advanced_reports"} == set(data["modules"])
+    billing = data["modules"]["billing"]
+    assert not MONEY_BILLING & set(billing)
+    assert {"count", "unpaid", "drafts"} <= set(billing), "the counter's work list stays"
+    assert "dispensed_value" not in data["modules"]["pharmacy"]
+    for clinician in data["modules"]["advanced_reports"]["clinicians"]:
         assert "revenue" not in clinician
 
 

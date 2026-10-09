@@ -14,7 +14,8 @@ its name to `ERROR_REPORTER` in `app/core/config.py`, and add an entry to
 Every process that wants reports calls `init` once at startup, naming itself:
 the API in its lifespan, Celery's worker and beat from their init signals, the
 outbox worker from its entry point. A process that never calls it keeps the
-`NullReporter` and reports nothing — which is what the test suite gets.
+`NullReporter` and reports nothing — which is what the test suite gets. Outside
+`ENVIRONMENT=production`, `init` itself keeps the `NullReporter` too.
 """
 
 from __future__ import annotations
@@ -60,7 +61,19 @@ def init(component: str) -> Reporter:
     `component` — "api", "worker", "beat", "outbox" — is attached to every
     report, so one project can tell the processes apart. A misconfigured
     service raises here, at startup, rather than dropping reports later.
+
+    Only production reports. Development, staging and the tests keep the
+    `NullReporter` whatever `ERROR_REPORTER` says, so a DSN copied into a
+    local `.env` never fills the production project with local noise.
     """
+    if not settings.is_production:
+        if settings.error_reporter != "none":
+            log.info(
+                "not reporting errors to %s: ENVIRONMENT=%s, only production reports",
+                settings.error_reporter,
+                settings.environment,
+            )
+        return install(NullReporter())
     builder = _BUILDERS.get(settings.error_reporter)
     if builder is None:  # pragma: no cover - unreachable while the Literal is the source
         raise RuntimeError(f"No error reporter is registered for {settings.error_reporter!r}.")

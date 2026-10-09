@@ -16,6 +16,7 @@ import json
 import uuid
 from datetime import date, datetime, timedelta
 from datetime import time as time_t
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -47,16 +48,15 @@ from app.models.ops import (
 )
 from app.models.tenancy import (
     ClinicalType,
-    Feature,
     FieldDefinition,
     LabTest,
     MedicineSuggestion,
     Tenant,
     TenantConfig,
-    TenantFeature,
 )
 from app.schemas.common import zone
 from app.seed.history import seed_history
+from app.services.platform import get_platform_settings
 
 DATA_FILE = Path(__file__).with_name("seed_data.json")
 NAMESPACE = uuid.UUID("5f0f4d3a-6a6f-4c1e-9d2f-0f3c7b1a9e10")
@@ -133,13 +133,26 @@ async def wipe(session: AsyncSession) -> None:
             "inventory_transactions",
             "inventory_batches",
             "prescription_items", "prescriptions", "lab_attachments", "lab_orders", "encounters",
-            "queue_entries", "appointments",
-            "patients", "inventory_items", "tenant_configs", "tenant_features",
+            "queue_entries", "follow_up_calls", "patient_notes", "appointments",
+            "patients", "inventory_items", "tenant_configs",
             "field_definitions", "users", "tenants", "platform_users", "medicine_suggestions",
-            "lab_tests", "features", "clinical_types",
+            "lab_tests", "clinical_types",
         ]
     )
     await session.execute(text(f"TRUNCATE TABLE {tables} RESTART IDENTITY CASCADE"))
+
+
+#: The demo's flat monthly clinic fee. Northgate and Clearview are `active`
+#: and so are billed it; Rowan is on `trial` and is not.
+DEMO_SUBSCRIPTION_FEE = Decimal("9999.00")
+
+
+async def seed_platform_settings(session: AsyncSession) -> None:
+    """The singleton row survives a reset (it is not in `wipe`); only the fee
+    the demo bills at is set here, and every other setting is left alone."""
+    row = await get_platform_settings(session)
+    row.subscription_fee_monthly = DEMO_SUBSCRIPTION_FEE
+    await session.flush()
 
 
 async def seed_platform_tables(session: AsyncSession, data: dict) -> None:
@@ -153,18 +166,6 @@ async def seed_platform_tables(session: AsyncSession, data: dict) -> None:
                 exam_label=row["examLabel"],
                 blurb=row["blurb"],
                 complaint_example=row["complaintExample"],
-            )
-        )
-
-    for row in data["CAT_FEATURES"]:
-        session.add(
-            Feature(
-                key=row["key"],
-                name=row["name"],
-                is_core=row["is_core"],
-                summary=row["summary"],
-                price_monthly=row["price_monthly"],
-                unlocks=row["unlocks"],
             )
         )
 
@@ -355,16 +356,6 @@ async def seed_tenant(session: AsyncSession, data: dict, tenant_row: dict) -> No
         )
 
     _seed_service_prices(session, data, tenant_id, tenant_row["clinical_type"])
-
-    for row in _by_tenant(data["TENANT_FEATURES"], short):
-        session.add(
-            TenantFeature(
-                tenant_id=tenant_id,
-                feature_key=row["feature_key"],
-                status=row["status"],
-                activated_at=_d(row.get("activated_at")),
-            )
-        )
 
     config_row = next(c for c in data["TENANT_CONFIGS"] if c["tenant_id"] == short)
     patients = _by_tenant(data["PATIENTS"], short)
@@ -702,6 +693,7 @@ async def seed_all(session: AsyncSession, *, reset: bool = True) -> dict[str, in
 
     await set_tenant(session, None)
     await seed_platform_tables(session, data)
+    await seed_platform_settings(session)
 
     for tenant_row in data["TENANTS"]:
         await seed_tenant(session, data, tenant_row)

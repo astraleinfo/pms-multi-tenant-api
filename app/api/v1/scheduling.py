@@ -145,7 +145,7 @@ async def create_appointment(
 
 
 async def _queue_appointment_messages(ctx: TenantContext, appointment) -> None:
-    """Confirmation now, reminder the day before.
+    """The booking confirmation.
 
     Messaging must never be able to fail a booking: the slot is held either
     way, and a clinic with no provider configured simply queues nothing.
@@ -153,23 +153,19 @@ async def _queue_appointment_messages(ctx: TenantContext, appointment) -> None:
     patient = await ctx.session.get(Patient, appointment.patient_id)
     if patient is None:
         return
-    for template in (
-        MessageTemplate.BOOKING_CONFIRMATION,
-        MessageTemplate.APPOINTMENT_REMINDER,
-    ):
-        try:
-            queued = await message_service.queue_message(
-                ctx.session,
-                tenant_id=ctx.tenant_id,
-                patient=patient,
-                template=template,
-                appointment=appointment,
-            )
-        except Exception:  # noqa: BLE001 - see docstring
-            log.exception("could not queue %s for appointment %s", template, appointment.id)
-            continue
-        if queued is not None and template == MessageTemplate.BOOKING_CONFIRMATION:
-            await message_outbox.nudge(str(queued.id))
+    try:
+        queued = await message_service.queue_message(
+            ctx.session,
+            tenant_id=ctx.tenant_id,
+            patient=patient,
+            template=MessageTemplate.BOOKING_CONFIRMATION,
+            appointment=appointment,
+        )
+    except Exception:  # noqa: BLE001 - see docstring
+        log.exception("could not queue the confirmation for appointment %s", appointment.id)
+        return
+    if queued is not None:
+        await message_outbox.nudge(str(queued.id))
 
 
 @router.patch("/appointments/{appointment_id}", response_model=AppointmentOut)
@@ -189,24 +185,18 @@ async def reschedule_appointment(
         meta={"from": f"{was['date']} {was['time']}",
               "to": f"{appointment.date:%d %b %Y} {appointment.time}"},
     )
-    await _announce_move(ctx, appointment, was)
+    await announce_move(ctx, appointment, was)
     return AppointmentOut.of(appointment)
 
 
-async def _announce_move(ctx: TenantContext, appointment, was: dict[str, str]) -> None:
-    """Tell the patient, and re-time the reminder.
-
-    Anything still waiting to go out names the old slot, so it is cancelled —
-    except the reminder, which is moved in place: its job is revoked and it is
-    scheduled, or queued with a new job, for the new slot.
-    """
+async def announce_move(ctx: TenantContext, appointment, was: dict[str, str]) -> None:
+    """Tell the patient. Anything still waiting to go out names the old slot,
+    so it is cancelled."""
     patient = await ctx.session.get(Patient, appointment.patient_id)
     if patient is None:
         return
 
-    await message_service.cancel_pending_for_appointment(
-        ctx.session, appointment.id, keep=(MessageTemplate.APPOINTMENT_REMINDER,)
-    )
+    await message_service.cancel_pending_for_appointment(ctx.session, appointment.id)
     await ctx.session.flush()
 
     try:
@@ -217,9 +207,6 @@ async def _announce_move(ctx: TenantContext, appointment, was: dict[str, str]) -
             template=MessageTemplate.APPOINTMENT_RESCHEDULED,
             appointment=appointment,
             extra={"was_date": was["date"], "was_time": was["time"]},
-        )
-        await message_service.retime_reminder(
-            ctx.session, tenant_id=ctx.tenant_id, patient=patient, appointment=appointment
         )
     except Exception:  # noqa: BLE001 - a move must not fail on messaging
         log.exception("could not queue move notice for appointment %s", appointment.id)
@@ -243,16 +230,16 @@ async def set_appointment_status(
         actor_kind=ctx.actor_kind, actor_id=ctx.actor_id, actor_label=ctx.principal.label,
         entity="appointment", entity_id=str(appointment.id),
     )
-    # A slot that is no longer happening must not still text a reminder — and
-    # if the clinic cancelled it, the patient should hear that from us.
+    # A slot that is no longer happening must not still send what was queued
+    # for it — and if the clinic cancelled it, the patient should hear that from us.
     if payload.status in (AppointmentStatus.CANCELLED, AppointmentStatus.NO_SHOW):
         await message_service.cancel_pending_for_appointment(ctx.session, appointment.id)
         if payload.status == AppointmentStatus.CANCELLED:
-            await _announce_cancellation(ctx, appointment)
+            await announce_cancellation(ctx, appointment)
     return AppointmentOut.of(appointment)
 
 
-async def _announce_cancellation(ctx: TenantContext, appointment) -> None:
+async def announce_cancellation(ctx: TenantContext, appointment) -> None:
     patient = await ctx.session.get(Patient, appointment.patient_id)
     if patient is None:
         return

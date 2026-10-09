@@ -1,7 +1,8 @@
-"""The purchasable modules: pharmacy, lab, inventory and billing.
+"""The operational modules: pharmacy, lab, inventory and billing.
 
-Every route here sits behind `require_feature`. That guard is the enforcement —
-the front end hiding a nav item is a courtesy, not a control.
+Every clinic has all of them. Each route here sits behind `require_permission`,
+so what decides who reaches it is the caller's role — the front end hiding a
+nav item is a courtesy, not a control.
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ from typing import Literal
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Query, UploadFile, status
 from fastapi.responses import Response
 
-from app.api.deps import TenantContext, parse_uuid, require_feature
+from app.api.deps import TenantContext, parse_uuid, require_permission
 from app.core.errors import NotFound, ValidationFailed
 from app.core.permissions import Permission
 from app.models.enums import BillingDepartment, DispenseStatus, InvoiceStatus, LabOrderStatus
@@ -55,6 +56,7 @@ from app.services import inventory as inventory_service
 from app.services import lab as lab_service
 from app.services import patients as patient_service
 from app.services import pharmacy as pharmacy_service
+from app.services import tenants as tenant_service
 from app.services.documents import build_invoice_pdf
 
 # --- pharmacy (§3.9) ---------------------------------------------------------
@@ -65,7 +67,7 @@ pharmacy_router = APIRouter(prefix="/pharmacy", tags=["pharmacy"])
 @pharmacy_router.get("/prescriptions", response_model=list[PrescriptionOut])
 async def pharmacy_queue(
     status_filter: DispenseStatus | None = Query(default=None, alias="status"),
-    ctx: TenantContext = Depends(require_feature("pharmacy", Permission.PHARMACY_READ)),
+    ctx: TenantContext = Depends(require_permission(Permission.PHARMACY_READ)),
 ) -> list[PrescriptionOut]:
     """Reads `Prescription` directly. Nothing is copied into a pharmacy table."""
     rows = await pharmacy_service.pending_prescriptions(ctx.session, ctx.tenant_id, status=status_filter)
@@ -76,7 +78,7 @@ async def pharmacy_queue(
 async def dispense(
     prescription_id: str,
     payload: DispenseIn,
-    ctx: TenantContext = Depends(require_feature("pharmacy", Permission.PHARMACY_DISPENSE)),
+    ctx: TenantContext = Depends(require_permission(Permission.PHARMACY_DISPENSE)),
 ) -> PrescriptionOut:
     """Updates the prescription and writes the stock movement in one
     transaction — the ledger and the dispensed quantity cannot disagree."""
@@ -111,7 +113,7 @@ async def list_orders(
     offset: int = Query(default=0, ge=0),
     sort: str = Query(default="ordered_at"),
     order: Literal["asc", "desc"] = Query(default="desc"),
-    ctx: TenantContext = Depends(require_feature("lab", Permission.LAB_READ)),
+    ctx: TenantContext = Depends(require_permission(Permission.LAB_READ)),
 ) -> LabOrderPageOut:
     """One page of the order book. `unverified` is the bench's own view — every
     order that has not yet been released into a patient record."""
@@ -135,7 +137,7 @@ async def list_orders(
 @lab_router.get("/orders/{order_id}", response_model=LabOrderOut)
 async def get_order(
     order_id: str,
-    ctx: TenantContext = Depends(require_feature("lab", Permission.LAB_READ)),
+    ctx: TenantContext = Depends(require_permission(Permission.LAB_READ)),
 ) -> LabOrderOut:
     """One order, by id — so a screen showing a single order can stay truthful
     without holding the page it was opened from."""
@@ -148,7 +150,7 @@ async def get_order(
 @lab_router.post("/orders/{order_id}/start", response_model=LabOrderOut)
 async def start_order(
     order_id: str,
-    ctx: TenantContext = Depends(require_feature("lab", Permission.LAB_RESULT)),
+    ctx: TenantContext = Depends(require_permission(Permission.LAB_RESULT)),
 ) -> LabOrderOut:
     order = await lab_service.start_order(
         ctx.session, ctx.tenant_id, parse_uuid(order_id, what="lab order")
@@ -160,7 +162,7 @@ async def start_order(
 async def save_results(
     order_id: str,
     payload: LabResultsIn,
-    ctx: TenantContext = Depends(require_feature("lab", Permission.LAB_RESULT)),
+    ctx: TenantContext = Depends(require_permission(Permission.LAB_RESULT)),
 ) -> LabOrderOut:
     order = await lab_service.save_results(
         ctx.session, ctx.tenant_id, parse_uuid(order_id, what="lab order"), payload, actor_id=ctx.actor_id
@@ -177,7 +179,7 @@ async def save_results(
 async def verify_order(
     order_id: str,
     payload: dict,
-    ctx: TenantContext = Depends(require_feature("lab", Permission.LAB_VERIFY)),
+    ctx: TenantContext = Depends(require_permission(Permission.LAB_VERIFY)),
 ) -> LabOrderOut:
     """`{"status": "verified"}` — the transition that releases a result into
     the patient record."""
@@ -197,7 +199,7 @@ async def verify_order(
 @lab_router.get("/orders/{order_id}/attachments", response_model=list[LabAttachmentOut])
 async def list_attachments(
     order_id: str,
-    ctx: TenantContext = Depends(require_feature("lab", Permission.LAB_READ)),
+    ctx: TenantContext = Depends(require_permission(Permission.LAB_READ)),
 ) -> list[LabAttachmentOut]:
     """What has been filed against this order — names and sizes, not the files."""
     rows = await lab_service.list_attachments(
@@ -215,7 +217,7 @@ async def upload_attachment(
     order_id: str,
     file: UploadFile = File(..., description="The report: a PDF, an image, or a CSV."),
     note: str | None = Form(default=None),
-    ctx: TenantContext = Depends(require_feature("lab", Permission.LAB_RESULT)),
+    ctx: TenantContext = Depends(require_permission(Permission.LAB_RESULT)),
 ) -> LabAttachmentOut:
     """Attach a scan, a machine printout or a signed report to an order.
 
@@ -248,7 +250,7 @@ async def upload_attachment(
 async def download_attachment(
     order_id: str,
     attachment_id: str,
-    ctx: TenantContext = Depends(require_feature("lab", Permission.LAB_READ)),
+    ctx: TenantContext = Depends(require_permission(Permission.LAB_READ)),
 ) -> Response:
     """The file itself. Reached through its order, so the tenant check that
     protects the order protects the file."""
@@ -277,7 +279,7 @@ async def download_attachment(
 async def delete_attachment(
     order_id: str,
     attachment_id: str,
-    ctx: TenantContext = Depends(require_feature("lab", Permission.LAB_RESULT)),
+    ctx: TenantContext = Depends(require_permission(Permission.LAB_RESULT)),
 ) -> None:
     await lab_service.delete_attachment(
         ctx.session,
@@ -299,7 +301,7 @@ inventory_router = APIRouter(prefix="/inventory", tags=["inventory"])
 
 @inventory_router.get("/items", response_model=list[InventoryItemOut])
 async def list_items(
-    ctx: TenantContext = Depends(require_feature("inventory", Permission.INVENTORY_READ)),
+    ctx: TenantContext = Depends(require_permission(Permission.INVENTORY_READ)),
 ) -> list[InventoryItemOut]:
     rows = await inventory_service.list_items(ctx.session, ctx.tenant_id)
     return [InventoryItemOut.of(i) for i in rows]
@@ -310,7 +312,7 @@ async def list_items(
 )
 async def create_item(
     payload: InventoryItemIn,
-    ctx: TenantContext = Depends(require_feature("inventory", Permission.INVENTORY_WRITE)),
+    ctx: TenantContext = Depends(require_permission(Permission.INVENTORY_WRITE)),
 ) -> InventoryItemOut:
     """Open a stock line.
 
@@ -349,7 +351,7 @@ async def create_item(
 async def update_item(
     item_id: str,
     payload: InventoryItemPatch,
-    ctx: TenantContext = Depends(require_feature("inventory", Permission.INVENTORY_WRITE)),
+    ctx: TenantContext = Depends(require_permission(Permission.INVENTORY_WRITE)),
 ) -> InventoryItemOut:
     """Edit a stock line — including how it is priced.
 
@@ -374,7 +376,7 @@ async def update_item(
 
 @inventory_router.get("/batches", response_model=list[InventoryBatchOut])
 async def list_batches(
-    ctx: TenantContext = Depends(require_feature("inventory", Permission.INVENTORY_READ)),
+    ctx: TenantContext = Depends(require_permission(Permission.INVENTORY_READ)),
 ) -> list[InventoryBatchOut]:
     rows = await inventory_service.list_batches(ctx.session, ctx.tenant_id)
     return [InventoryBatchOut.of(b) for b in rows]
@@ -384,7 +386,7 @@ async def list_batches(
 async def list_transactions(
     item_id: str | None = None,
     limit: int = Query(default=500, ge=1, le=2000),
-    ctx: TenantContext = Depends(require_feature("inventory", Permission.INVENTORY_READ)),
+    ctx: TenantContext = Depends(require_permission(Permission.INVENTORY_READ)),
 ) -> list[InventoryTxOut]:
     rows = await inventory_service.list_transactions(
         ctx.session,
@@ -397,7 +399,7 @@ async def list_transactions(
 
 @inventory_router.get("/levels", response_model=list[StockLevelOut])
 async def stock_levels(
-    ctx: TenantContext = Depends(require_feature("inventory", Permission.INVENTORY_READ)),
+    ctx: TenantContext = Depends(require_permission(Permission.INVENTORY_READ)),
 ) -> list[StockLevelOut]:
     """Stock on hand is the sum of the ledger, never a stored counter."""
     items = await inventory_service.list_items(ctx.session, ctx.tenant_id)
@@ -416,7 +418,7 @@ async def stock_levels(
 @inventory_router.get("/expiring", response_model=list[InventoryBatchOut])
 async def expiring_batches(
     within_days: int | None = Query(default=None, ge=1, le=730),
-    ctx: TenantContext = Depends(require_feature("inventory", Permission.INVENTORY_READ)),
+    ctx: TenantContext = Depends(require_permission(Permission.INVENTORY_READ)),
 ) -> list[InventoryBatchOut]:
     days = within_days if within_days is not None else ctx.config.expiry_alert_days
     rows = await inventory_service.near_expiry(
@@ -430,7 +432,7 @@ async def expiring_batches(
 )
 async def record_movement(
     payload: StockMovementIn,
-    ctx: TenantContext = Depends(require_feature("inventory", Permission.INVENTORY_WRITE)),
+    ctx: TenantContext = Depends(require_permission(Permission.INVENTORY_WRITE)),
 ) -> InventoryTxOut:
     expiry = date_t.fromisoformat(payload.expiry) if payload.expiry else None
     transaction = await inventory_service.record_movement(
@@ -472,7 +474,7 @@ def _spreadsheet(content: bytes, name: str) -> Response:
 
 @inventory_router.get("/import/template")
 async def inventory_import_template(
-    ctx: TenantContext = Depends(require_feature("inventory", Permission.INVENTORY_WRITE)),
+    ctx: TenantContext = Depends(require_permission(Permission.INVENTORY_WRITE)),
 ) -> Response:
     """The sample sheet: every field a stock line has, the fixed choices as
     dropdowns, an example per pricing mode, and a sheet saying what each is."""
@@ -486,7 +488,7 @@ async def inventory_import_template(
 async def inventory_import(
     tasks: BackgroundTasks,
     file: UploadFile = File(..., description="The filled-in sample sheet (.xlsx), an export, or a .csv."),
-    ctx: TenantContext = Depends(require_feature("inventory", Permission.INVENTORY_WRITE)),
+    ctx: TenantContext = Depends(require_permission(Permission.INVENTORY_WRITE)),
 ) -> ImportJobOut:
     """Hand a sheet of stock lines to the worker, and answer at once.
 
@@ -514,7 +516,7 @@ async def inventory_import(
 
 @inventory_router.get("/import/jobs/latest", response_model=ImportJobOut | None)
 async def latest_inventory_import(
-    ctx: TenantContext = Depends(require_feature("inventory", Permission.INVENTORY_WRITE)),
+    ctx: TenantContext = Depends(require_permission(Permission.INVENTORY_WRITE)),
 ) -> ImportJobOut | None:
     """The clinic's most recent import, so a page opened mid-import can pick it up."""
     job = await import_jobs.latest(ctx.session, ctx.tenant_id, inventory_io.KIND)
@@ -524,7 +526,7 @@ async def latest_inventory_import(
 @inventory_router.get("/import/jobs/{job_id}", response_model=ImportJobOut)
 async def inventory_import_job(
     job_id: str,
-    ctx: TenantContext = Depends(require_feature("inventory", Permission.INVENTORY_WRITE)),
+    ctx: TenantContext = Depends(require_permission(Permission.INVENTORY_WRITE)),
 ) -> ImportJobOut:
     job = await import_jobs.get_job(
         ctx.session, ctx.tenant_id, parse_uuid(job_id, what="import"), inventory_io.KIND
@@ -536,7 +538,7 @@ async def inventory_import_job(
 
 @inventory_router.get("/export")
 async def inventory_export(
-    ctx: TenantContext = Depends(require_feature("inventory", Permission.INVENTORY_READ)),
+    ctx: TenantContext = Depends(require_permission(Permission.INVENTORY_READ)),
 ) -> Response:
     """Every stock line in the import's own layout, with what is on hand, and
     the batches on the shelf. Edited, it goes straight back in as an import."""
@@ -567,7 +569,7 @@ async def list_invoices(
     offset: int = Query(default=0, ge=0),
     sort: str = Query(default="issued_at"),
     order: Literal["asc", "desc"] = Query(default="desc"),
-    ctx: TenantContext = Depends(require_feature("billing", Permission.BILLING_READ)),
+    ctx: TenantContext = Depends(require_permission(Permission.BILLING_READ)),
 ) -> InvoicePageOut:
     """One page of the ledger, plus the counts behind the tabs. Ordering by
     total or balance is done on sums the database computes, so a page of ten is
@@ -600,7 +602,7 @@ async def list_invoices(
 @billing_router.post("/invoices", response_model=InvoiceOut, status_code=status.HTTP_201_CREATED)
 async def create_invoice(
     payload: InvoiceIn,
-    ctx: TenantContext = Depends(require_feature("billing", Permission.BILLING_WRITE)),
+    ctx: TenantContext = Depends(require_permission(Permission.BILLING_WRITE)),
 ) -> InvoiceOut:
     invoice = await billing_service.create_invoice(ctx.session, ctx.tenant_id, payload, today=ctx.today)
     await audit.record(
@@ -614,7 +616,7 @@ async def create_invoice(
 @billing_router.get("/invoices/suggestions", response_model=SuggestedLinesOut)
 async def suggested_lines(
     encounter_id: str,
-    ctx: TenantContext = Depends(require_feature("billing", Permission.BILLING_WRITE)),
+    ctx: TenantContext = Depends(require_permission(Permission.BILLING_WRITE)),
 ) -> SuggestedLinesOut:
     result = await billing_service.suggest_lines(
         ctx.session, ctx.tenant_id, encounter_id=parse_uuid(encounter_id, what="consultation")
@@ -628,7 +630,7 @@ async def suggested_lines(
 @billing_router.get("/invoices/{invoice_id}", response_model=InvoiceOut)
 async def get_invoice(
     invoice_id: str,
-    ctx: TenantContext = Depends(require_feature("billing", Permission.BILLING_READ)),
+    ctx: TenantContext = Depends(require_permission(Permission.BILLING_READ)),
 ) -> InvoiceOut:
     invoice = await billing_service.get_invoice(
         ctx.session, ctx.tenant_id, parse_uuid(invoice_id, what="invoice")
@@ -639,7 +641,7 @@ async def get_invoice(
 @billing_router.get("/invoices/{invoice_id}/pdf")
 async def invoice_pdf(
     invoice_id: str,
-    ctx: TenantContext = Depends(require_feature("billing", Permission.BILLING_READ)),
+    ctx: TenantContext = Depends(require_permission(Permission.BILLING_READ)),
 ) -> Response:
     """The invoice as a printable PDF, on the clinic's letterhead.
 
@@ -656,6 +658,7 @@ async def invoice_pdf(
         clinic=ctx.tenant.name,
         config=ctx.config,
         currency=ctx.config.currency.value if ctx.config.currency else "",
+        logo=await tenant_service.logo_for(ctx.session, ctx.tenant_id),
     )
     return Response(
         content=content,
@@ -676,7 +679,7 @@ def _filename_safe(text: str) -> str:
 @billing_router.post("/invoices/{invoice_id}/issue", response_model=InvoiceOut)
 async def issue_invoice(
     invoice_id: str,
-    ctx: TenantContext = Depends(require_feature("billing", Permission.BILLING_WRITE)),
+    ctx: TenantContext = Depends(require_permission(Permission.BILLING_WRITE)),
 ) -> InvoiceOut:
     invoice = await billing_service.issue_invoice(
         ctx.session, ctx.tenant_id, parse_uuid(invoice_id, what="invoice")
@@ -687,7 +690,7 @@ async def issue_invoice(
 @billing_router.post("/invoices/{invoice_id}/void", response_model=InvoiceOut)
 async def void_invoice(
     invoice_id: str,
-    ctx: TenantContext = Depends(require_feature("billing", Permission.BILLING_WRITE)),
+    ctx: TenantContext = Depends(require_permission(Permission.BILLING_WRITE)),
 ) -> InvoiceOut:
     invoice = await billing_service.void_invoice(
         ctx.session, ctx.tenant_id, parse_uuid(invoice_id, what="invoice")
@@ -704,7 +707,7 @@ async def void_invoice(
 async def add_payment(
     invoice_id: str,
     payload: PaymentIn,
-    ctx: TenantContext = Depends(require_feature("billing", Permission.BILLING_WRITE)),
+    ctx: TenantContext = Depends(require_permission(Permission.BILLING_WRITE)),
 ) -> InvoiceOut:
     invoice = await billing_service.add_payment(
         ctx.session, ctx.tenant_id, parse_uuid(invoice_id, what="invoice"), payload, actor_id=ctx.actor_id
@@ -727,7 +730,7 @@ async def add_payment(
 @billing_router.get("/patients/{patient_id}/account", response_model=PatientAccountOut)
 async def patient_account(
     patient_id: str,
-    ctx: TenantContext = Depends(require_feature("billing", Permission.BILLING_READ)),
+    ctx: TenantContext = Depends(require_permission(Permission.BILLING_READ)),
 ) -> PatientAccountOut:
     """What this patient owes, and what nobody has billed them for yet.
 
@@ -768,7 +771,7 @@ async def patient_account(
 async def unbilled_charges(
     patient_id: str,
     department: BillingDepartment | None = Query(default=None),
-    ctx: TenantContext = Depends(require_feature("billing", Permission.BILLING_READ)),
+    ctx: TenantContext = Depends(require_permission(Permission.BILLING_READ)),
 ) -> list[ChargeOut]:
     """Just the unbilled half, optionally for one counter — what the dispensing
     window shows when it asks for money."""
@@ -787,7 +790,7 @@ async def unbilled_charges(
 async def raise_counter_invoice(
     patient_id: str,
     payload: RaiseInvoiceIn,
-    ctx: TenantContext = Depends(require_feature("billing", Permission.BILLING_WRITE)),
+    ctx: TenantContext = Depends(require_permission(Permission.BILLING_WRITE)),
 ) -> InvoiceOut:
     """Put one counter's outstanding charges onto an invoice.
 
@@ -816,7 +819,7 @@ async def raise_counter_invoice(
 async def take_counter_payment(
     patient_id: str,
     payload: CounterPaymentIn,
-    ctx: TenantContext = Depends(require_feature("billing", Permission.BILLING_WRITE)),
+    ctx: TenantContext = Depends(require_permission(Permission.BILLING_WRITE)),
 ) -> CounterPaymentOut:
     """Take one amount at one counter, oldest invoice first.
 

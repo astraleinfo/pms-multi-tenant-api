@@ -111,11 +111,14 @@ async def test_a_refresh_cookie_is_refused_at_another_clinics_address(client):
     client.cookies.clear()
 
 
-async def test_me_reports_role_permissions_and_features(northgate):
+async def test_me_reports_role_and_permissions_and_no_module_list(northgate):
     body = (await northgate.get("/v1/auth/me")).json()
     assert body["role"] == "tenant_admin"
     assert "patient:read" in body["permissions"]
-    assert {"patient", "appointment", "queue", "consultation", "prescription"} <= set(body["features"])
+    assert "tenant:subscription:manage" in body["permissions"]
+    assert "tenant:feature:manage" not in body["permissions"]
+    # every clinic has every module, so there is nothing to list
+    assert "features" not in body
 
 
 async def test_a_platform_token_is_useless_inside_a_clinic(console, client):

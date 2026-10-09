@@ -3,10 +3,11 @@
 Three layers, kept apart on purpose:
 
 * **core** — always computed, for every clinic;
-* **modules** — only for features that are actually active, so a clinic that
-  never bought Billing is never told what its revenue mix is;
-* **clinical** — driven purely by what is inside `clinical_ext`, never by an
-  entitlement.
+* **modules** — the pharmacy, lab, inventory, billing and advanced-reports
+  panels, also computed for every clinic, because every clinic has every
+  module (the money in them is redacted per role; see `without_revenue`);
+* **clinical** — driven purely by what is inside `clinical_ext`, and so by the
+  clinic's clinical type.
 
 Everything here is aggregated in PostgreSQL, under this clinic's row-level
 policy. The client receives figures, not rows: a browser never sees a patient
@@ -64,7 +65,6 @@ async def dashboard(
     *,
     today: date,
     days: int = 30,
-    active_features: set[str],
     clinical_type: str,
 ) -> dict:
     since = today - timedelta(days=days - 1)
@@ -77,21 +77,17 @@ async def dashboard(
         "top_diagnoses": await _top_diagnoses(session, tenant_id, since=since),
     }
 
-    modules: dict[str, object] = {}
-    if "pharmacy" in active_features:
-        modules["pharmacy"] = await _pharmacy(session, tenant_id, since=since)
-    if "lab" in active_features:
-        modules["lab"] = await _lab(session, tenant_id)
-    if "inventory" in active_features:
-        modules["inventory"] = await _inventory(session, tenant_id, today=today)
-    if "billing" in active_features:
-        modules["billing"] = await _billing(session, tenant_id)
-    if "advanced_reports" in active_features:
-        modules["advanced_reports"] = {
+    modules: dict[str, object] = {
+        "pharmacy": await _pharmacy(session, tenant_id, since=since),
+        "lab": await _lab(session, tenant_id),
+        "inventory": await _inventory(session, tenant_id, today=today),
+        "billing": await _billing(session, tenant_id),
+        "advanced_reports": {
             "age_cohort": await _age_cohort(session, tenant_id, today=today),
             "sex_split": await _sex_split(session, tenant_id),
             "clinicians": await _clinicians(session, tenant_id),
-        }
+        },
+    }
 
     return {
         "range": {"from": since.isoformat(), "to": today.isoformat(), "days": days},
@@ -574,7 +570,7 @@ def _json_array(field):
 async def _clinical(
     session: AsyncSession, tenant_id: uuid.UUID, *, clinical_type: str, since: date
 ) -> dict:
-    """Driven by `clinical_ext`, never by a feature flag.
+    """Driven by `clinical_ext`, and nothing else.
 
     The breakdown is counted in PostgreSQL straight out of the JSONB, so the
     shape of a discipline's exam payload is the only thing that decides what

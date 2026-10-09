@@ -1,8 +1,8 @@
 """What a clinic owes the platform: the monthly "app rent".
 
-One bill per clinic per month, for the paid modules it had switched on when
-the bill was raised, at the catalogue prices of that day. The lines are copied
-onto the bill rather than joined at read time, so a price a super admin
+One bill per billable clinic per month, for the flat monthly clinic fee (which
+covers every module) as it stood the day the bill was raised. The line is
+copied onto the bill rather than joined at read time, so a fee a super admin
 changes next month does not rewrite what a clinic was billed this month.
 
 Tenant-owned like everything else a clinic can see: the clinic reads its own
@@ -50,7 +50,8 @@ class SubscriptionInvoice(Base, TenantScoped, TimestampMixin):
     period_end: Mapped[date] = mapped_column(Date, nullable=False)
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="INR")
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
-    #: [{"feature_key", "name", "amount"}] — copied, never joined
+    #: [{"name", "amount"}] — copied, never joined. Bills raised before the
+    #: flat clinic fee may also carry a "feature_key", which is ignored.
     lines: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     issued_on: Mapped[date] = mapped_column(Date, nullable=False)
     due_on: Mapped[date] = mapped_column(Date, nullable=False)

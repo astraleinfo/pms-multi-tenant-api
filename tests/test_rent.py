@@ -13,6 +13,7 @@ import pytest
 from sqlalchemy import delete, select, update
 
 from app.db.session import session_factory, tenant_session
+from app.models.enums import SubscriptionInvoiceStatus
 from app.models.rent import SubscriptionInvoice
 from app.models.tenancy import Tenant
 from app.services import mailer, rent
@@ -89,24 +90,42 @@ def _stages(outbox: list[mailer.Email]) -> list[str]:
 # --- raising ------------------------------------------------------------------------------
 
 
-async def test_a_bill_charges_every_paid_module_that_is_on(northgate, console, northgate_id, outbox, timings):
+FEE_LINE = "Astrale PMS subscription"
+
+
+async def _tenant_id(console, slug: str) -> uuid.UUID:
+    tenants = (await console.get("/v1/platform/tenants")).json()
+    return uuid.UUID(next(t["id"] for t in tenants if t["slug"] == slug))
+
+
+@pytest.fixture
+async def fee_set_to(console):
+    """Change the flat fee from the console for one test, and put it back."""
+    before = (await console.get("/v1/platform/settings")).json()["subscription_fee_monthly"]
+
+    async def set_fee(value: float) -> None:
+        response = await console.patch("/v1/platform/settings", json={"subscription_fee_monthly": value})
+        assert response.status_code == 200, response.text
+        assert response.json()["subscription_fee_monthly"] == value
+
+    yield set_fee
+    await set_fee(before)
+
+
+async def test_a_bill_is_one_line_for_the_flat_clinic_fee(northgate_id, outbox, timings):
     today = date(2026, 10, 1)
+    fee = float(timings.subscription_fee_monthly)
+    assert fee > 0, "the demo seeds a fee"
     await _cycle(northgate_id, today)
 
     [bill] = await _bills(northgate_id)
-    features = {f["key"]: f for f in (await console.get("/v1/platform/catalog/features")).json()}
-    on = {
-        row["feature_key"] for row in (await northgate.get("/v1/tenant/features")).json()
-        if row["status"] == "active"
-    }
-    expected = {k for k in on if not features[k]["is_core"] and features[k]["price_monthly"] > 0}
-
-    assert {line["feature_key"] for line in bill.lines} == expected
-    assert float(bill.amount) == pytest.approx(sum(features[k]["price_monthly"] for k in expected))
+    assert bill.lines == [{"name": FEE_LINE, "amount": fee}]
+    assert float(bill.amount) == pytest.approx(fee)
     assert bill.period_start == date(2026, 10, 1) and bill.period_end == date(2026, 10, 31)
     assert bill.due_on == today + timedelta(days=timings.rent_due_days)
-    # The admins are told a bill exists.
+    # The admins are told a bill exists, and what it is for.
     assert outbox and all("October 2026 bill" in e.subject for e in outbox)
+    assert all(FEE_LINE in e.text for e in outbox)
 
 
 async def test_running_the_cycle_twice_raises_one_bill_and_sends_one_email(northgate_id, outbox):
@@ -119,24 +138,26 @@ async def test_running_the_cycle_twice_raises_one_bill_and_sends_one_email(north
     assert len(outbox) == after_first
 
 
-async def test_a_clinic_with_nothing_paid_switched_on_is_not_billed(console, outbox):
-    rowan = next(
-        t for t in (await console.get("/v1/platform/tenants")).json() if t["slug"] == "rowan"
-    )
-    rowan_id = uuid.UUID(rowan["id"])
-    features = (await console.get(f"/v1/platform/tenants/{rowan['id']}/features")).json()
-    paid_on = [f for f in features if f["status"] == "active" and f["feature_key"] in
-               {"pharmacy", "lab", "inventory", "billing", "advanced_reports"}]
-    for f in paid_on:
-        await console.put(f"/v1/platform/tenants/{rowan['id']}/features/{f['feature_key']}",
-                          json={"status": "inactive"})
-    try:
-        await _cycle(rowan_id, date(2026, 10, 1))
-        assert await _bills(rowan_id) == []
-    finally:
-        for f in paid_on:
-            await console.put(f"/v1/platform/tenants/{rowan['id']}/features/{f['feature_key']}",
-                              json={"status": "active"})
+async def test_a_clinic_on_trial_is_not_billed(console, rowan, outbox):
+    """Rowan is on `trial`: it has every module and pays nothing yet."""
+    rowan_id = await _tenant_id(console, "rowan")
+    await _cycle(rowan_id, date(2026, 10, 1))
+    assert await _bills(rowan_id) == []
+
+    plan = (await rowan.get("/v1/tenant/subscription")).json()["plan"]
+    assert plan["billed"] is False
+    assert plan["not_billed_reason"] == "trial"
+    assert plan["monthly_total"] == 0
+
+
+async def test_every_active_clinic_is_billed_the_same_fee(console, outbox, timings):
+    """Northgate and Clearview are `active`; both are billed the one figure."""
+    fee = float(timings.subscription_fee_monthly)
+    for slug in ("northgate", "clearview"):
+        tenant_id = await _tenant_id(console, slug)
+        await _cycle(tenant_id, date(2026, 10, 1))
+        [bill] = await _bills(tenant_id)
+        assert float(bill.amount) == pytest.approx(fee), slug
 
 
 async def test_an_exempt_clinic_is_never_billed(console, northgate_id, outbox):
@@ -146,24 +167,36 @@ async def test_an_exempt_clinic_is_never_billed(console, northgate_id, outbox):
     assert outbox == []
 
 
-async def test_the_plan_lists_what_is_on_and_totals_what_the_next_bill_will_charge(
-    northgate, console, northgate_id, outbox
-):
-    plan = (await northgate.get("/v1/tenant/subscription")).json()["plan"]
-    features = {f["key"]: f for f in (await console.get("/v1/platform/catalog/features")).json()}
-    statuses = {row["feature_key"]: row["status"] for row in (await northgate.get("/v1/tenant/features")).json()}
+async def test_a_zero_fee_bills_nobody(northgate, northgate_id, fee_set_to, outbox):
+    await fee_set_to(0)
+    await _cycle(northgate_id, date(2026, 10, 1))
+    assert await _bills(northgate_id) == []
 
-    listed = {m["feature_key"]: m for m in plan["modules"]}
-    assert set(listed) == {k for k, s in statuses.items() if s in ("active", "trial")}
-    for key, module in listed.items():
-        assert module["price_monthly"] == pytest.approx(features[key]["price_monthly"])
-        assert module["billed"] == (
-            statuses[key] == "active" and not features[key]["is_core"] and features[key]["price_monthly"] > 0
-        )
-    assert plan["monthly_total"] == pytest.approx(
-        sum(m["price_monthly"] for m in plan["modules"] if m["billed"])
-    )
-    assert plan["modules"][0]["is_core"], "core modules are listed first"
+    plan = (await northgate.get("/v1/tenant/subscription")).json()["plan"]
+    assert plan == {
+        "price_monthly": 0, "billed": False, "not_billed_reason": "no_fee", "monthly_total": 0,
+    }
+
+
+async def test_a_fee_changed_in_the_console_is_what_the_next_bill_charges(
+    northgate, northgate_id, fee_set_to, outbox
+):
+    await fee_set_to(12345.5)
+    plan = (await northgate.get("/v1/tenant/subscription")).json()["plan"]
+    assert plan["price_monthly"] == 12345.5 and plan["monthly_total"] == 12345.5
+
+    await _cycle(northgate_id, date(2026, 10, 1))
+    [bill] = await _bills(northgate_id)
+    assert bill.lines == [{"name": FEE_LINE, "amount": 12345.5}]
+    assert float(bill.amount) == pytest.approx(12345.5)
+
+
+async def test_the_plan_is_the_fee_and_matches_the_next_bill(northgate, northgate_id, outbox, timings):
+    fee = float(timings.subscription_fee_monthly)
+    plan = (await northgate.get("/v1/tenant/subscription")).json()["plan"]
+    assert plan == {
+        "price_monthly": fee, "billed": True, "not_billed_reason": None, "monthly_total": fee,
+    }
 
     # the total is exactly what the next bill charges
     await _cycle(northgate_id, date(2026, 10, 1))
@@ -171,11 +204,53 @@ async def test_the_plan_lists_what_is_on_and_totals_what_the_next_bill_will_char
     assert float(bill.amount) == pytest.approx(plan["monthly_total"])
 
 
-async def test_an_exempt_clinic_keeps_its_modules_but_pays_nothing(northgate, console, northgate_id, outbox):
+async def test_an_exempt_clinic_keeps_every_module_but_pays_nothing(
+    northgate, console, northgate_id, outbox, timings
+):
     await console.patch(f"/v1/platform/tenants/{northgate_id}", json={"billing_exempt": True})
     plan = (await northgate.get("/v1/tenant/subscription")).json()["plan"]
-    assert plan["modules"] and plan["monthly_total"] == 0
-    assert not any(m["billed"] for m in plan["modules"])
+    assert plan == {
+        "price_monthly": float(timings.subscription_fee_monthly),
+        "billed": False,
+        "not_billed_reason": "exempt",
+        "monthly_total": 0,
+    }
+    assert (await northgate.get("/v1/billing/invoices")).status_code == 200
+
+
+async def test_a_suspended_clinic_is_not_billed(console, outbox):
+    clearview_id = await _tenant_id(console, "clearview")
+    await console.patch(f"/v1/platform/tenants/{clearview_id}/status", json={"status": "suspended"})
+    try:
+        await _cycle(clearview_id, date(2026, 10, 1))
+        assert await _bills(clearview_id) == []
+        plan = (await console.get(f"/v1/platform/tenants/{clearview_id}/subscription")).json()["plan"]
+        assert plan["billed"] is False and plan["not_billed_reason"] == "suspended"
+    finally:
+        await console.patch(f"/v1/platform/tenants/{clearview_id}/status", json={"status": "active"})
+
+
+async def test_a_bill_raised_per_module_still_reads_as_name_and_amount(northgate, northgate_id):
+    """A bill from before the flat fee carries a `feature_key` on each line in
+    its stored JSON. It is ignored: the line reads as `{name, amount}`."""
+    async with tenant_session(northgate_id) as session:
+        session.add(
+            SubscriptionInvoice(
+                tenant_id=northgate_id, number="AST-202609-OLD", period_start=date(2026, 9, 1),
+                period_end=date(2026, 9, 30), currency="INR", amount=4498,
+                lines=[
+                    {"feature_key": "pharmacy", "name": "Pharmacy", "amount": 2499},
+                    {"feature_key": "lab", "name": "Lab", "amount": 1999},
+                ],
+                issued_on=date(2026, 9, 1), due_on=date(2026, 9, 8), status=SubscriptionInvoiceStatus.PAID,
+                reminder_stage="none",
+            )
+        )
+    body = (await northgate.get("/v1/tenant/subscription")).json()
+    [old] = [b for b in body["invoices"] if b["number"] == "AST-202609-OLD"]
+    assert old["lines"] == [{"name": "Pharmacy", "amount": 2499}, {"name": "Lab", "amount": 1999}]
+    pdf = await northgate.get(f"/v1/tenant/subscription/invoices/{old['id']}/pdf")
+    assert pdf.status_code == 200 and pdf.content.startswith(b"%PDF")
 
 
 # --- the ladder ------------------------------------------------------------------------------
@@ -324,7 +399,10 @@ async def test_the_support_desk_can_read_bills_but_not_settle_them(
 ):
     bill = await _put_on_hold(northgate_id)
     assert (await console_support.get(f"/v1/platform/tenants/{northgate_id}/subscription")).status_code == 200
-    assert (await console_support.get("/v1/platform/billing")).status_code == 200
+    overview = await console_support.get("/v1/platform/billing")
+    assert overview.status_code == 200
+    # the desk cannot open /platform/settings, so the overview carries the fee
+    assert overview.json()["fee_monthly"] > 0
     refused = await console_support.post(
         f"/v1/platform/tenants/{northgate_id}/subscription/invoices/{bill.id}/settle", json={}
     )
@@ -343,6 +421,7 @@ async def test_the_console_overview_lists_every_clinic(console, northgate_id, ou
     await _cycle(northgate_id, date(2026, 10, 1))
     overview = (await console.get("/v1/platform/billing")).json()
     assert overview["grace_days"] == timings.rent_grace_days
+    assert overview["fee_monthly"] == float(timings.subscription_fee_monthly)
     row = next(r for r in overview["clinics"] if r["tenant"]["id"] == str(northgate_id))
     assert row["summary"]["open_count"] == 1
 

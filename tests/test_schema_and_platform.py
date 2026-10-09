@@ -229,9 +229,12 @@ async def test_the_console_creates_a_clinic_that_is_immediately_usable(console, 
     token = login.json()["access_token"]
     headers = {"Host": "harbour.localhost", "Authorization": f"Bearer {token}"}
 
-    features = (await client.get("/v1/tenant/features", headers=headers)).json()
-    active = {f["feature_key"] for f in features if f["status"] == "active"}
-    assert active == {"patient", "appointment", "queue", "consultation", "prescription"}
+    # Nothing was switched on, because nothing has to be: a brand-new clinic
+    # reaches every module straight away.
+    for path in ("/v1/billing/invoices", "/v1/pharmacy/prescriptions", "/v1/inventory/items", "/v1/lab/orders"):
+        assert (await client.get(path, headers=headers)).status_code == 200, path
+    me = (await client.get("/v1/auth/me", headers=headers)).json()
+    assert "features" not in me
 
     schema = (await client.get("/v1/tenant/schema/patient", headers=headers)).json()
     keys = {f["field_key"] for f in schema}
@@ -291,8 +294,7 @@ async def test_the_snapshot_reports_per_clinic_counts(console):
     assert {"northgate", "clearview", "rowan"} <= set(by_slug)
     assert by_slug["northgate"]["patients"] > 0
     assert by_slug["northgate"]["patients"] != by_slug["clearview"]["patients"]
-    assert "billing" in by_slug["northgate"]["active_features"]
-    assert "billing" not in by_slug["rowan"]["active_features"]
+    assert all("active_features" not in row for row in snapshot["tenants"])
 
 
 async def test_the_subdomain_check_answers_before_the_form_is_submitted(console):
@@ -351,38 +353,6 @@ async def test_the_console_edits_a_clinic_but_never_its_address(console):
         f"/v1/platform/tenants/{rowan['id']}",
         json={"name": rowan["name"], "city": rowan["city"], "plan": rowan["plan"]},
     )
-
-
-async def test_the_console_switches_a_module_on_and_the_guard_agrees(console, rowan, client):
-    """§5 — the platform's own hand on the switch.
-
-    Rowan has not bought billing, so its billing routes are shut. Switching the
-    module on from the console opens them, because both sides read the same
-    row — turning it off closes them again.
-    """
-    assert (await rowan.get("/v1/billing/invoices")).status_code == 403
-
-    tenant_id = rowan.tenant_id
-    on = await console.put(
-        f"/v1/platform/tenants/{tenant_id}/features/billing", json={"status": "active"}
-    )
-    assert on.status_code == 200, on.text
-    assert on.json()["status"] == "active"
-    assert on.json()["activated_at"] is not None
-
-    assert (await rowan.get("/v1/billing/invoices")).status_code == 200
-
-    off = await console.put(
-        f"/v1/platform/tenants/{tenant_id}/features/billing", json={"status": "inactive"}
-    )
-    assert off.status_code == 200
-    assert (await rowan.get("/v1/billing/invoices")).status_code == 403
-
-    # The product does not work without its core, so that is not a switch.
-    core = await console.put(
-        f"/v1/platform/tenants/{tenant_id}/features/patient", json={"status": "inactive"}
-    )
-    assert core.status_code == 409
 
 
 async def test_a_support_session_can_work_inside_a_clinic_and_is_named_in_the_trail(
@@ -569,7 +539,7 @@ def test_every_request_transaction_commits_before_the_response():
 
     Request-scoped, its commit runs after the response is sent: a client that
     creates something and immediately re-reads the list can miss the new row,
-    which is exactly what the module page's "Request activation" did.
+    which is exactly what a support request's "requested on …" once did.
 
     Read from source, like the RLS check above: FastAPI keeps included routers
     in private structures, and walking those would break on an upgrade.
@@ -585,53 +555,3 @@ def test_every_request_transaction_commits_before_the_response():
         for m in re.finditer(r"Depends\(\s*db_session\s*(\)|,(?![^)]*scope=\"function\")[^)]*\))", source)
     ]
     assert not found, f"db_session without scope='function' at: {found}"
-
-
-async def test_switching_a_module_back_on_restarts_its_date(console, rowan):
-    """The console counts billing from `activated_at`, so a module switched off
-    and on again must start from the day it came back — not look billed for
-    the whole time it was off. Switching on one that is already on changes
-    nothing."""
-    import datetime as _dt
-    import uuid as _uuid
-
-    from sqlalchemy import select
-
-    from app.db.session import tenant_session
-    from app.models.tenancy import TenantFeature
-
-    tenant_id = rowan.tenant_id
-    url = f"/v1/platform/tenants/{tenant_id}/features/inventory"
-    today = (await rowan.get("/v1/tenant")).json()["today"]
-    before = next(
-        (
-            f["status"]
-            for f in (await console.get(f"/v1/platform/tenants/{tenant_id}/features")).json()
-            if f["feature_key"] == "inventory"
-        ),
-        "inactive",
-    )
-
-    assert (await console.put(url, json={"status": "active"})).status_code == 200
-    long_ago = _dt.date(2024, 9, 18)
-    async with tenant_session(_uuid.UUID(tenant_id)) as session:
-        row = (
-            await session.execute(
-                select(TenantFeature).where(
-                    TenantFeature.tenant_id == _uuid.UUID(tenant_id),
-                    TenantFeature.feature_key == "inventory",
-                )
-            )
-        ).scalar_one()
-        row.activated_at = long_ago
-
-    again = await console.put(url, json={"status": "active"})
-    assert again.json()["activated_at"] == long_ago.isoformat(), "already on: left alone"
-
-    assert (await console.put(url, json={"status": "inactive"})).status_code == 200
-    back = await console.put(url, json={"status": "active"})
-    assert back.status_code == 200, back.text
-    assert back.json()["activated_at"] == today
-
-    # Leave the clinic as the seed had it, for the tests that run after this one.
-    await console.put(url, json={"status": before})

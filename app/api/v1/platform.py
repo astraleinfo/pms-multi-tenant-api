@@ -12,7 +12,6 @@ emailed a single-use link.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query, Request, status
 from sqlalchemy import select
@@ -31,15 +30,13 @@ from app.core.errors import NotFound
 from app.db.session import set_tenant
 from app.models.enums import AuthTokenPurpose
 from app.models.identity import PlatformUser
-from app.models.tenancy import ClinicalType, Feature, LabTest, MedicineSuggestion, Tenant
-from app.schemas.common import zone
+from app.models.tenancy import ClinicalType, LabTest, MedicineSuggestion, Tenant
+from app.schemas.common import local_today
 from app.schemas.identity import PlatformUserOut, UserOut
 from app.schemas.support import SupportRequestOut
 from app.schemas.tenancy import (
     ClinicalTypeCopyPatch,
     ClinicalTypeOut,
-    FeatureOut,
-    FeaturePriceIn,
     ImpersonationOut,
     LabTestAdminOut,
     LabTestIn,
@@ -54,8 +51,6 @@ from app.schemas.tenancy import (
     SlugCheckOut,
     TenantCreatedOut,
     TenantCreateIn,
-    TenantFeatureOut,
-    TenantFeatureSetIn,
     TenantOut,
     TenantPatchIn,
     TenantStatusIn,
@@ -65,7 +60,6 @@ from app.services import auth as auth_service
 from app.services import platform as platform_service
 from app.services import rent as rent_service
 from app.services import support as support_service
-from app.services import tenants as tenant_service
 from app.services.tenants import get_config
 
 log = logging.getLogger("pms.platform")
@@ -116,8 +110,9 @@ async def create_tenant(
     staff: PlatformUser = Depends(current_platform_user),
     session: AsyncSession = Depends(db_session, scope="function"),
 ) -> TenantCreatedOut:
-    """Claims the subdomain, seeds core entitlements, clones the clinical-type
-    field set, writes a configuration, and invites the first administrator.
+    """Claims the subdomain, writes a configuration, and invites the first
+    administrator. The clinic has every module from the start; its clinical
+    type decides which shared field set and exam workflow apply.
 
     The console never sees a password, because none is created. The admin row
     is written with no hash at all, and the person named on it is emailed a
@@ -236,59 +231,14 @@ async def update_tenant(
     return TenantOut.of(tenant)
 
 
-@router.get("/tenants/{tenant_id}/features", response_model=list[TenantFeatureOut])
-async def tenant_features(
-    tenant_id: str,
-    staff: PlatformUser = Depends(current_platform_user),
-    session: AsyncSession = Depends(db_session, scope="function"),
-) -> list[TenantFeatureOut]:
-    """Which modules this clinic has, as the console sees them."""
-    clinic = await _clinic(session, tenant_id)
-    rows = await tenant_service.list_features(session, clinic.id)
-    return [TenantFeatureOut.of(r) for r in rows]
-
-
-@router.put("/tenants/{tenant_id}/features/{feature_key}", response_model=TenantFeatureOut)
-async def set_tenant_feature(
-    tenant_id: str,
-    feature_key: str,
-    payload: TenantFeatureSetIn,
-    request: Request,
-    staff: PlatformUser = Depends(current_platform_user),
-    session: AsyncSession = Depends(db_session, scope="function"),
-) -> TenantFeatureOut:
-    """Switch a module on or off for one clinic.
-
-    The clinic-side route records a clinic *buying* something; this is the
-    platform's own hand on the switch, for onboarding, for a trial, and for
-    turning off what was never paid for. Both write the same row, so there is
-    one answer to "is this on" and the feature guard reads it either way.
-    """
-    clinic = await _clinic(session, tenant_id)
-    row = await platform_service.set_tenant_feature(
-        session,
-        clinic.id,
-        feature_key,
-        status=payload.status,
-        today=datetime.now(zone(clinic.timezone)).date(),
-    )
-    await audit.record_for_tenant(
-        session, clinic.id, action=f"platform.feature_{payload.status.value}",
-        actor_kind="platform", actor_id=staff.id, actor_label=f"{staff.name} <{staff.email}>",
-        entity="feature", entity_id=feature_key, ip=client_ip(request),
-        user_agent=user_agent(request),
-    )
-    return TenantFeatureOut.of(row)
-
-
 @router.get("/tenants/{tenant_id}/support-requests", response_model=list[SupportRequestOut])
 async def tenant_support_requests(
     tenant_id: str,
     staff: PlatformUser = Depends(current_platform_user),
     session: AsyncSession = Depends(db_session, scope="function"),
 ) -> list[SupportRequestOut]:
-    """What this clinic has asked the desk for, newest first — the list a
-    super admin works from when granting modules."""
+    """What this clinic has asked the desk for, newest first — the list the
+    desk works from when following up."""
     clinic = await _clinic(session, tenant_id)
     rows = await support_service.list_for_tenant(session, clinic.id)
     return [SupportRequestOut.of(r, clinic.timezone) for r in rows]
@@ -443,7 +393,6 @@ async def snapshot(
         tenants=[
             PlatformTenantSummary(
                 tenant=TenantOut.of(row["tenant"]),
-                active_features=row["active_features"],
                 users=row["users"],
                 patients=row["patients"],
                 appointments=row["appointments"],
@@ -474,8 +423,9 @@ async def update_platform_settings_route(
     staff: PlatformUser = Depends(current_super_admin),
     session: AsyncSession = Depends(db_session, scope="function"),
 ) -> PlatformSettingsOut:
-    """What every new clinic starts with, and where a clinic that can't
-    self-serve is told to write. Super-admin only, like every other write
+    """What every new clinic starts with, where a clinic that can't
+    self-serve is told to write, and the flat monthly clinic fee the rent cycle
+    bills. Super-admin only, like every other write
     in this file that shapes what the whole platform does next."""
     changes = payload.model_dump(exclude_unset=True, exclude_none=True)
     row = await platform_service.update_platform_settings(session, changes)
@@ -636,44 +586,3 @@ async def update_platform_clinical_type(
         ip=client_ip(request), user_agent=user_agent(request), meta={"changes": changes},
     )
     return ClinicalTypeOut.of(row)
-
-
-@router.get("/catalog/features", response_model=list[FeatureOut])
-async def features(
-    staff: PlatformUser = Depends(current_platform_user),
-    session: AsyncSession = Depends(db_session, scope="function"),
-) -> list[FeatureOut]:
-    rows = (await session.execute(select(Feature).order_by(Feature.name))).scalars()
-    return [FeatureOut.of(f) for f in rows]
-
-
-@router.patch("/catalog/features/{feature_key}", response_model=FeatureOut)
-async def set_feature_price(
-    feature_key: str,
-    payload: FeaturePriceIn,
-    request: Request,
-    staff: PlatformUser = Depends(current_super_admin),
-    session: AsyncSession = Depends(db_session, scope="function"),
-) -> FeatureOut:
-    """Set what a module costs per month.
-
-    A super admin's call, not the desk's: the price is what every clinic on
-    the platform is quoted and what the console counts revenue from, so the
-    `support` role is refused with a 403 — it can switch a module on for a
-    clinic, but not decide what that clinic will be charged for it.
-
-    The row is the catalogue's, not a clinic's, so the audit line names no
-    tenant. It records the old figure beside the new one, because "who changed
-    the price of Billing, and from what" is exactly the question it is for.
-    """
-    feature, previous = await platform_service.set_feature_price(
-        session, feature_key, payload.price_monthly
-    )
-    await audit.record(
-        session, action="platform.feature_price", actor_kind="platform",
-        actor_id=staff.id, actor_label=f"{staff.name} <{staff.email}>",
-        entity="feature", entity_id=feature.key, ip=client_ip(request),
-        user_agent=user_agent(request),
-        meta={"from": float(previous), "to": float(feature.price_monthly)},
-    )
-    return FeatureOut.of(feature)

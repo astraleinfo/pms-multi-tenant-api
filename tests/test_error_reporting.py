@@ -295,12 +295,25 @@ def test_production_refuses_sentry_without_a_dsn():
 
 
 def test_init_refuses_sentry_without_a_dsn(monkeypatch):
+    monkeypatch.setattr(settings, "environment", "production")
     monkeypatch.setattr(settings, "error_reporter", "sentry")
     monkeypatch.setattr(settings, "sentry_dsn", "")
     previous = error_reporting.current()
     with pytest.raises(RuntimeError, match="SENTRY_DSN"):
         error_reporting.init("api")
     assert error_reporting.current() is previous
+
+
+@pytest.mark.parametrize("environment", ["development", "staging"])
+def test_only_production_reports(monkeypatch, environment):
+    monkeypatch.setattr(settings, "environment", environment)
+    monkeypatch.setattr(settings, "error_reporter", "sentry")
+    monkeypatch.setattr(settings, "sentry_dsn", "https://public@sentry.invalid/1")
+    previous = error_reporting.current()
+    try:
+        assert error_reporting.init("api").name == "none"
+    finally:
+        error_reporting.install(previous)
 
 
 def test_none_reports_nothing(monkeypatch):
