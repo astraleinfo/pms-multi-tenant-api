@@ -30,6 +30,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.concurrency import run_in_threadpool
 
+from app.core.config import settings
 from app.core.errors import ValidationFailed
 from app.db.session import set_tenant
 from app.models.enums import ImportJobStatus
@@ -82,7 +83,9 @@ def kinds() -> dict[str, Kind]:
 
 def _key(tenant_id: uuid.UUID, job_id: uuid.UUID) -> str:
     """Where an upload waits in the bucket. Built from ids the server minted."""
-    return f"tenants/{tenant_id}/imports/{job_id}"
+    prefix = settings.s3_prefix.strip("/")
+    path = f"tenants/{tenant_id}/imports/{job_id}"
+    return f"{prefix}/{path}" if prefix else path
 
 
 # --- the request's half -----------------------------------------------------------------------
