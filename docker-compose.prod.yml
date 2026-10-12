@@ -6,7 +6,7 @@
 #                  plus APP_DOMAIN and FLOWER_BASIC_AUTH, which this file also reads.
 # .env.migrate     MIGRATION_DATABASE_URL only.
 #
-# Differences from docker-compose.yml, all deliberate:
+# Differences from docker-compose.dev.yml, all deliberate:
 #   * nginx is the only thing with a published port. The API is on the internal
 #     network, so FORWARDED_ALLOW_IPS="*" in the image trusts nginx and nothing else.
 #   * Migrations are a one-shot job holding the owner credential; the API never

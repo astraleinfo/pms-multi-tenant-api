@@ -66,13 +66,15 @@ ENV PATH="/opt/venv/bin:$PATH" \
 RUN apt-get update \
  && apt-get install -y --no-install-recommends tini \
  && rm -rf /var/lib/apt/lists/* \
- && useradd --system --uid 10001 --user-group --home-dir /srv --no-create-home pms
+ && useradd --system --uid 10001 --user-group --home-dir /srv --no-create-home pms \
+ && install -d -o pms -g pms /var/lib/flower
 
 COPY --from=builder /opt/venv /opt/venv
 
 WORKDIR /srv
 # Owned by root and read-only to the process: the API writes nothing to disk.
-# Beat and Flower keep their state under /tmp.
+# Beat keeps its state under /tmp; Flower its task history in /var/lib/flower,
+# which is owned by `pms` above so a named volume mounted there inherits that.
 COPY alembic.ini ./
 COPY alembic ./alembic
 COPY scripts ./scripts

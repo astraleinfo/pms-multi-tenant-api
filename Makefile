@@ -13,10 +13,10 @@ install:  ## create the virtualenv and install everything
 	$(PIP) install -q -e ".[dev]"
 
 db:  ## start PostgreSQL (docker) and create both roles
-	docker compose up -d db
+	docker compose -f docker-compose.dev.yml up -d db
 
 redis:  ## start Redis (docker) — the Celery broker and the outbox nudge
-	docker compose up -d redis
+	docker compose -f docker-compose.dev.yml up -d redis
 
 migrate:  ## apply migrations
 	$(VENV)/bin/alembic upgrade head
@@ -28,7 +28,7 @@ run:  ## serve on http://localhost:8000
 	$(VENV)/bin/uvicorn app.main:app --reload --port 8000
 
 # The three background processes, for when the API is run on the host rather
-# than in a container. `docker compose up` starts all three itself.
+# than in a container. `docker compose -f docker-compose.dev.yml up` starts all three itself.
 worker: redis  ## run a Celery worker (-E feeds the monitor)
 	$(VENV)/bin/celery -A app.worker.celery_app worker -Q pms --loglevel=INFO -E
 

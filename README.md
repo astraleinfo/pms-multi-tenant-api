@@ -115,11 +115,11 @@ make seed        # the three demo clinics from the front end's seed (all modules
 make run         # http://localhost:8000 — docs at /docs
 ```
 
-Or `make up` for all of it, or `docker compose up` to run the API in a container too. Compose also
+Or `make up` for all of it, or `docker compose -f docker-compose.dev.yml up` to run the API in a container too. Compose also
 brings up the Celery worker, beat and Flower; only the API's port is published, and Postgres and
 Redis are bound to the loopback rather than to the machine's network.
 
-That path uses the throwaway PostgreSQL in `docker-compose.yml`, which bootstraps itself. To
+That path uses the throwaway PostgreSQL in `docker-compose.dev.yml`, which bootstraps itself. To
 point the API at a PostgreSQL you already run — or to understand the two roles it connects as —
 see [The database](#the-database-one-database-two-roles) below.
 
@@ -191,7 +191,7 @@ database is called:
 
 | Path | Server | Database | Bootstrapped by |
 |---|---|---|---|
-| `make db` / `docker compose` | `localhost:55432` | `pms` (and `pms_test` for the suite) | `scripts/bootstrap_db.sql`, run automatically on first boot |
+| `make db` / `docker-compose.dev.yml` | `localhost:55432` | `pms` (and `pms_test` for the suite) | `scripts/bootstrap_db.sql`, run automatically on first boot |
 | Your own local PostgreSQL | `localhost:5432` | `pms_api` | by hand — see [Creating it from scratch](#creating-the-database-and-roles-from-scratch) |
 
 Pick one and set both URLs to match it. The examples below use `pms_api` on `5432`; substitute
@@ -497,7 +497,7 @@ a separate job or init container that holds the `pms_owner` credential, applies 
 head`, and exits. The API container gets `DATABASE_URL` only. It is also the natural fit for the
 lifecycle — migrations run once per deploy, not once per request.
 
-`docker-compose.yml` deliberately does the opposite: one container holds both URLs and runs
+`docker-compose.dev.yml` deliberately does the opposite: one container holds both URLs and runs
 `alembic upgrade head && python scripts/seed.py && uvicorn …`. That is correct for local
 development, where the passwords are `-change-me` literals and one command beats three. It is not
 the shape to copy into production.
@@ -549,7 +549,7 @@ event stream and keeps the task history; the console's **Background jobs** secti
 through this API. Four endpoints, one guard, and one rule about ports.
 
 **Flower's port is never published.** It answers on the container network and nowhere else —
-there is no `ports:` entry for it in `docker-compose.yml`, deliberately. The only route to it from
+there is no `ports:` entry for it in either compose file, deliberately. The only route to it from
 outside is `/v1/platform/jobs/flower/…`, which is a reverse proxy behind the same check as the
 rest of the section. Adding a published port, or a hostname of its own, would hand every job's
 arguments to anyone who found it.
@@ -588,7 +588,7 @@ Configuration is in `.env.example` under **Background-job monitoring**. `FLOWER_
 one worth reading twice — Flower builds its own links from it, so it has to be the path the
 *browser* uses, which behind the web app's `/api` rewrite is `api/v1/platform/jobs/flower`.
 
-**Running the API on the host.** `docker compose up` starts the worker, beat and the monitor for
+**Running the API on the host.** `docker compose -f docker-compose.dev.yml up` starts the worker, beat and the monitor for
 you. `make run` does not, and `FLOWER_URL` still points at the container by name, so the section
 reports the monitor as unreachable until you either run the whole set in Docker or start the three
 yourself:
@@ -853,6 +853,13 @@ scripts/
 ---
 
 ## Deploying
+
+**On a server whose own nginx already serves other sites**, `docker-compose.yml` is the whole
+stack, configured by one `.env` (its header lists what that file needs beyond `.env.example`):
+`docker compose up -d --build`. It publishes the API on `127.0.0.1:18000` and nothing else; the
+host nginx gets `deploy/host-nginx/pms.conf.template` as a site of its own, and the web repo's
+`docker-compose.yml` serves the web app on `127.0.0.1:13000`. `docker-compose.prod.yml` is the
+alternative for a dedicated host, where its own nginx container owns 80/443.
 
 * Run migrations as `pms_owner` and the API as `pms_app`. Never give `pms_app` `BYPASSRLS`,
   ownership of the tables, or `CREATE` on the schema. Give the API container `DATABASE_URL` only —

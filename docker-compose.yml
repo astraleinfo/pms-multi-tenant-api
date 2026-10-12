@@ -1,162 +1,191 @@
-# Local development.
+# Server deployment, beside other applications behind the host's own nginx.
 #
-# One network, and almost nothing on it is published. Postgres and Redis are
-# bound to 127.0.0.1 so the host's own tools and the `make run` flow can still
-# reach them without the ports being offered to the network the machine is on;
-# Flower is not published at all.
+#   docker compose up -d --build
 #
-#   api ──> redis <── worker ──> postgres
-#    │        ▲         ▲
-#    │        └─ flower ┘          (events in, history in memory)
-#    └────────> flower              /v1/platform/jobs/*, super admin only
+# Local development is docker-compose.dev.yml (`make db`, `make redis`).
 #
-# Flower answers on 5555 inside `pms-internal` and nowhere else. The only way
-# to it from outside is through the API, which asks who is calling first — see
-# `app/api/v1/jobs.py`.
+# Everything comes from .env: the app's settings (see .env.example, with
+# ENVIRONMENT=production) plus four values Compose reads itself:
+#
+#   POSTGRES_PASSWORD    the database superuser; the db container only
+#   PMS_OWNER_PASSWORD   pms_owner, which owns the schema; the migrate job only
+#   PMS_APP_PASSWORD     pms_app, which the API and the workers connect as
+#   FLOWER_BASIC_AUTH    user:password for the job monitor
+#
+# Use hex (openssl rand -hex 24) for the passwords: they go into URLs as-is.
+# The database URLs are built here from them, so .env needs neither
+# DATABASE_URL nor MIGRATION_DATABASE_URL, and whatever it says for those is
+# overridden. The three database passwords are blanked inside every app
+# container — .env reaches them whole, but the owner credential belongs to the
+# migrate job alone (README, "The database").
+#
+# Published: the API on 127.0.0.1:18000, for the host nginx
+# (deploy/host-nginx/pms.conf.template), and nothing else. PostgreSQL, Redis
+# and Flower answer on `pms-internal` only. The ports inside the containers
+# (8000, 5432, 6379, 5555) are each container's own and cannot collide with
+# another stack's; only a published host port can, and 18000 is used by no
+# other application on the server.
+
+# Volumes, all prefixed with the project name (pms-multi-tenant-api_…):
+#   pms-pgdata   the database          pms-redis   the broker's append-only file
+#   pms-flower   Flower's task history, so a restart keeps it
+#
+#        host nginx ──127.0.0.1:18000──> api ──> db
+#                                         │
+#                                         └──> redis <── worker, beat, flower
+
+x-app: &app
+  image: pms-api:latest
+  build:
+    context: .
+    args:
+      # Error reports name the build they came from:
+      #   APP_RELEASE=$(git rev-parse --short HEAD) docker compose build
+      APP_RELEASE: ${APP_RELEASE:-}
+  env_file: .env
+  networks: [pms-internal]
+  read_only: true
+  tmpfs:
+    - /tmp
+  security_opt:
+    - no-new-privileges:true
+  cap_drop: [ALL]
+  restart: unless-stopped
+  logging: &logging
+    driver: json-file
+    options:
+      max-size: "20m"
+      max-file: "5"
+
+x-app-env: &app-env
+  DATABASE_URL: postgresql+asyncpg://pms_app:${PMS_APP_PASSWORD:?set PMS_APP_PASSWORD in .env}@db:5432/pms
+  REDIS_URL: redis://redis:6379/0
+  FLOWER_URL: http://flower:5555
+  MIGRATION_DATABASE_URL: ""
+  POSTGRES_PASSWORD: ""
+  PMS_OWNER_PASSWORD: ""
+  PMS_APP_PASSWORD: ""
 
 services:
   db:
     image: postgres:16-alpine
+    # Not env_file: the database needs its three passwords and none of the
+    # app's settings.
     environment:
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: postgres
-    # Published on 55432 so it does not collide with a PostgreSQL already
-    # running on the host, and on the loopback only so it is not on the LAN.
-    ports:
-      - "127.0.0.1:55432:5432"
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      PMS_OWNER_PASSWORD: ${PMS_OWNER_PASSWORD:?set PMS_OWNER_PASSWORD in .env}
+      PMS_APP_PASSWORD: ${PMS_APP_PASSWORD:?set PMS_APP_PASSWORD in .env}
     networks: [pms-internal]
     volumes:
-      - pms-data:/var/lib/postgresql/data
-      - ./scripts/bootstrap_db.sql:/docker-entrypoint-initdb.d/10-bootstrap.sql:ro
+      - pms-pgdata:/var/lib/postgresql/data
+      # Both run on the volume's first start only; changing a password in
+      # .env later does not change it in the database.
+      - ./scripts/bootstrap_db.sql:/bootstrap/bootstrap_db.sql:ro
+      - ./deploy/db/10-bootstrap.sh:/docker-entrypoint-initdb.d/10-bootstrap.sh:ro
+    # Over TCP, on purpose: during first-time initialisation the server listens
+    # on its socket only, so this stays unhealthy until the roles exist.
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d pms"]
       interval: 5s
       timeout: 3s
-      retries: 20
+      retries: 30
+      start_period: 30s
+    stop_grace_period: 60s
+    restart: unless-stopped
+    logging: *logging
 
-  # The message outbox and the Celery broker. Published on 6380 so it does not
-  # collide with a Redis already running on the host for something else — and
-  # on the loopback only: the broker carries every queued job.
   redis:
     image: redis:7-alpine
     command: ["redis-server", "--appendonly", "yes"]
-    ports:
-      - "127.0.0.1:6380:6379"
     networks: [pms-internal]
     volumes:
       - pms-redis:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
+      interval: 10s
       timeout: 3s
-      retries: 20
+      retries: 10
+    restart: unless-stopped
+    logging: *logging
+
+  # Runs to completion before the API starts, on every `up`. The only
+  # container that holds the owner credential.
+  migrate:
+    <<: *app
+    environment:
+      <<: *app-env
+      MIGRATION_DATABASE_URL: postgresql+asyncpg://pms_owner:${PMS_OWNER_PASSWORD:?set PMS_OWNER_PASSWORD in .env}@db:5432/pms
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    healthcheck:
+      disable: true
 
   api:
-    build: .
+    <<: *app
+    environment: *app-env
     depends_on:
-      db:
+      migrate:
+        condition: service_completed_successfully
+      redis:
         condition: service_healthy
-    environment:
-      ENVIRONMENT: development
-      DATABASE_URL: postgresql+asyncpg://pms_app:app-password-change-me@db:5432/pms
-      MIGRATION_DATABASE_URL: postgresql+asyncpg://pms_owner:owner-password-change-me@db:5432/pms
-      JWT_SECRET: dev-secret-only-for-local-development-not-a-real-secret
-      APP_DOMAIN: localhost
-      COOKIE_SECURE: "false"
-      # The web app runs on *.localhost:3000 and reaches the API through a
-      # proxy that rewrites Host, so the slug arrives in a header instead.
-      ALLOW_TENANT_HEADER: "true"
-      REDIS_URL: redis://redis:6379/0
-      # Where the jobs section reads from. The service name resolves inside
-      # `pms-internal` and nowhere else.
-      FLOWER_URL: http://flower:5555
-      FLOWER_BASIC_AUTH: ${FLOWER_BASIC_AUTH:-pms-console:dev-only-flower-password}
-      # The web app serves this API under /api, so that is the path Flower's
-      # own links have to be built from. Both containers are told the same one.
-      FLOWER_URL_PREFIX: api/v1/platform/jobs/flower
-      # Ignored here: only ENVIRONMENT=production reports errors.
-      ERROR_REPORTER: ${ERROR_REPORTER:-none}
-      SENTRY_DSN: ${SENTRY_DSN:-}
     ports:
-      - "8000:8000"
-    networks: [pms-internal]
-    command: >
-      sh -c "alembic upgrade head && python scripts/seed.py &&
-             uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
-    volumes:
-      - ./app:/srv/app:ro
-      - ./alembic:/srv/alembic:ro
+      - "127.0.0.1:18000:8000"
+    # One replica: see the CMD in the Dockerfile.
+    stop_grace_period: 40s
 
-  # Celery. `stop_grace_period` lets a warm shutdown finish the job in hand
-  # before the container is killed; anything cut off anyway was never acked
-  # and goes back on the queue.
+  # The worker, beat and Flower share the API's image, whose HEALTHCHECK probes
+  # port 8000. Only the API listens there, so each of them turns it off rather
+  # than reporting unhealthy forever.
   worker:
-    build: .
+    <<: *app
+    environment: *app-env
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
-    environment: &worker-env
-      ENVIRONMENT: development
-      DATABASE_URL: postgresql+asyncpg://pms_app:app-password-change-me@db:5432/pms
-      JWT_SECRET: dev-secret-only-for-local-development-not-a-real-secret
-      APP_DOMAIN: localhost
-      REDIS_URL: redis://redis:6379/0
-      ERROR_REPORTER: ${ERROR_REPORTER:-none}
-      SENTRY_DSN: ${SENTRY_DSN:-}
-    networks: [pms-internal]
-    # `-E` publishes the task events Flower reads. It is also set in the Celery
-    # configuration, so a worker started without the flag still reports.
-    command: celery -A app.worker.celery_app worker -Q pms --loglevel=INFO -E
+    command: ["celery", "-A", "app.worker.celery_app", "worker", "-Q", "pms", "--loglevel=INFO", "-E"]
     stop_grace_period: 60s
-    restart: unless-stopped
     healthcheck:
       disable: true
 
-  # Exactly one of these, ever: it schedules the sweep.
+  # Exactly one, ever: it schedules the sweep.
   beat:
-    build: .
+    <<: *app
+    environment: *app-env
     depends_on:
       redis:
         condition: service_healthy
-    environment: *worker-env
-    networks: [pms-internal]
-    command: celery -A app.worker.celery_app beat --loglevel=INFO --schedule /tmp/celerybeat-schedule
-    restart: unless-stopped
+    command: ["celery", "-A", "app.worker.celery_app", "beat", "--loglevel=INFO", "--schedule", "/tmp/celerybeat-schedule"]
     healthcheck:
       disable: true
 
-  # The job monitor.
-  #
-  # No `ports:` — deliberately, and it is the whole security story of this
-  # feature. 5555 is reachable from `api` and from nothing else, and the API
-  # will not relay a byte of it to anyone who is not a super admin.
-  #
-  # `--basic_auth` is the second lock: a private network is not a credential,
-  # and without it anything that ever lands on this network has every job's
-  # arguments. `--url_prefix` has to match FLOWER_URL_PREFIX on the API, because
-  # Flower builds its own links from it and those links are followed by a
-  # browser that only ever sees the proxy.
+  # Not published. Reachable only from the API, which checks for a super admin
+  # before relaying a byte (app/api/v1/jobs.py).
   flower:
-    build: .
+    <<: *app
+    environment: *app-env
     depends_on:
       redis:
         condition: service_healthy
-    environment: *worker-env
-    networks: [pms-internal]
-    expose:
-      - "5555"
-    command: >
-      celery -A app.worker.celery_app flower
-        --address=0.0.0.0
-        --port=5555
-        --url_prefix=api/v1/platform/jobs/flower
-        --basic_auth=${FLOWER_BASIC_AUTH:-pms-console:dev-only-flower-password}
-        --persistent=True
-        --db=/tmp/flower.db
-        --max_tasks=10000
-    restart: unless-stopped
+    expose: ["5555"]
+    volumes:
+      - pms-flower:/var/lib/flower
+    command:
+      - celery
+      - -A
+      - app.worker.celery_app
+      - flower
+      - --address=0.0.0.0
+      - --port=5555
+      - --url_prefix=api/v1/platform/jobs/flower
+      - --basic_auth=${FLOWER_BASIC_AUTH:?set FLOWER_BASIC_AUTH in .env, user:password}
+      - --persistent=True
+      - --db=/var/lib/flower/flower.db
+      - --max_tasks=10000
     healthcheck:
       disable: true
 
@@ -165,5 +194,6 @@ networks:
     driver: bridge
 
 volumes:
-  pms-data:
+  pms-pgdata:
   pms-redis:
+  pms-flower:

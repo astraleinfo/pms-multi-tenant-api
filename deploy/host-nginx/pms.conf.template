@@ -1,0 +1,155 @@
+# PMS as a site on a host nginx that also serves other applications — the
+# counterpart of docker-compose.yml. Same routing as
+# templates/pms.conf.template, with every shared name prefixed `pms_` so it
+# cannot collide with a zone, map or upstream another site already defines.
+#
+#   sudo sh -c "APP_DOMAIN=pms.example.com envsubst '\${APP_DOMAIN}' \
+#     < deploy/host-nginx/pms.conf.template > /etc/nginx/sites-available/pms.conf"
+#   sudo ln -s /etc/nginx/sites-available/pms.conf /etc/nginx/sites-enabled/pms.conf
+#   sudo nginx -t && sudo systemctl reload nginx
+#
+# Certificates: one wildcard for APP_DOMAIN and *.APP_DOMAIN, issued with the
+# DNS-01 challenge and installed at /etc/nginx/ssl/APP_DOMAIN/ — e.g. by
+# acme.sh's --install-cert, which also reloads nginx on every renewal.
+#
+# Only hosts under APP_DOMAIN match these server blocks; every other site on
+# this nginx is untouched. Written for nginx 1.18 and later.
+
+map $http_x_request_id $pms_request_id {
+    default                          $request_id;
+    "~^[A-Za-z0-9._-]{8,64}$"        $http_x_request_id;
+}
+
+map $http_upgrade $pms_connection_upgrade {
+    default  upgrade;
+    ""       "";
+}
+
+limit_req_zone  $binary_remote_addr zone=pms_rl_api:20m  rate=20r/s;
+limit_req_zone  $binary_remote_addr zone=pms_rl_auth:10m rate=60r/m;
+limit_conn_zone $binary_remote_addr zone=pms_rl_conn:10m;
+
+# $uri, never $request: the queue socket carries ?access_token=<JWT>.
+log_format pms_json escape=json
+  '{'
+    '"time":"$time_iso8601",'
+    '"request_id":"$pms_request_id",'
+    '"remote_addr":"$remote_addr",'
+    '"host":"$host",'
+    '"method":"$request_method",'
+    '"uri":"$uri",'
+    '"status":$status,'
+    '"bytes_sent":$body_bytes_sent,'
+    '"request_time":$request_time,'
+    '"upstream_status":"$upstream_status",'
+    '"upstream_time":"$upstream_response_time",'
+    '"user_agent":"$http_user_agent"'
+  '}';
+
+# Loopback ports published by docker-compose.yml here (API) and in the web
+# repo.
+upstream pms_api {
+    server 127.0.0.1:18000 max_fails=0;
+    keepalive 32;
+    keepalive_timeout 60s;
+}
+
+upstream pms_web {
+    server 127.0.0.1:13000 max_fails=0;
+    keepalive 32;
+    keepalive_timeout 60s;
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name .${APP_DOMAIN};
+
+    location / {
+        return 308 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name .${APP_DOMAIN};
+
+    ssl_certificate     /etc/nginx/ssl/${APP_DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/nginx/ssl/${APP_DOMAIN}/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_session_cache   shared:pms_ssl:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    access_log /var/log/nginx/pms.access.log pms_json;
+    error_log  /var/log/nginx/pms.error.log warn;
+
+    # Lab attachments are capped at 15 MB by the API; multipart adds a little.
+    client_max_body_size 20m;
+
+    limit_conn pms_rl_conn 100;
+    limit_req_status  429;
+    limit_conn_status 429;
+
+    gzip            on;
+    gzip_vary       on;
+    gzip_proxied    any;
+    gzip_min_length 1024;
+    gzip_types application/json application/javascript image/svg+xml text/css text/javascript text/plain;
+
+    # Server-level only: an add_header inside a location drops these there.
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Request-ID $pms_request_id always;
+
+    # Shared by every location below; a proxy_set_header inside one would
+    # discard all of these for it, Host included.
+    proxy_http_version 1.1;
+    # Host intact: the subdomain is how a request names its clinic.
+    proxy_set_header Host              $host;
+    # Overwritten, not appended: uvicorn trusts this header.
+    proxy_set_header X-Forwarded-For   $remote_addr;
+    proxy_set_header X-Real-IP         $remote_addr;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Host  $host;
+    proxy_set_header X-Request-ID      $pms_request_id;
+    proxy_set_header Upgrade           $http_upgrade;
+    proxy_set_header Connection        $pms_connection_upgrade;
+    proxy_connect_timeout 5s;
+    proxy_send_timeout    60s;
+    proxy_read_timeout    120s;
+    proxy_next_upstream error timeout;
+    proxy_next_upstream_tries 2;
+    proxy_hide_header Strict-Transport-Security;
+
+    # /api/... is the API at /...
+    location /api/ {
+        limit_req zone=pms_rl_api burst=100 nodelay;
+        proxy_pass http://pms_api/;
+    }
+
+    # Sign-in, refresh, reset: tighter limit, no compression on tokens (BREACH).
+    location /api/v1/auth/ {
+        limit_req zone=pms_rl_auth burst=30 nodelay;
+        limit_req zone=pms_rl_api  burst=100 nodelay;
+        gzip off;
+        proxy_pass http://pms_api/v1/auth/;
+    }
+
+    # The live queue; the API heartbeats every 25s.
+    location /api/v1/ws/ {
+        limit_req zone=pms_rl_api burst=100 nodelay;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+        proxy_buffering off;
+        proxy_pass http://pms_api/v1/ws/;
+    }
+
+    location ~ ^/api/health(/|$) {
+        return 404;
+    }
+
+    location / {
+        proxy_pass http://pms_web;
+    }
+}
