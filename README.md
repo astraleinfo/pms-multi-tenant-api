@@ -856,10 +856,11 @@ scripts/
 
 **On a server whose own nginx already serves other sites**, `docker-compose.yml` is the whole
 stack, configured by one `.env` (its header lists what that file needs beyond `.env.example`):
-`docker compose up -d --build`. It publishes the API on `127.0.0.1:18000` and nothing else; the
+`docker compose up -d --build`. It publishes the API on `127.0.0.1:18000` (`PMS_API_PORT`) and nothing else; the
 host nginx gets `deploy/host-nginx/pms.conf.template` as a site of its own, and the web repo's
-`docker-compose.yml` serves the web app on `127.0.0.1:13000`. `docker-compose.prod.yml` is the
+`docker-compose.yml` serves the web app on `127.0.0.1:13000` (`PMS_WEB_PORT`). `docker-compose.prod.yml` is the
 alternative for a dedicated host, where its own nginx container owns 80/443.
+Step by step, from DNS to backups: [deploy/DEPLOY.md](deploy/DEPLOY.md).
 
 **The first super admin.** A real deployment gets no demo clinics. Once, after the first `up`:
 

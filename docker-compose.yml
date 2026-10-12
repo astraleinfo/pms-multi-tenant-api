@@ -25,18 +25,18 @@
 # container — .env reaches them whole, but the owner credential belongs to the
 # migrate job alone (README, "The database").
 #
-# Published: the API on 127.0.0.1:18000, for the host nginx
-# (deploy/host-nginx/pms.conf.template), and nothing else. PostgreSQL, Redis
-# and Flower answer on `pms-internal` only. The ports inside the containers
-# (8000, 5432, 6379, 5555) are each container's own and cannot collide with
-# another stack's; only a published host port can, and 18000 is used by no
-# other application on the server.
+# Published: the API on 127.0.0.1:PMS_API_PORT (default 18000), for the host
+# nginx (deploy/host-nginx/pms.conf.template), and nothing else. Set
+# PMS_API_PORT in .env when something on the server already listens on 18000.
+# PostgreSQL, Redis and Flower answer on `pms-internal` only. The ports inside
+# the containers (8000, 5432, 6379, 5555) are each container's own and cannot
+# collide with another stack's; only a published host port can.
 
 # Volumes, all prefixed with the project name (pms-multi-tenant-api_…):
 #   pms-pgdata   the database          pms-redis   the broker's append-only file
 #   pms-flower   Flower's task history, so a restart keeps it
 #
-#        host nginx ──127.0.0.1:18000──> api ──> db
+#        host nginx ──127.0.0.1:PMS_API_PORT──> api ──> db
 #                                         │
 #                                         └──> redis <── worker, beat, flower
 
@@ -138,7 +138,7 @@ services:
       redis:
         condition: service_healthy
     ports:
-      - "127.0.0.1:18000:8000"
+      - "127.0.0.1:${PMS_API_PORT:-18000}:8000"
     # One replica: see the CMD in the Dockerfile.
     stop_grace_period: 40s
 

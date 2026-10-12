@@ -3,10 +3,15 @@
 # templates/pms.conf.template, with every shared name prefixed `pms_` so it
 # cannot collide with a zone, map or upstream another site already defines.
 #
-#   sudo sh -c "APP_DOMAIN=pms.example.com envsubst '\${APP_DOMAIN}' \
+#   sudo sh -c "APP_DOMAIN=pms.example.com PMS_API_PORT=18000 PMS_WEB_PORT=13000 \
+#     envsubst '\${APP_DOMAIN} \${PMS_API_PORT} \${PMS_WEB_PORT}' \
 #     < deploy/host-nginx/pms.conf.template > /etc/nginx/sites-available/pms.conf"
 #   sudo ln -s /etc/nginx/sites-available/pms.conf /etc/nginx/sites-enabled/pms.conf
 #   sudo nginx -t && sudo systemctl reload nginx
+#
+# The two ports are PMS_API_PORT in the API's .env and PMS_WEB_PORT in the web
+# app's (18000 and 13000 when unset). Leave one out and `nginx -t` fails on an
+# empty port, rather than proxying somewhere unintended.
 #
 # Certificates: one wildcard for APP_DOMAIN and *.APP_DOMAIN, issued with the
 # DNS-01 challenge and installed at /etc/nginx/ssl/APP_DOMAIN/ — e.g. by
@@ -49,13 +54,13 @@ log_format pms_json escape=json
 # Loopback ports published by docker-compose.yml here (API) and in the web
 # repo.
 upstream pms_api {
-    server 127.0.0.1:18000 max_fails=0;
+    server 127.0.0.1:${PMS_API_PORT} max_fails=0;
     keepalive 32;
     keepalive_timeout 60s;
 }
 
 upstream pms_web {
-    server 127.0.0.1:13000 max_fails=0;
+    server 127.0.0.1:${PMS_WEB_PORT} max_fails=0;
     keepalive 32;
     keepalive_timeout 60s;
 }
