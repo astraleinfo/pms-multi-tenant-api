@@ -2,6 +2,12 @@
 #
 #   docker compose up -d --build
 #
+# Once, after the first `up`: the catalogues and the console's first super
+# admin, with no demo data. It asks for the password (12 characters or more).
+#
+#   docker compose run --rm migrate python scripts/seed.py --production \
+#       --email you@example.com --name "Your Name"
+#
 # Local development is docker-compose.dev.yml (`make db`, `make redis`).
 #
 # Everything comes from .env: the app's settings (see .env.example, with

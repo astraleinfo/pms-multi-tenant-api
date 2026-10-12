@@ -32,7 +32,9 @@ class Settings(BaseSettings):
     app_domain: str = "localhost"
     extra_cors_origins: str = ""
     public_scheme: str = "http"
-    public_port: str = "3000"
+    # Blank means the scheme's default port, so links carry none. Local
+    # development sets 3000, the web app's dev server.
+    public_port: str = ""
 
     # The label the super-admin console is served on: `admin.<app_domain>`.
     # It is a reserved subdomain, so no clinic can ever claim it.

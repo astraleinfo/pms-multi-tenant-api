@@ -861,6 +861,19 @@ host nginx gets `deploy/host-nginx/pms.conf.template` as a site of its own, and 
 `docker-compose.yml` serves the web app on `127.0.0.1:13000`. `docker-compose.prod.yml` is the
 alternative for a dedicated host, where its own nginx container owns 80/443.
 
+**The first super admin.** A real deployment gets no demo clinics. Once, after the first `up`:
+
+```bash
+docker compose run --rm migrate python scripts/seed.py --production \
+    --email you@example.com --name "Your Name"
+```
+
+It asks for the password and writes the catalogues — clinical types, the lab and medicine lists,
+the shared field definitions; a clinic cannot be created without them — and one super admin. It
+never deletes anything: the catalogues go into an empty database only, so running it again just
+adds another super admin. Plain `scripts/seed.py` wipes every table for the demo and refuses to run
+with `ENVIRONMENT=production`.
+
 * Run migrations as `pms_owner` and the API as `pms_app`. Never give `pms_app` `BYPASSRLS`,
   ownership of the tables, or `CREATE` on the schema. Give the API container `DATABASE_URL` only —
   `MIGRATION_DATABASE_URL` belongs to the migration job. See

@@ -155,9 +155,10 @@ async def seed_platform_settings(session: AsyncSession) -> None:
     await session.flush()
 
 
-async def seed_platform_tables(session: AsyncSession, data: dict) -> None:
-    """Everything the platform owns: catalogues, clinics, console staff, and
-    the shared field definitions."""
+async def seed_catalogues(session: AsyncSession, data: dict) -> None:
+    """The reference data every deployment needs, demo or not: clinical types
+    (a clinic cannot be created without one), the lab and medicine catalogues,
+    and the field definitions shared across clinics."""
     for row in data["CAT_CLINICAL_TYPES"]:
         session.add(
             ClinicalType(
@@ -191,6 +192,35 @@ async def seed_platform_tables(session: AsyncSession, data: dict) -> None:
             )
         )
 
+    for row in data["CAT_FIELD_DEFINITIONS"]:
+        if row["scope"] == "tenant":
+            continue  # a clinic's own, written with it bound in seed_tenant
+        session.add(
+            FieldDefinition(
+                id=rid("field", row["id"]),
+                scope=row["scope"],
+                clinical_type=row.get("clinical_type"),
+                tenant_id=None,
+                entity=row["entity"],
+                field_key=row["field_key"],
+                label=row["label"],
+                type=row["type"],
+                required=row["required"],
+                order=row["order"],
+                options=row.get("options"),
+                help=row.get("help"),
+                span=row.get("span"),
+                group=row.get("group"),
+            )
+        )
+
+    await session.flush()
+
+
+async def seed_platform_tables(session: AsyncSession, data: dict) -> None:
+    """Everything the platform owns: catalogues, clinics, and console staff."""
+    await seed_catalogues(session, data)
+
     for row in data["PLATFORM_USERS"]:
         session.add(
             PlatformUser(
@@ -217,28 +247,6 @@ async def seed_platform_tables(session: AsyncSession, data: dict) -> None:
                 plan=row["plan"],
                 since=_d(row["since"]),
                 timezone=TZ,
-            )
-        )
-
-    for row in data["CAT_FIELD_DEFINITIONS"]:
-        if row["scope"] == "tenant":
-            continue  # written with the tenant bound, below
-        session.add(
-            FieldDefinition(
-                id=rid("field", row["id"]),
-                scope=row["scope"],
-                clinical_type=row.get("clinical_type"),
-                tenant_id=None,
-                entity=row["entity"],
-                field_key=row["field_key"],
-                label=row["label"],
-                type=row["type"],
-                required=row["required"],
-                order=row["order"],
-                options=row.get("options"),
-                help=row.get("help"),
-                span=row.get("span"),
-                group=row.get("group"),
             )
         )
 
@@ -707,6 +715,41 @@ async def seed_all(session: AsyncSession, *, reset: bool = True) -> dict[str, in
         "encounters": len(data["ENCOUNTERS"]),
         "invoices": len(data["INVOICES"]),
     }
+    return counts
+
+
+async def seed_production(
+    session: AsyncSession, *, name: str, email: str, password: str
+) -> dict[str, int]:
+    """A real deployment's first run: the catalogues and one super admin.
+
+    No demo clinics, no demo staff, and never a wipe. The catalogues are
+    written only into an empty database, so running it again for a second
+    super admin leaves what the console has since edited alone.
+    """
+    await set_tenant(session, None)
+    email = email.strip().lower()
+    if await session.scalar(select(PlatformUser.id).where(PlatformUser.email == email)):
+        raise ValueError(f"a platform account for {email} already exists")
+
+    counts = {"catalogues": 0, "super_admins": 1}
+    if await session.scalar(select(ClinicalType.key).limit(1)) is None:
+        data = load_data()
+        await seed_catalogues(session, data)
+        counts["catalogues"] = 1
+
+    session.add(
+        PlatformUser(
+            name=name.strip(),
+            email=email,
+            password_hash=hash_password(password),
+            initials="".join(part[0] for part in name.split()[:2]).upper(),
+            title="Super admin",
+            role=PlatformRole.SUPER_ADMIN.value,
+            status="active",
+        )
+    )
+    await session.flush()
     return counts
 
 

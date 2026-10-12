@@ -31,6 +31,8 @@ os.environ.update(
         "MIGRATION_DATABASE_URL": TEST_MIGRATION_DB,
         "JWT_SECRET": "test-secret-not-used-anywhere-real-000000",
         "APP_DOMAIN": "localhost",
+        "PUBLIC_SCHEME": "http",
+        "PUBLIC_PORT": "3000",
         "COOKIE_SECURE": "false",
         "ALLOW_TENANT_HEADER": "false",
         "LOGIN_RATE_LIMIT": "1000/minute",
@@ -43,8 +45,17 @@ os.environ.update(
         "FLOWER_URL": "http://127.0.0.1:9/",
         "FLOWER_TIMEOUT_SECONDS": "2",
         "FLOWER_BASIC_AUTH": "test:test",
-        # Whatever a developer's .env says, the suite reports nowhere.
+        # Whatever a developer's .env says, the suite reports nowhere, mails
+        # nobody, stores nothing outside the database, and scopes its cookies
+        # to the hosts above.
         "ERROR_REPORTER": "none",
+        "MAIL_PROVIDER": "console",
+        # The desk address the platform settings row starts with.
+        "SUPPORT_EMAIL": "support@astrale.health",
+        "STORAGE_BACKEND": "database",
+        "COOKIE_DOMAIN": "",
+        "REFRESH_COOKIE_PATH": "/",
+        "FLOWER_COOKIE_PATH": "/",
     }
 )
 
