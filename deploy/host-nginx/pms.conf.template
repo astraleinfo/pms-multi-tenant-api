@@ -76,8 +76,12 @@ server {
 }
 
 server {
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2;
+    # No `http2` here: on nginx before 1.25 it is a property of the whole
+    # address:port, so it would switch every other site on 443 to HTTP/2 as
+    # well. On 1.25.1 and later, `http2 on;` below this line is per site and
+    # safe to add.
+    listen 443 ssl;
+    listen [::]:443 ssl;
     server_name .${APP_DOMAIN};
 
     ssl_certificate     /etc/nginx/ssl/${APP_DOMAIN}/fullchain.pem;
