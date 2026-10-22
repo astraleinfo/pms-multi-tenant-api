@@ -4,8 +4,9 @@ A clinic asks for a walkthrough, or for help with anything else. The row is
 the ask. Emailing the support desk is how the desk hears about it, and that
 happens in the Celery worker, off the request: the row is written first, in the same transaction as
 its audit entry, and the worker reads it back. A worker that dies mid-send, a
-deploy, or a wiped broker delays the email; it never loses the request, because
-the beat sweep re-queues anything still `queued`.
+deploy, or a wiped broker delays the email; it never loses the request. A
+request that failed, or is still `queued` long after its hand-off, is sent
+again from the console.
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ from app.models.enums import SupportRequestKind, SupportRequestStatus
 class SupportRequest(Base, TenantScoped, TimestampMixin):
     __tablename__ = "support_requests"
     __extra_table_args__ = (
-        # The sweep: queued and due, oldest first.
+        # Left from the retry sweep; `next_attempt_at` is no longer written.
         Index("ix_support_requests_due", "status", "next_attempt_at"),
         Index("ix_support_requests_tenant_created", "tenant_id", "created_at"),
     )

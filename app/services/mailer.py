@@ -144,83 +144,210 @@ async def send(email: Email) -> None:
 #     web client and by most of the rest once a message is forwarded;
 #   * layout is nested tables, because flexbox and grid do not exist in
 #     Outlook's Word rendering engine;
-#   * there are no images. A logo would need hosting, would be blocked by
-#     default in most clients, and would leak a read receipt to whoever hosts
-#     it. The mark is a table cell with a background colour, which always
-#     renders and tells nobody anything.
+#   * there are no images and no webfonts. A logo or a font file would need
+#     hosting, would be blocked by default in most clients, and would leak a
+#     read receipt to whoever hosts it. The mark is a table cell with a
+#     background colour, which always renders and tells nobody anything.
 #
-# The layout: a coloured header band that says who is writing and what kind
-# of message this is (the eyebrow), the headline in the band, the body on
-# white beneath it, and a footer that says why the recipient got it and where
-# to get help. The band's colour is the message's *tone* — blue for ordinary
-# business, amber for "this needs doing soon", red for "this has happened" —
-# so a billing notice reads differently from an invitation before a word of
-# it is read.
+# The look is the application's own (`globals.css` in the web app), and the
+# idea is that a message *opens on the sign-in stage*: the dark slate pane
+# with the blue glow that every link in these messages lands on. So the top
+# of the card is that stage — the lockup, the clinic, what kind of message
+# this is, the headline, and the one thing to do, all before the fold. A
+# bill puts its amount there too, as the screen's one hero figure.
 #
-# The palette is the product's own (`globals.css`), so the message looks like
-# the thing it is inviting somebody into.
+# Below the stage the card turns to the app's daylight: an off-white surface,
+# hairlines, the details somebody would otherwise have to ask for. One
+# typeface (Google Sans where the reader has it), weights that stop at 600,
+# labels in sentence case.
+#
+# Colour is spent only where it means something. The message's *tone* — blue
+# for ordinary business, amber for "this needs doing soon", red for "this has
+# happened", green for "done" — is a dot and a word over the headline and the
+# callout below it, never colour alone. On the stage the tones use the app's
+# dark-theme values, which are the ones drawn to read on slate.
 
-_GROUND = "#F2F5FB"
-_SURFACE = "#FFFFFF"
-_LINE = "#E6ECF5"
-_LINE_STRONG = "#D6DFEE"
-_INK = "#0F1729"
-_INK_2 = "#4A556B"
-_INK_3 = "#6B7890"
-_SURFACE_2 = "#F6F8FC"
+_GROUND = "#F1F4F9"
+_SURFACE = "#FCFDFF"
+_SURFACE_2 = "#F4F7FB"
+_LINE = "#E2E7F0"
+_ROW_LINE = "#E9EDF5"
+_INK = "#141C2B"
+_INK_2 = "#3D475B"
+_INK_3 = "#4E596E"
+
+_STAGE = "#151C28"
+_STAGE_LINE = "#2B3446"
+_STAGE_INK = "#EEF2F9"
+_STAGE_DIM = "#9BA6BB"
+
+_ACCENT = "#2F62C8"
+_ACCENT_TEXT = "#204B9E"
+
+
+@dataclass(frozen=True)
+class _Tone:
+    soft: str        # a tinted ground, on the light card
+    border: str
+    text: str        # ink on the soft ground
+    stage_dot: str   # the tone's dot, drawn to read on the dark stage
+    stage_text: str  # the tone's word, on the stage
+    button: str      # the filled button this tone asks for
+
 
 _TONES = {
-    # band, band text, soft ground, soft border, soft text, button
-    "accent": ("#2F6BF3", "#FFFFFF", "#EAF1FE", "#C6DAFC", "#1A4FCC", "#2F6BF3"),
-    "warn": ("#B45309", "#FFFFFF", "#FEF6E7", "#F5D9A6", "#8A4B06", "#B45309"),
-    "critical": ("#B42318", "#FFFFFF", "#FDEEEC", "#F4C3BD", "#912018", "#B42318"),
-    "ok": ("#1F7A4D", "#FFFFFF", "#E7F5EE", "#B7E0CA", "#17603C", "#1F7A4D"),
+    "accent": _Tone("#E9EFFB", "#C6D6F1", "#204B9E", "#7C9FE8", "#A6C0F5", "#2F62C8"),
+    # The app never fills a button amber — white on it does not clear 4.5:1 —
+    # so a warning keeps the ordinary blue button and says so in its words.
+    "warn": _Tone("#FAF2E2", "#EAD5A8", "#7C4D07", "#D9A253", "#E8B873", "#2F62C8"),
+    "critical": _Tone("#FBEDEB", "#F0CDC8", "#9E2C22", "#E8776A", "#F09A8C", "#C43D32"),
+    "ok": _Tone("#E7F3EE", "#B5DAC7", "#0E6447", "#4FBB8D", "#6FCFA6", "#2F62C8"),
 }
 
 _SANS = (
-    "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif"
+    "'Google Sans','Google Sans Text',Roboto,-apple-system,BlinkMacSystemFont,"
+    "'Segoe UI','Helvetica Neue',Arial,sans-serif"
 )
-_SERIF = "Georgia,'Times New Roman',serif"
-_MONO = "'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace"
+
+#: the stage's glow, as on the sign-in pane. A client that does not draw
+#: gradients drops the declaration and keeps the flat slate beneath it.
+_GLOW = (
+    "radial-gradient(560px 320px at 0% 0%, rgba(47,98,200,0.42), rgba(47,98,200,0) 68%),"
+    "radial-gradient(460px 300px at 100% 100%, rgba(47,98,200,0.20), rgba(47,98,200,0) 70%)"
+)
+
+
+def _tone(name: str) -> _Tone:
+    return _TONES.get(name, _TONES["accent"])
+
+
+def _stage(
+    *,
+    clinic: str,
+    eyebrow: str,
+    heading: str,
+    lead: str,
+    figure: tuple[str, str] | None,
+    action: tuple[str, str] | None,
+    tone: str,
+) -> str:
+    t = _tone(tone)
+    lead_html = (
+        f'<p style="margin:12px 0 0 0;font-family:{_SANS};font-size:16px;line-height:1.55;color:{_STAGE_DIM};">{lead}</p>'
+        if lead else ""
+    )
+    figure_html = ""
+    if figure:
+        amount, caption = figure
+        figure_html = f"""
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:26px 0 0 0;border-top:1px solid {_STAGE_LINE};">
+          <tr><td style="padding:20px 0 0 0;font-family:{_SANS};">
+            <div style="font-size:36px;line-height:1.08;font-weight:600;letter-spacing:-0.8px;color:{_STAGE_INK};font-variant-numeric:tabular-nums;">{escape(amount)}</div>
+            <div style="margin-top:6px;font-size:14px;line-height:1.5;color:{_STAGE_DIM};">{caption}</div>
+          </td></tr>
+        </table>"""
+    action_html = ""
+    if action:
+        url, label = action
+        colour = t.button
+        action_html = f"""
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:28px 0 0 0;">
+          <tr><td align="center" bgcolor="{colour}" style="background-color:{colour};border-radius:8px;">
+            <a href="{escape(url, quote=True)}" style="display:inline-block;padding:13px 24px;font-family:{_SANS};font-size:15px;line-height:20px;font-weight:500;color:#FFFFFF;text-decoration:none;border-radius:8px;">{label}</a>
+          </td></tr>
+        </table>"""
+    return f"""\
+<tr><td bgcolor="{_STAGE}" style="background-color:{_STAGE};border-radius:13px 13px 0 0;">
+<div style="background-image:{_GLOW};border-radius:13px 13px 0 0;">
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+  <tr><td style="padding:26px 36px 36px 36px;">
+
+    <!-- lockup, and the clinic this is about -->
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+      <tr>
+        <td valign="middle">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+            <tr>
+              <td width="34" style="width:34px;">
+                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="34" style="width:34px;height:34px;background-color:{_ACCENT};border-radius:10px;">
+                  <tr><td align="center" valign="middle" style="height:34px;font-family:{_SANS};font-size:16px;font-weight:600;color:#FFFFFF;line-height:34px;">A</td></tr>
+                </table>
+              </td>
+              <td style="padding-left:11px;font-family:{_SANS};">
+                <div style="font-size:15px;font-weight:600;line-height:1;color:{_STAGE_INK};">Astrale</div>
+                <div style="margin-top:5px;font-size:10.5px;font-weight:500;line-height:1;letter-spacing:1.6px;text-transform:uppercase;color:{_STAGE_DIM};">Practice OS</div>
+              </td>
+            </tr>
+          </table>
+        </td>
+        <td align="right" valign="middle" style="font-family:{_SANS};font-size:13px;line-height:1.4;color:{_STAGE_DIM};">{clinic}</td>
+      </tr>
+    </table>
+
+    <!-- what kind of message, and what it says -->
+    <div style="margin:44px 0 0 0;font-family:{_SANS};font-size:13px;line-height:1.4;font-weight:500;color:{t.stage_text};">
+      <span style="display:inline-block;width:8px;height:8px;margin:0 8px 1px 0;border-radius:999px;background-color:{t.stage_dot};vertical-align:middle;"></span>{eyebrow}
+    </div>
+    <h1 style="margin:10px 0 0 0;font-family:{_SANS};font-size:28px;line-height:1.18;font-weight:600;color:{_STAGE_INK};letter-spacing:-0.6px;">{heading}</h1>
+    {lead_html}
+    {figure_html}
+    {action_html}
+
+  </td></tr>
+</table>
+</div>
+</td></tr>"""
 
 
 def _shell(
     *,
     preheader: str,
+    clinic: str,
     eyebrow: str,
     heading: str,
     body: str,
+    lead: str = "",
+    figure: tuple[str, str] | None = None,
+    action: tuple[str, str] | None = None,
     recipient: str | None = None,
     reason: str = "",
     tone: str = "accent",
     to_the_desk: bool = False,
 ) -> str:
-    """The frame every message shares.
+    """The frame every message shares: the stage, then the card's details.
 
-    `heading` and `eyebrow` are HTML-escaped by the caller (the heading may
-    carry markup); `preheader` is escaped here. `preheader` is the line a
-    client shows next to the subject in the inbox list — left unset it picks
-    up whatever text comes first, so it is set deliberately and then hidden.
+    Everything that is HTML here is escaped by the caller — `clinic`,
+    `eyebrow`, `heading`, `lead`, the figure's caption, the action's label
+    (they may carry markup) — except `preheader`, the figure's amount and the
+    action's URL, which are escaped here. `preheader` is the line a client
+    shows next to the subject in the inbox list; left unset it picks up
+    whatever text comes first, so it is set deliberately and then hidden.
+
+    `figure` is (amount, caption) — the one number this message is about.
+    `action` is (url, label) — the one thing to do, set on the stage.
     `recipient` and `reason` fill the footer's "why you got this" line.
     `to_the_desk` is for mail *to* the support desk: it is not told to write to
     itself for help, and its replies do go somewhere — to the person who asked.
     """
-    band, band_ink, *_ = _TONES.get(tone, _TONES["accent"])
     help_line = "" if to_the_desk else (
-        f'<p style="margin:0 0 8px 0;">Need a hand? Write to '
-        f'<a href="mailto:{escape(settings.support_email)}" style="color:{_INK_2};text-decoration:underline;">'
+        f'<p style="margin:0 0 6px 0;">Need a hand? Write to '
+        f'<a href="mailto:{escape(settings.support_email)}" style="color:{_ACCENT_TEXT};text-decoration:underline;">'
         f'{escape(settings.support_email)}</a>.</p>'
     )
     automatic = "" if to_the_desk else (
-        "<br>This message was sent automatically; replies to it are not read."
+        " Sent automatically; replies to this address are not read."
     )
     why = ""
     if recipient:
         why = (
-            f'<p style="margin:0 0 8px 0;">This message was sent to '
+            f'<p style="margin:0 0 6px 0;">Sent to '
             f'<span style="color:{_INK_2};">{escape(recipient)}</span>'
             f'{" " + reason if reason else ""}.</p>'
         )
+    stage = _stage(
+        clinic=clinic, eyebrow=eyebrow, heading=heading, lead=lead,
+        figure=figure, action=action, tone=tone,
+    )
     return f"""\
 <!doctype html>
 <html lang="en">
@@ -236,50 +363,25 @@ def _shell(
 {escape(preheader)}&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;
 </div>
 <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background-color:{_GROUND};">
-<tr><td align="center" style="padding:28px 12px 36px 12px;">
+<tr><td align="center" style="padding:32px 12px 40px 12px;">
 
 <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="600" style="width:100%;max-width:600px;">
 
   <!-- card -->
-  <tr><td style="background-color:{_SURFACE};border:1px solid {_LINE};border-radius:16px;overflow:hidden;">
+  <tr><td style="background-color:{_SURFACE};border:1px solid {_LINE};border-radius:14px;overflow:hidden;">
     <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
-
-      <!-- band: who is writing, what kind of message, the headline -->
-      <tr><td bgcolor="{band}" style="background-color:{band};padding:22px 32px 26px 32px;border-radius:15px 15px 0 0;">
-        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
-          <tr>
-            <td style="font-family:{_SANS};">
-              <table role="presentation" cellpadding="0" cellspacing="0" border="0">
-                <tr>
-                  <td width="30" style="width:30px;">
-                    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="30" style="width:30px;height:30px;background-color:#FFFFFF;border-radius:8px;">
-                      <tr><td align="center" valign="middle" style="height:30px;font-family:{_SERIF};font-size:16px;font-weight:700;color:{band};line-height:30px;">A</td></tr>
-                    </table>
-                  </td>
-                  <td style="padding-left:10px;font-family:{_SERIF};font-size:16px;font-weight:700;color:{band_ink};letter-spacing:-0.2px;">Astrale <span style="font-family:{_SANS};font-size:11px;font-weight:600;letter-spacing:1.4px;text-transform:uppercase;opacity:0.85;">Practice OS</span></td>
-                </tr>
-              </table>
-            </td>
-            <td align="right" style="font-family:{_SANS};">
-              <span style="display:inline-block;padding:4px 10px;border:1px solid rgba(255,255,255,0.55);border-radius:999px;font-size:10.5px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:{band_ink};">{eyebrow}</span>
-            </td>
-          </tr>
-        </table>
-        <h1 style="margin:22px 0 0 0;font-family:{_SERIF};font-size:26px;line-height:1.22;font-weight:700;color:{band_ink};letter-spacing:-0.4px;">{heading}</h1>
-      </td></tr>
-
-      <!-- body -->
-      <tr><td style="padding:30px 32px 30px 32px;">
+      {stage}
+      <tr><td style="padding:32px 36px 34px 36px;">
         {body}
       </td></tr>
     </table>
   </td></tr>
 
   <!-- footer -->
-  <tr><td style="padding:22px 12px 0 12px;font-family:{_SANS};font-size:12px;line-height:1.6;color:{_INK_3};text-align:center;">
+  <tr><td style="padding:24px 28px 0 28px;font-family:{_SANS};font-size:13px;line-height:1.55;color:{_INK_3};text-align:center;">
     {why}
     {help_line}
-    <p style="margin:0;">Astrale Practice OS &middot; patient management for independent clinics.{automatic}</p>
+    <p style="margin:0;">Astrale Practice OS, patient management for independent clinics.{automatic}</p>
   </td></tr>
 
 </table>
@@ -290,28 +392,16 @@ def _shell(
 </html>"""
 
 
-def _paragraph(text: str, *, top: int = 0) -> str:
+def _paragraph(text: str) -> str:
     return (
-        f'<p style="margin:{top}px 0 14px 0;font-family:{_SANS};font-size:15px;'
-        f'line-height:1.65;color:{_INK_2};">{text}</p>'
+        f'<p style="margin:0 0 14px 0;font-family:{_SANS};font-size:15px;'
+        f'line-height:1.6;color:{_INK_2};">{text}</p>'
     )
 
 
-def _button(url: str, label: str, *, tone: str = "accent") -> str:
-    """A bulletproof button: a table cell with a background, not a padded `<a>`.
-
-    Outlook ignores padding on an anchor and would render this as bare blue
-    text; a cell with `bgcolor` is the one shape every client agrees on. The
-    rounded corners are the part that degrades — Outlook squares them off,
-    which is a fair trade for a button that is always clickable.
-    """
-    colour = _TONES.get(tone, _TONES["accent"])[5]
-    return f"""\
-<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:22px 0 8px 0;">
-  <tr><td align="center" bgcolor="{colour}" style="background-color:{colour};border-radius:10px;">
-    <a href="{escape(url, quote=True)}" style="display:inline-block;padding:14px 28px;font-family:{_SANS};font-size:15px;font-weight:600;color:#FFFFFF;text-decoration:none;border-radius:10px;">{label} &rarr;</a>
-  </td></tr>
-</table>"""
+def _strong(text: str) -> str:
+    """Emphasis the app's way: the full ink and the 600 step, never 700."""
+    return f'<strong style="color:{_INK};font-weight:600;">{text}</strong>'
 
 
 def _fallback_link(url: str) -> str:
@@ -322,63 +412,79 @@ def _fallback_link(url: str) -> str:
     case this product hits in development.
     """
     return f"""\
-<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:14px 0 0 0;">
-  <tr><td style="background-color:{_SURFACE_2};border:1px dashed {_LINE_STRONG};border-radius:10px;padding:12px 14px;">
-    <div style="font-family:{_SANS};font-size:10.5px;font-weight:700;letter-spacing:0.8px;text-transform:uppercase;color:{_INK_3};padding-bottom:6px;">Button not working? Paste this into your browser</div>
-    <div style="font-family:{_MONO};font-size:12px;line-height:1.5;color:{_TONES['accent'][4]};word-break:break-all;">{escape(url)}</div>
-  </td></tr>
-</table>"""
+<p style="margin:14px 0 0 0;font-family:{_SANS};font-size:13px;line-height:1.55;color:{_INK_3};">
+  Button not working? Paste this link into your browser:<br>
+  <span style="color:{_ACCENT_TEXT};word-break:break-all;">{escape(url)}</span>
+</p>"""
 
 
 def _notice(text: str, *, tone: str = "accent") -> str:
-    """The one fact the recipient must not miss, set apart from the prose."""
-    _, _, soft, border, ink, _ = _TONES.get(tone, _TONES["accent"])
+    """The one fact the recipient must not miss: the app's callout, a soft
+    tinted line across the width with the tone's own ink."""
+    t = _tone(tone)
+    # A bare <strong> is 700 in every client; the app's emphasis stops at 600.
+    text = text.replace("<strong>", '<strong style="font-weight:600;">')
     return f"""\
-<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:20px 0 0 0;">
-  <tr><td style="background-color:{soft};border:1px solid {border};border-left:4px solid {ink};border-radius:10px;padding:13px 15px;font-family:{_SANS};font-size:13.5px;line-height:1.6;color:{ink};">
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:22px 0 0 0;">
+  <tr><td style="background-color:{t.soft};border:1px solid {t.border};border-radius:10px;padding:13px 16px;font-family:{_SANS};font-size:14px;line-height:1.55;color:{t.text};">
     {text}
   </td></tr>
 </table>"""
 
 
 def _steps(title: str, items: list[str]) -> str:
-    """A numbered "what happens next" — the recipient's path, not the product's."""
+    """A numbered "what happens next" — the recipient's path, not the product's.
+
+    The numbers hang on a hairline, so the three steps read as one path rather
+    than three bullets."""
+    t = _tone("accent")
+    last = len(items)
     rows = "".join(
-        f'<tr><td valign="top" width="30" style="width:30px;padding:0 0 12px 0;">'
-        f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="22" style="width:22px;height:22px;background-color:{_TONES["accent"][2]};border-radius:999px;">'
-        f'<tr><td align="center" valign="middle" style="height:22px;font-family:{_SANS};font-size:11.5px;font-weight:700;color:{_TONES["accent"][4]};line-height:22px;">{n}</td></tr></table></td>'
-        f'<td valign="top" style="padding:1px 0 12px 0;font-family:{_SANS};font-size:14px;line-height:1.55;color:{_INK_2};">{item}</td></tr>'
+        f'<tr><td valign="top" width="40" style="width:40px;">'
+        f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="26" style="width:26px;height:26px;background-color:{t.soft};border:1px solid {t.border};border-radius:999px;">'
+        f'<tr><td align="center" valign="middle" style="height:26px;font-family:{_SANS};font-size:12px;font-weight:600;color:{t.text};line-height:26px;">{n}</td></tr></table></td>'
+        f'<td valign="top" style="padding:3px 0 {"0" if n == last else "16px"} 0;font-family:{_SANS};font-size:15px;line-height:1.5;color:{_INK_2};">{item}</td></tr>'
         for n, item in enumerate(items, start=1)
     )
     return f"""\
-<div style="margin:26px 0 6px 0;font-family:{_SANS};font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:{_INK_3};">{escape(title)}</div>
+<div style="margin:28px 0 14px 0;font-family:{_SANS};font-size:16px;line-height:1.4;font-weight:600;color:{_INK};letter-spacing:-0.1px;">{escape(title)}</div>
 <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">{rows}</table>"""
 
 
 def _footnote(text: str) -> str:
     return f"""\
-<div style="margin:24px 0 0 0;padding-top:18px;border-top:1px solid {_LINE_STRONG};font-family:{_SANS};font-size:12.5px;line-height:1.65;color:{_INK_3};">
+<div style="margin:28px 0 0 0;padding-top:18px;border-top:1px solid {_LINE};font-family:{_SANS};font-size:13px;line-height:1.55;color:{_INK_3};">
   {text}
 </div>"""
 
 
-def _facts(rows: list[tuple[str, str]], *, highlight: int | None = None) -> str:
-    """A label/value panel — the details somebody would otherwise have to ask
-    for. `highlight` sets one row's value in bold, for the figure that matters."""
+def _quote(text: str) -> str:
+    """Words somebody typed, set apart as theirs and kept as they wrote them."""
+    return f"""\
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:18px 0 0 0;">
+  <tr><td style="background-color:{_SURFACE_2};border:1px solid {_LINE};border-radius:10px;padding:14px 16px;font-family:{_SANS};font-size:15px;line-height:1.6;color:{_INK};white-space:pre-wrap;">{text}</td></tr>
+</table>"""
+
+
+def _facts(rows: list[tuple[str, str]], *, title: str = "") -> str:
+    """A label/value list — the details somebody would otherwise have to ask
+    for, laid out like a row of the app's data lists: the label quiet on the
+    left, the value in full ink on the right, hairlines between."""
+    head = (
+        f'<div style="margin:24px 0 4px 0;font-family:{_SANS};font-size:16px;line-height:1.4;'
+        f'font-weight:600;color:{_INK};letter-spacing:-0.1px;">{escape(title)}</div>'
+        if title else ""
+    )
+    last = len(rows) - 1
+    rule = f"border-bottom:1px solid {_ROW_LINE};"
     cells = "".join(
-        f'<tr><td style="padding:8px 16px 8px 0;font-family:{_SANS};font-size:11px;font-weight:700;'
-        f'letter-spacing:0.6px;text-transform:uppercase;color:{_INK_3};white-space:nowrap;vertical-align:top;'
-        f'{"border-top:1px solid " + _LINE + ";" if i else ""}">{escape(label)}</td>'
-        f'<td style="padding:8px 0;font-family:{_SANS};font-size:14px;line-height:1.5;color:{_INK};'
-        f'{"font-weight:700;font-size:16px;" if i == highlight else ""}'
-        f'{"border-top:1px solid " + _LINE + ";" if i else ""}">{escape(value)}</td></tr>'
+        f'<tr><td style="padding:11px 16px 11px 0;font-family:{_SANS};font-size:14px;line-height:1.5;'
+        f'color:{_INK_3};white-space:nowrap;vertical-align:top;{"" if i == last else rule}">{escape(label)}</td>'
+        f'<td align="right" style="padding:11px 0;font-family:{_SANS};font-size:14px;line-height:1.5;color:{_INK};'
+        f'font-weight:500;font-variant-numeric:tabular-nums;{"" if i == last else rule}">{escape(value)}</td></tr>'
         for i, (label, value) in enumerate(rows)
     )
-    return f"""<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:8px 0 6px 0;background-color:{_SURFACE_2};border:1px solid {_LINE};border-radius:10px;">
-  <tr><td style="padding:6px 16px;">
-    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">{cells}</table>
-  </td></tr>
-</table>"""
+    return f"""{head}<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:0 0 4px 0;">{cells}</table>"""
 
 
 # --- the messages this application sends -------------------------------------
@@ -402,19 +508,20 @@ def invitation(*, to: str, name: str, clinic: str, url: str, expires_in_days: in
 
     html = _shell(
         preheader=f"Choose a password to finish setting up your {clinic} account.",
+        clinic=safe_clinic,
         eyebrow="Invitation",
         heading=f"You're invited to {safe_clinic}",
+        lead="Choose a password to finish setting up your account.",
+        action=(url, "Choose your password"),
         recipient=to,
         reason=f"because an administrator at {safe_clinic} created an account for this address",
         body=(
             _paragraph(f"Hello {safe_name},")
             + _paragraph(
-                f"An account has been created for you on <strong style=\"color:{_INK};\">{safe_clinic}</strong>. "
+                f"An account has been created for you on {_strong(safe_clinic)}. "
                 "It has no password yet — not a temporary one, and not one anybody has handed you. "
                 "The password you choose is the first this account will ever have."
             )
-            + _button(url, "Choose your password")
-            + _fallback_link(url)
             + _steps("What happens next", [
                 "Open the link and choose a password of at least 12 characters.",
                 f"You are signed straight in to {safe_clinic}.",
@@ -424,6 +531,7 @@ def invitation(*, to: str, name: str, clinic: str, url: str, expires_in_days: in
                 f"This link works <strong>once</strong> and expires in <strong>{days}</strong>. "
                 "If it has already expired, ask an administrator to send you another."
             )
+            + _fallback_link(url)
             + _footnote(
                 "Not expecting this? You can safely ignore it. The account cannot be signed in "
                 "to until someone sets a password, so nothing happens if you do nothing."
@@ -450,23 +558,25 @@ def password_reset(*, to: str, name: str, clinic: str, url: str, expires_in_hour
 
     html = _shell(
         preheader=f"Choose a new password for your {clinic} account.",
+        clinic=safe_clinic,
         eyebrow="Password reset",
-        heading=f"Reset your {safe_clinic} password",
+        heading="Reset your password",
+        lead=f"Someone asked to reset the password for your {safe_clinic} account. "
+             "If that was you, choose a new one.",
+        action=(url, "Choose a new password"),
         recipient=to,
         reason="because a password reset was requested for it",
         body=(
             _paragraph(f"Hello {safe_name},")
             + _paragraph(
-                f"Someone asked to reset the password for your "
-                f"<strong style=\"color:{_INK};\">{safe_clinic}</strong> account. "
-                "If that was you, choose a new one below."
+                f"The button above opens a page where you can set a new password for "
+                f"{_strong(safe_clinic)}. Choose one of at least 12 characters."
             )
-            + _button(url, "Choose a new password")
-            + _fallback_link(url)
             + _notice(
                 f"This link works <strong>once</strong> and expires in <strong>{hours}</strong>. "
                 "Using it signs this account out everywhere, on every device."
             )
+            + _fallback_link(url)
             + _footnote(
                 "Wasn't you? Nothing has changed and you can ignore this message — your "
                 "current password still works. If you get these unexpectedly, tell an "
@@ -520,22 +630,17 @@ def support_request(
         ]
     ).rstrip() + "\n"
 
-    body = _paragraph(f"<strong style=\"color:{_INK};\">{escape(clinic)}</strong> {escape(line)}") + _facts(rows)
+    body = _facts(rows)
     if message:
-        body += _paragraph(
-            f'<span style="display:block;padding:12px 14px;border-left:3px solid {_LINE_STRONG};'
-            f'white-space:pre-wrap;">{escape(message)}</span>',
-            top=16,
-        )
-    body += _button(console_url, "Open in the console")
+        body += _quote(escape(message))
     if reply_to:
         body += _footnote("Reply to this email to answer the person who asked.")
 
-    eyebrow = {"walkthrough": "Walkthrough request"}.get(
-        kind, "Support request"
-    )
+    eyebrow = {"walkthrough": "Walkthrough request"}.get(kind, "Support request")
     html = _shell(
-        preheader=subject, eyebrow=eyebrow, heading=escape(subject), body=body,
+        preheader=subject, clinic=escape(clinic), eyebrow=eyebrow, heading=escape(subject),
+        lead=f"{escape(requested_by)} at {escape(clinic)} {escape(line)}",
+        action=(console_url, "Open in the console"), body=body,
         recipient=to, reason="because it is the platform's support address",
         to_the_desk=True,
     )
@@ -588,6 +693,17 @@ _RENT_COPY: dict[str, tuple[str, str, str, str, str | None]] = {
     ),
 }
 
+#: stage -> the line under the amount on the stage
+_RENT_CAPTION = {
+    "issued": "Due on {due}",
+    "due_soon": "Due on {due}",
+    "due": "Due today",
+    "overdue": "Was due on {due}",
+    "final": "Was due on {due}; on hold from {hold}",
+    "blocked": "Outstanding since {due}",
+    "paid": "Paid in full for {period}",
+}
+
 
 def rent_notice(
     *,
@@ -624,13 +740,12 @@ def rent_notice(
 
     safe = {k: escape(v) for k, v in fill.items()}
     body = _paragraph(f"Hello {escape(name)},") + _paragraph(opening_t.format(**safe))
-    body += _facts(rows, highlight=2)
-    if lines:
-        body += _facts(lines)
     if notice_t:
         body += _notice(notice_t.format(**safe), tone="accent" if tone == "ok" else tone)
+    body += _facts(rows, title="Bill details")
+    if lines:
+        body += _facts(lines, title="Charges")
     if stage != "paid":
-        body += _button(url, "View the bill", tone=tone if tone != "ok" else "accent")
         body += _footnote(
             f"Already paid? Reply to {escape(settings.support_email)} with the payment reference "
             "and we will match it to this bill."
@@ -651,7 +766,9 @@ def rent_notice(
     ).rstrip() + "\n"
 
     html = _shell(
-        preheader=f"{heading} — {amount}", eyebrow=eyebrow, heading=escape(heading), body=body,
+        preheader=f"{heading} — {amount}", clinic=safe["clinic"], eyebrow=eyebrow,
+        heading=escape(heading), figure=(amount, _RENT_CAPTION[stage].format(**safe)),
+        action=(url, "View the bill") if stage != "paid" else None, body=body,
         recipient=to, reason=f"because you are a practice admin at {escape(clinic)}", tone=tone,
     )
     return Email(to=to, subject=subject, text=text, html=html)

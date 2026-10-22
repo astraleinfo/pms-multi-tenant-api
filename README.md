@@ -595,7 +595,7 @@ yourself:
 
 ```bash
 make worker      # -E, which is what feeds the monitor
-make beat        # the sweep
+make beat        # the billing cycle, when RENT_BILLING_ENABLED is on
 make flower      # 127.0.0.1:5555, same loopback treatment as the database
 ```
 
@@ -759,7 +759,7 @@ patient message that ran out of attempts. The application only ever logs — `lo
 — and a handler on the root logger (and on `uvicorn.error`, which does not reach it) forwards
 those lines to the service `ERROR_REPORTER` selects. One failure logged twice is one report. No
 module outside `app/core/error_reporting/` names a vendor. Failures the system recovers from on
-its own — a broker hiccup the sweep covers, a carrier refusing one number — stay at `WARNING`.
+its own or by a retry — a job the broker never got, a carrier refusing one number — stay at `WARNING`.
 
 | `ERROR_REPORTER` | Where reports go | Needs |
 |---|---|---|

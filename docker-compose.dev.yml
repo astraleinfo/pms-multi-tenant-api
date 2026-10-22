@@ -114,7 +114,7 @@ services:
     healthcheck:
       disable: true
 
-  # Exactly one of these, ever: it schedules the sweep.
+  # Exactly one of these, ever: it schedules the billing cycle (RENT_BILLING_ENABLED).
   beat:
     build: .
     depends_on:

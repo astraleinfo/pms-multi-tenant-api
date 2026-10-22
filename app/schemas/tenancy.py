@@ -376,14 +376,10 @@ class TenantCreatedOut(ApiModel):
     tenant: TenantOut
     admin_user_id: str
     admin_email: str
-    #: Whether the invitation actually left the building. False means the
-    #: clinic exists but nobody can get into it yet, and the console should say
-    #: so rather than reporting a clean success.
-    invitation_sent: bool = True
-    #: The link itself, and only when the mail transport is `console` — that is
-    #: development, where there is no inbox to check. Never populated once a
-    #: real transport is configured.
-    invitation_url: str | None = None
+    #: The invitation email is the worker's, so it is `queued` here. Whether it
+    #: left is the account's `link_email_status` on the clinic's staff list,
+    #: which the console reads until it says `sent` or `failed`.
+    invitation_status: str = "queued"
 
 
 class TenantPatchIn(InputModel):

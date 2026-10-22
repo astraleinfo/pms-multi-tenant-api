@@ -18,10 +18,20 @@ from app.models.enums import JobStatus
 from app.schemas.common import ApiModel
 
 
+class JobArgumentOut(ApiModel):
+    """One argument of a job, the way a person would say it: "Clinic —
+    Northgate Dental Studio" rather than `'tenant_id': '01a1…'`."""
+
+    label: str
+    value: str
+
+
 class JobOut(ApiModel):
     id: str
     #: the registered task name, e.g. `pms.support.deliver`
     name: str
+    #: what the job is, in words — "Password reset email", "Spreadsheet import"
+    label: str = ""
     #: the bucket the console counts this in
     status: JobStatus
     #: Celery's own state, kept because the six buckets fold some of them
@@ -33,6 +43,9 @@ class JobOut(ApiModel):
     #: reprs the worker was handed rather than structured values.
     args: str = ""
     kwargs: str = ""
+    #: the same call, read and labelled — clinics and accounts by name where
+    #: they can be found. What the screen shows; the reprs are what was sent.
+    arguments: list[JobArgumentOut] = []
     received_at: str | None = None
     started_at: str | None = None
     finished_at: str | None = None
@@ -100,6 +113,8 @@ class JobsOut(ApiModel):
     workers: list[WorkerOut] = []
     #: every task name and worker seen in the window — the filter dropdowns
     task_names: list[str] = []
+    #: each of `task_names` in words, for the dropdown
+    task_labels: dict[str, str] = {}
     worker_names: list[str] = []
     items: list[JobOut] = []
     total: int = 0

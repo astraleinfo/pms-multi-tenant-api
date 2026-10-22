@@ -536,6 +536,26 @@ async def inventory_import_job(
     return ImportJobOut.of(job, ctx.tz)
 
 
+@inventory_router.post("/import/jobs/{job_id}/retry", response_model=ImportJobOut)
+async def retry_inventory_import(
+    job_id: str,
+    tasks: BackgroundTasks,
+    ctx: TenantContext = Depends(require_permission(Permission.INVENTORY_WRITE)),
+) -> ImportJobOut:
+    """Hand a stuck import to the worker again — one still queued well after
+    its upload, whose hand-off to the broker was lost. `409` for any other."""
+    job = await import_jobs.get_job(
+        ctx.session, ctx.tenant_id, parse_uuid(job_id, what="import"), inventory_io.KIND
+    )
+    if job is None:
+        raise NotFound("No such import.")
+    await import_jobs.retry(ctx.session, job)
+    from app.worker.tasks import enqueue_import
+
+    tasks.add_task(enqueue_import, ctx.tenant_id, job.id)
+    return ImportJobOut.of(job, ctx.tz)
+
+
 @inventory_router.get("/export")
 async def inventory_export(
     ctx: TenantContext = Depends(require_permission(Permission.INVENTORY_READ)),

@@ -11,13 +11,11 @@ Two halves, deliberately apart:
     was killed mid-send, a deploy restarted it) cannot email the desk twice
     for one that already went out.
 
-`due` is the sweep's half. Anything still `queued` whose time has come is
-handed back to the queue, which is what makes the broker a delivery mechanism
-rather than the record: wipe Redis and nothing is lost, only delayed.
-
-Like the message worker, nothing here reads across clinics in one query. The
-sweep walks the tenant registry and binds each clinic in turn, so row-level
-security and the ORM guard apply to the worker exactly as they do to a request.
+Nothing re-sends on its own. One attempt per hand-off: a send that fails marks
+the request `failed`, and a request whose hand-off to the broker was lost stays
+`queued`. Either way it shows as `retryable`, and the desk sends it again from
+the console with `retry`. The row is the record, so a wiped broker loses
+nothing — it only waits for someone to press the button.
 """
 
 from __future__ import annotations
@@ -30,6 +28,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import settings
+from app.core.errors import Conflict
 from app.db.session import set_tenant
 from app.models.enums import SupportRequestKind, SupportRequestStatus
 from app.models.identity import User
@@ -114,10 +113,35 @@ async def list_for_tenant(
 # --- the worker half ----------------------------------------------------------
 
 
-def backoff(attempts: int) -> datetime:
-    """Exponential, capped at an hour. `attempts` counts the one that just failed."""
-    seconds = min(settings.support_request_retry_base_seconds * (2 ** max(0, attempts - 1)), 3600)
-    return datetime.now(timezone.utc) + timedelta(seconds=seconds)
+#: How long a request may sit `queued` after its hand-off before it counts as
+#: lost. Longer than the enqueue's countdown, so it never races a hand-off that
+#: is still on its way.
+STUCK_AFTER = timedelta(seconds=30)
+
+
+def retryable(row: SupportRequest) -> bool:
+    """Failed, or queued long enough that its hand-off must have been lost."""
+    if row.status == SupportRequestStatus.FAILED:
+        return True
+    if row.status != SupportRequestStatus.QUEUED:
+        return False
+    cutoff = datetime.now(timezone.utc) - STUCK_AFTER
+    # `created_at` first: a request this new is never stuck, and the check then
+    # never reaches `updated_at`, which a fresh insert may not have loaded.
+    return row.created_at <= cutoff and row.updated_at <= cutoff
+
+
+async def retry(session: AsyncSession, row: SupportRequest) -> SupportRequest:
+    """Put a failed or stuck request back in line. The caller hands it to the
+    worker once this transaction has committed."""
+    if not retryable(row):
+        raise Conflict("This request is not stuck — it is on its way or already sent.")
+    row.status = SupportRequestStatus.QUEUED
+    # Set here rather than left to `onupdate`, so the response can read it
+    # without another round trip; it is also what restarts the stuck clock.
+    row.updated_at = datetime.now(timezone.utc)
+    await session.flush()
+    return row
 
 
 def _console_url(tenant_id: uuid.UUID) -> str:
@@ -145,15 +169,14 @@ async def deliver(
 ) -> str:
     """Email the desk about one request, once.
 
-    Returns what happened: `sent`, `retry`, `failed`, `skipped` (no longer
-    queued, or not yet due), or `missing` (not visible — the creating
-    transaction has not committed, another worker holds the lock, or it is
-    gone). The caller decides whether `missing` is worth another look; the
-    sweep will find the row either way.
+    Returns what happened: `sent`, `failed`, `skipped` (no longer queued), or
+    `missing` (not visible — the creating transaction has not committed,
+    another worker holds the lock, or it is gone). The caller decides whether
+    `missing` is worth another look.
 
     The row is locked for the length of the send. If the worker is killed
     mid-send the transaction dies with it, the lock is released, the row is
-    still `queued`, and the redelivered job (or the sweep) sends it. That is
+    still `queued`, and the redelivered job sends it. That is
     at-least-once: a kill after the SMTP handover but before the commit can
     send the desk a duplicate, which is the right side to err on.
     """
@@ -171,30 +194,23 @@ async def deliver(
                 return "missing"
             if row.status != SupportRequestStatus.QUEUED:
                 return "skipped"
-            if row.next_attempt_at > datetime.now(timezone.utc):
-                return "skipped"
 
             email = await _email_for(session, row)
             row.attempts += 1
             try:
                 await mailer.send(email)
             except mailer.MailError as exc:
+                # No automatic retry: the console shows it as failed and the
+                # desk sends it again from there.
                 row.last_error = str(exc)[:2000]
-                if row.attempts >= settings.support_request_max_attempts:
-                    row.status = SupportRequestStatus.FAILED
-                    outcome = "failed"
-                    log.error("support request %s failed for good: %s", row.id, exc)
-                else:
-                    row.next_attempt_at = backoff(row.attempts)
-                    outcome = "retry"
-                    log.warning("support request %s deferred (attempt %s): %s", row.id, row.attempts, exc)
-                if outcome == "failed":
-                    await audit.record(
-                        session, action="support.request_email", tenant_id=tenant_id,
-                        entity="support_request", entity_id=str(row.id), outcome="failed",
-                        meta={"attempts": row.attempts, "error": row.last_error[:300]},
-                    )
-                return outcome
+                row.status = SupportRequestStatus.FAILED
+                log.error("support request %s failed (attempt %s): %s", row.id, row.attempts, exc)
+                await audit.record(
+                    session, action="support.request_email", tenant_id=tenant_id,
+                    entity="support_request", entity_id=str(row.id), outcome="failed",
+                    meta={"attempts": row.attempts, "error": row.last_error[:300]},
+                )
+                return "failed"
 
             row.status = SupportRequestStatus.SENT
             row.sent_at = datetime.now(timezone.utc)
@@ -206,33 +222,3 @@ async def deliver(
             )
             log.info("support request %s emailed to %s", row.id, email.to)
             return "sent"
-
-
-async def due(
-    factory: async_sessionmaker[AsyncSession], *, limit: int = 100
-) -> list[tuple[uuid.UUID, uuid.UUID]]:
-    """Every `(tenant_id, request_id)` still queued and due, clinic by clinic."""
-    now = datetime.now(timezone.utc)
-    async with factory() as session:
-        tenant_ids = list((await session.execute(select(Tenant.id))).scalars())
-
-    found: list[tuple[uuid.UUID, uuid.UUID]] = []
-    for tenant_id in tenant_ids:
-        async with factory() as session:
-            async with session.begin():
-                await set_tenant(session, tenant_id)
-                ids = (
-                    await session.execute(
-                        select(SupportRequest.id)
-                        .where(
-                            SupportRequest.status == SupportRequestStatus.QUEUED,
-                            SupportRequest.next_attempt_at <= now,
-                        )
-                        .order_by(SupportRequest.next_attempt_at)
-                        .limit(limit)
-                    )
-                ).scalars()
-                found.extend((tenant_id, i) for i in ids)
-        if len(found) >= limit:
-            break
-    return found[:limit]

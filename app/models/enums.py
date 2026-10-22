@@ -57,6 +57,16 @@ class AccountStatus(StrEnum):
     LOCKED = "locked"
 
 
+class LinkEmailStatus(StrEnum):
+    """Where an account's newest invitation or reset email is. The worker mints
+    the link and sends it; `queued` until it has tried, then `sent` or `failed`.
+    A failed one, or one queued long after its hand-off, is sent again by hand."""
+
+    QUEUED = "queued"
+    SENT = "sent"
+    FAILED = "failed"
+
+
 class PlatformRole(StrEnum):
     """What a platform account may do in the console.
 
@@ -452,7 +462,7 @@ class ImportJobStatus(StrEnum):
 
 class SupportRequestStatus(StrEnum):
     """Whether the desk has been told. `queued` is the only state the worker
-    picks up; `failed` is parked after the last attempt, and the request itself
+    picks up; `failed` waits for the desk to retry it, and the request itself
     still stands — the row is the ask, the email is only how the desk hears."""
 
     QUEUED = "queued"

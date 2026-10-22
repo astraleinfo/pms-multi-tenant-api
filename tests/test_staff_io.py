@@ -13,7 +13,8 @@ import uuid
 import pytest
 from openpyxl import Workbook, load_workbook
 
-from app.db.session import session_factory
+from app.db.session import session_factory, tenant_session
+from app.models.imports import ImportJob
 from app.services import import_jobs, mailer
 from app.worker import tasks
 
@@ -78,7 +79,7 @@ async def test_the_sample_sheet_is_the_staff_sheet(northgate):
     assert headers == ["Full name *", "Email *", "Role *", "Speciality"]
 
 
-async def test_people_are_opened_invited_and_emailed_in_the_background(northgate, outbox):
+async def test_people_are_opened_invited_and_emailed_in_the_background(northgate, outbox, link_emails):
     tag = _tag()
     content = _sheet(await _headers(northgate), [
         [f"Dr Team {tag}", f"dr.{tag}@example.com", "doctor", "Periodontics"],
@@ -87,6 +88,11 @@ async def test_people_are_opened_invited_and_emailed_in_the_background(northgate
     job = await _import(northgate, content)
     assert job["status"] == "done", job
     assert (job["report"]["created"], job["report"]["invited"]) == (2, 2)
+
+    # The invitations were queued from inside the import's transaction; each
+    # is its own email job, run once the accounts exist.
+    assert not outbox
+    assert await link_emails.deliver() == ["sent", "sent"]
 
     staff = await _staff(northgate)
     assert staff[f"dr.{tag}@example.com"]["status"] == "invited"
@@ -140,6 +146,35 @@ async def test_a_staff_import_job_is_not_reachable_as_a_stock_one(northgate):
     assert (await northgate.get(f"/v1/inventory/import/jobs/{job_id}")).status_code == 404
     assert (await northgate.get("/v1/users/import/jobs/latest")).json()["id"] == job_id
     await import_jobs.run(session_factory, uuid.UUID(northgate.tenant_id), uuid.UUID(job_id))
+
+
+async def test_a_lost_hand_off_is_retried_by_hand(northgate, queued, outbox):
+    """No sweep: a job the broker never got stays queued, turns retryable once it
+    has sat a while, and the person hands it over again."""
+    tag = _tag()
+    content = _sheet(await _headers(northgate), [[f"Lost {tag}", f"lost.{tag}@example.com", "doctor", None]])
+    job = (await northgate.post("/v1/users/import", files={"file": ("staff.xlsx", content, XLSX)})).json()
+    assert job["status"] == "queued" and job["retryable"] is False
+    retry_url = f"/v1/users/import/jobs/{job['id']}/retry"
+    # Too soon: its hand-off may still be on the way.
+    assert (await northgate.post(retry_url)).status_code == 409
+
+    tenant_id, job_id = uuid.UUID(northgate.tenant_id), uuid.UUID(job["id"])
+    async with tenant_session(tenant_id) as session:
+        row = await session.get(ImportJob, job_id)
+        row.created_at = row.updated_at = row.created_at - import_jobs.STUCK_AFTER * 2
+    assert (await northgate.get(f"/v1/users/import/jobs/{job['id']}")).json()["retryable"] is True
+    # A staff job is not reachable through the stock route, retry included.
+    assert (await northgate.post(f"/v1/inventory/import/jobs/{job['id']}/retry")).status_code == 404
+
+    queued.clear()
+    retried = await northgate.post(retry_url)
+    assert retried.status_code == 200, retried.text
+    assert retried.json()["retryable"] is False
+    assert queued == [(tenant_id, job_id)]
+
+    await import_jobs.run(session_factory, tenant_id, job_id)
+    assert (await northgate.post(retry_url)).status_code == 409
 
 
 async def test_only_an_admin_can_import_or_export_staff(northgate_doctor):

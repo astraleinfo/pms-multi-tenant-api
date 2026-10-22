@@ -6,6 +6,7 @@ from pydantic import Field, model_validator
 
 from app.models.enums import SupportRequestKind, SupportRequestStatus
 from app.schemas.common import ApiModel, InputModel, stamp
+from app.services.support import retryable
 
 
 class SupportRequestIn(InputModel):
@@ -30,6 +31,8 @@ class SupportRequestOut(ApiModel):
     status: SupportRequestStatus
     created_at: str | None
     sent_at: str | None
+    #: failed, or still queued well after its hand-off — the desk can send it again
+    retryable: bool = False
 
     @classmethod
     def of(cls, r, tz: str | None = None) -> SupportRequestOut:
@@ -37,4 +40,5 @@ class SupportRequestOut(ApiModel):
             id=str(r.id), tenant_id=str(r.tenant_id), kind=r.kind,
             message=r.message, requested_by=r.requested_by_label, status=r.status,
             created_at=stamp(r.created_at, tz), sent_at=stamp(r.sent_at, tz),
+            retryable=retryable(r),
         )

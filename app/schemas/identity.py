@@ -8,8 +8,9 @@ from __future__ import annotations
 
 from pydantic import EmailStr, Field
 
-from app.models.enums import AccountStatus, PlatformRole
+from app.models.enums import AccountStatus, LinkEmailStatus, PlatformRole
 from app.schemas.common import ApiModel, InputModel, day, money
+from app.services.invitations import retryable
 
 
 class UserPreferences(ApiModel):
@@ -54,6 +55,11 @@ class UserOut(ApiModel):
     must_change_password: bool = False
     #: An account waiting on an invitation link — it has no password at all.
     invitation_pending: bool = False
+    #: The newest invitation or reset email: `queued`, `sent`, `failed`, or
+    #: null when none was asked for. The worker sends it after the request.
+    link_email_status: LinkEmailStatus | None = None
+    #: failed, or still queued well after its hand-off — offer Resend
+    link_email_retryable: bool = False
 
     @classmethod
     def of(cls, u, tz: str | None = None) -> UserOut:
@@ -65,6 +71,7 @@ class UserOut(ApiModel):
             failed_attempts=u.failed_attempts, last_sign_in=day(u.last_sign_in, tz),
             must_change_password=u.must_change_password,
             invitation_pending=u.status == AccountStatus.INVITED and u.password_hash is None,
+            link_email_status=u.link_email_status, link_email_retryable=retryable(u),
         )
 
 

@@ -19,17 +19,24 @@ Two things shape the whole module:
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import logging
+import uuid
 from datetime import datetime, timezone
 from time import monotonic
 from typing import Any
 
 import httpx
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.db.session import set_tenant
 from app.models.enums import CELERY_STATE_STATUS, JobStatus
-from app.schemas.jobs import JobOut, JobsOut, JobSummaryOut, WorkerOut
+from app.models.identity import User
+from app.models.tenancy import Tenant
+from app.schemas.jobs import JobArgumentOut, JobOut, JobsOut, JobSummaryOut, WorkerOut
 
 log = logging.getLogger("pms.jobs")
 
@@ -120,6 +127,142 @@ def _text(value: Any) -> str:
     return value if isinstance(value, str) else ("" if value is None else str(value))
 
 
+# --- what a job is, in words ------------------------------------------------------------
+
+#: Every task the platform has registered, and the two sweeps it used to run —
+#: they stay in the monitor's history for a while after a deploy.
+TASK_LABELS = {
+    "pms.invitations.deliver": "Invitation or password reset email",
+    "pms.support.deliver": "Support request email",
+    "pms.imports.run": "Spreadsheet import",
+    "pms.inventory.import": "Inventory import",
+    "pms.rent.cycle": "Monthly billing cycle",
+    "pms.support.sweep": "Support request sweep (retired)",
+    "pms.imports.sweep": "Import sweep (retired)",
+}
+
+#: The positional order of each task's arguments, for a job sent before they
+#: went by name.
+_POSITIONAL = {
+    "pms.invitations.deliver": ("tenant_id", "user_id", "purpose", "issued_by_label", "ip", "user_agent"),
+    "pms.support.deliver": ("tenant_id", "request_id"),
+    "pms.imports.run": ("tenant_id", "job_id"),
+    "pms.inventory.import": ("tenant_id", "job_id"),
+}
+
+#: Argument names in the order the screen lists them, with their labels.
+#: Anything not here is shown under its own name; the requester's address and
+#: browser are never shown.
+_ARGUMENT_LABELS = {
+    "purpose": "Email",
+    "tenant_id": "Clinic",
+    "user_id": "Account",
+    "request_id": "Support request",
+    "job_id": "Import",
+    "requested_by": "Requested by",
+    "issued_by_label": "Requested by",
+}
+_HIDDEN = {"ip", "user_agent"}
+_PURPOSES = {"invite": "Invitation", "reset": "Password reset", "reset_password": "Password reset"}
+
+
+def _literal(text: str) -> Any:
+    """A repr Celery put on the wire, read back. Never evaluated as code."""
+    try:
+        return ast.literal_eval(text) if text.strip() else None
+    except (ValueError, SyntaxError, MemoryError, RecursionError):
+        return None
+
+
+def _call(job: JobOut) -> dict[str, Any]:
+    """The job's arguments by name, whichever way it was sent."""
+    call: dict[str, Any] = {}
+    positional = _literal(job.args)
+    if isinstance(positional, (tuple, list)):
+        names = _POSITIONAL.get(job.name, ())
+        for i, value in enumerate(positional):
+            call[names[i] if i < len(names) else f"argument {i + 1}"] = value
+    named = _literal(job.kwargs)
+    if isinstance(named, dict):
+        call.update({str(k): v for k, v in named.items()})
+    return call
+
+
+def _label(name: str, call: dict[str, Any]) -> str:
+    if name == "pms.invitations.deliver" and call.get("purpose") in _PURPOSES:
+        return f"{_PURPOSES[call['purpose']]} email"
+    return TASK_LABELS.get(name, name)
+
+
+def _uuid(value: Any) -> uuid.UUID | None:
+    try:
+        return uuid.UUID(str(value))
+    except ValueError:
+        return None
+
+
+class _Names:
+    """Clinics and accounts by id, for the jobs on one page."""
+
+    def __init__(self) -> None:
+        self.clinics: dict[uuid.UUID, str] = {}
+        self.accounts: dict[uuid.UUID, str] = {}
+
+    @classmethod
+    async def read(cls, session: AsyncSession | None, calls: list[dict[str, Any]]) -> _Names:
+        names = cls()
+        if session is None:
+            return names
+        clinic_ids = {t for c in calls if (t := _uuid(c.get("tenant_id")))}
+        if clinic_ids:
+            rows = await session.execute(select(Tenant.id, Tenant.name).where(Tenant.id.in_(clinic_ids)))
+            names.clinics = {i: n for i, n in rows}
+        # An account is the clinic's row, so it is read with that clinic bound —
+        # the console gets no way around row-level security here either.
+        wanted: dict[uuid.UUID, set[uuid.UUID]] = {}
+        for c in calls:
+            tenant, account = _uuid(c.get("tenant_id")), _uuid(c.get("user_id"))
+            if tenant in names.clinics and account:
+                wanted.setdefault(tenant, set()).add(account)
+        for tenant, accounts in wanted.items():
+            await set_tenant(session, tenant)
+            rows = await session.execute(select(User.id, User.name, User.email).where(User.id.in_(accounts)))
+            names.accounts.update({i: f"{n} <{e}>" for i, n, e in rows})
+        return names
+
+    def value(self, key: str, value: Any) -> str:
+        found = _uuid(value)
+        if key == "tenant_id" and found:
+            return self.clinics.get(found, str(value))
+        if key == "user_id" and found:
+            return self.accounts.get(found, str(value))
+        if key == "purpose":
+            return _PURPOSES.get(str(value), str(value))
+        return str(value)
+
+
+def _arguments(call: dict[str, Any], names: _Names) -> list[JobArgumentOut]:
+    order = list(_ARGUMENT_LABELS)
+    shown: list[JobArgumentOut] = []
+    for key in sorted(call, key=lambda k: order.index(k) if k in order else len(order)):
+        value = call[key]
+        if key in _HIDDEN or value in ("", None):
+            continue
+        label = _ARGUMENT_LABELS.get(key, key.replace("_", " ").capitalize())
+        if any(a.label == label for a in shown):
+            continue  # `requested_by` and `issued_by_label` are the same fact
+        shown.append(JobArgumentOut(label=label, value=names.value(key, value)))
+    return shown
+
+
+async def _describe(session: AsyncSession | None, jobs: list[JobOut]) -> None:
+    """Fill in each job's arguments, clinics and accounts by name."""
+    calls = [_call(job) for job in jobs]
+    names = await _Names.read(session, calls)
+    for job, call in zip(jobs, calls, strict=True):
+        job.arguments = _arguments(call, names)
+
+
 def _job(task_id: str, raw: dict[str, Any], *, detail: bool = False) -> JobOut:
     state = _text(raw.get("state")) or "PENDING"
     status = CELERY_STATE_STATUS.get(state, JobStatus.PENDING)
@@ -134,15 +277,17 @@ def _job(task_id: str, raw: dict[str, Any], *, detail: bool = False) -> JobOut:
         # which is the number the "how long has this been going" column wants.
         runtime = round(datetime.now(tz=timezone.utc).timestamp() - float(started), 3)
 
-    return JobOut(
+    name = _text(raw.get("name")) or "unknown"
+    args, kwargs = _text(raw.get("args")), _text(raw.get("kwargs"))
+    job = JobOut(
         id=task_id,
-        name=_text(raw.get("name")) or "unknown",
+        name=name,
         status=status,
         state=state,
         worker=_text(raw.get("worker")) or None,
         queue=_text(raw.get("routing_key")) or None,
-        args=_text(raw.get("args")),
-        kwargs=_text(raw.get("kwargs")),
+        args=args,
+        kwargs=kwargs,
         received_at=_moment(raw.get("received")) or _moment(raw.get("sent")),
         started_at=_moment(started),
         finished_at=_moment(finished),
@@ -154,6 +299,8 @@ def _job(task_id: str, raw: dict[str, Any], *, detail: bool = False) -> JobOut:
         result=(_text(raw.get("result")).strip() or None) if detail else None,
         eta=_moment(raw.get("eta")) or (_text(raw.get("eta")) or None),
     )
+    job.label = _label(name, _call(job))
+    return job
 
 
 def _due_an_inspection() -> bool:
@@ -304,7 +451,7 @@ def _matches(
     if search:
         needle = search.casefold()
         haystack = " ".join(
-            filter(None, [job.name, job.id, job.args, job.kwargs, job.worker, job.exception])
+            filter(None, [job.label, job.name, job.id, job.args, job.kwargs, job.worker, job.exception])
         )
         if needle not in haystack.casefold():
             return False
@@ -332,6 +479,7 @@ async def overview(
     search: str = "",
     limit: int = 25,
     offset: int = 0,
+    session: AsyncSession | None = None,
 ) -> JobsOut:
     """One read of the monitor: the tiles, the filter options, and a page.
 
@@ -379,12 +527,14 @@ async def overview(
         )
     ]
     page = matched[offset : offset + limit] if limit else matched
+    await _describe(session, page)
 
     return JobsOut(
         available=True,
         summary=_summary(jobs, workers),
         workers=workers,
         task_names=sorted({job.name for job in jobs}),
+        task_labels={job.name: TASK_LABELS.get(job.name, job.name) for job in jobs},
         # Every worker the window mentions, including one that has since gone
         # away — its jobs are still in the history and still worth filtering to.
         worker_names=sorted({job.worker for job in jobs if job.worker} | {w.name for w in workers}),
@@ -395,7 +545,7 @@ async def overview(
     )
 
 
-async def job(task_id: str) -> JobOut | None:
+async def job(task_id: str, session: AsyncSession | None = None) -> JobOut | None:
     """One job in full — the traceback and the return value included."""
     if not settings.flower_enabled:
         return None
@@ -409,4 +559,6 @@ async def job(task_id: str) -> JobOut | None:
         return None
     if not isinstance(raw, dict):
         return None
-    return _job(_text(raw.get("uuid")) or task_id, raw, detail=True)
+    found = _job(_text(raw.get("uuid")) or task_id, raw, detail=True)
+    await _describe(session, [found])
+    return found

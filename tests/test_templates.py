@@ -104,11 +104,13 @@ def test_every_email_has_both_parts_and_escapes_what_it_was_given(email):
 def test_rent_notices_escalate_in_tone():
     by_stage = {e.subject: e.html for e in _emails()[3:]}
     htmls = list(by_stage.values())
-    blue, amber, red, green = "#2F6BF3", "#B45309", "#B42318", "#1F7A4D"
-    assert blue in htmls[0] and blue in htmls[1]      # issued, due soon
-    assert amber in htmls[2] and amber in htmls[3]    # due, overdue
-    assert red in htmls[4] and red in htmls[5]        # final, blocked
-    assert green in htmls[6]                          # paid
+    # the status dot on the stage: the brand blue itself is in every message
+    # (the mark, the button), so it says nothing about the tone
+    blue, amber, red, green = "#7C9FE8", "#D9A253", "#E8776A", "#4FBB8D"
+    expected = [blue, blue, amber, amber, red, red, green]  # issued … paid
+    for html, tone in zip(htmls, expected, strict=True):
+        assert tone in html
+        assert not any(other in html for other in {blue, amber, red, green} - {tone})
 
 
 def test_the_desk_is_not_told_to_write_to_itself():

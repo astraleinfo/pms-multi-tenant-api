@@ -16,5 +16,6 @@ celerybeat-schedule*
 
 # Production secrets and certificates.
 .env.production
+.env.prod
 .env.migrate
 deploy/certs/
