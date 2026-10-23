@@ -136,8 +136,6 @@ class Settings(BaseSettings):
     # Where a clinic's "enable this module" / "show me a walkthrough" request
     # is emailed. The request is stored first; this is only how the desk hears.
     support_email: str = "support@astrale.health"
-    support_request_max_attempts: int = 5
-    support_request_retry_base_seconds: int = 60
     # One user asking for the same thing again inside this window gets the
     # request they already made back, not a second email.
     support_request_dedupe_minutes: int = 10
@@ -161,13 +159,12 @@ class Settings(BaseSettings):
     # ----------------------------------------------------------------- celery
     # Background jobs (support emails today). Defaults to the same Redis as the
     # outbox nudge. Late acks and reject-on-worker-lost mean a job killed by a
-    # restart or deploy goes back on the queue instead of vanishing, and the
-    # beat sweep re-queues anything the broker lost.
+    # restart or deploy goes back on the queue instead of vanishing. A job the
+    # broker never got stays queued in its row and is retried from the screen.
     celery_broker_url: str = ""
     celery_queue: str = "pms"
     # Must outlast the longest job, or Redis redelivers one that is still running.
     celery_visibility_timeout_seconds: int = 60 * 60
-    celery_sweep_seconds: int = 60
 
     # ------------------------------------------------- background-job monitor
     # Flower watches Celery's event stream and keeps the task history the
@@ -315,8 +312,8 @@ class Settings(BaseSettings):
                 problems.append("STORAGE_BACKEND=s3 needs S3_BUCKET")
             if not (self.s3_region or self.aws_region or self.s3_endpoint_url):
                 problems.append("STORAGE_BACKEND=s3 needs S3_REGION or AWS_REGION")
-        if self.public_scheme != "https":
-            problems.append("PUBLIC_SCHEME must be https")
+        # PUBLIC_SCHEME and APP_DOMAIN are not checked for now: a deployment may
+        # run on plain http, or on a domain of its own choosing, while it is set up.
         if self.flower_enabled and not self.flower_basic_auth:
             # Flower is not published, but "on a private network" is not a
             # credential. Without this, anything else on that network reads

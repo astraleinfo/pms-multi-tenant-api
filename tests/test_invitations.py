@@ -6,8 +6,9 @@ admin typing a password for a colleague at the desk — still exists, and this
 file pins down the part that makes it safe: whoever gets a password they did
 not choose is held at the change-password screen until they replace it.
 
-Under the `console` mail transport the API hands the caller the URL it would
-have emailed, which is how these tests read an inbox they do not have.
+The emails are the Celery worker's. Here each hand-off is delivered as soon as
+the request is done (`LinkEmails` in conftest), and the link is read from the
+email `mailer.send` was given — the only place it ever exists.
 """
 
 from __future__ import annotations
@@ -27,8 +28,8 @@ async def _invite_colleague(admin, client, *, email: str, name: str = "Nadia Rah
     assert row["status"] == "invited"
     assert row["invitation_pending"] is True
 
-    # The console transport does not return the link on this route, so the
-    # token is read the way an operator would: by asking for it again.
+    # Answered before the worker has run: the email is on its way.
+    assert row["link_email_status"] == "queued"
     return row
 
 
@@ -466,3 +467,125 @@ async def test_a_shorter_invitation_ttl_reaches_the_actual_token(
 
     delta = token.expires_at - before
     assert timedelta(hours=23) < delta < timedelta(hours=25), f"expected ~24h, got {delta}"
+
+
+# --- the email is the worker's ---------------------------------------------------------
+
+
+@pytest.fixture
+def broken_mail(monkeypatch):
+    from app.services import mailer
+
+    async def broken(_email):
+        raise mailer.MailError("connection refused")
+
+    monkeypatch.setattr(mailer, "send", broken)
+
+
+async def _staff_row(admin, user_id: str) -> dict:
+    return next(u for u in (await admin.get("/v1/users")).json() if u["id"] == user_id)
+
+
+async def test_the_link_is_minted_by_the_worker_and_never_handed_to_it(northgate, client, link_emails):
+    """The broker and the job monitor see who to write to — never the link."""
+    row = await _invite_colleague(northgate, client, email="ines.costa@northgate.clinic")
+    call = next(c for c in link_emails.handed if str(c[1]) == row["id"])
+    assert [str(a) for a in call[:3]] == [northgate.tenant_id, row["id"], "invite"]
+    assert not any("token=" in str(a) or "http" in str(a) for a in call)
+    assert (await _staff_row(northgate, row["id"]))["link_email_status"] == "sent"
+
+
+async def test_a_failed_send_shows_on_the_row_and_resend_sends_it(
+    northgate, client, monkeypatch, broken_mail, link_emails
+):
+    row = await _invite_colleague(northgate, client, email="omar.haddad@northgate.clinic")
+    assert link_emails.outcomes[-1] == "failed"
+    failed = await _staff_row(northgate, row["id"])
+    assert (failed["link_email_status"], failed["link_email_retryable"]) == ("failed", True)
+    trail = await audit_lines(northgate.tenant_id, action="auth.invite_email")
+    assert any(line["entity_id"] == row["id"] and line["outcome"] == "failed" for line in trail)
+
+    from app.services import mailer
+
+    sent: list = []
+
+    async def capture(email):
+        sent.append(email)
+
+    monkeypatch.setattr(mailer, "send", capture)
+    resent = await northgate.post(f"/v1/users/{row['id']}/invite")
+    assert resent.status_code == 200, resent.text
+    assert resent.json()["link_email_status"] == "queued"
+    assert [e.to for e in sent] == ["omar.haddad@northgate.clinic"]
+    assert (await _staff_row(northgate, row["id"]))["link_email_status"] == "sent"
+    trail = await audit_lines(northgate.tenant_id, action="user.invite_requested")
+    assert any(line["entity_id"] == row["id"] for line in trail)
+
+
+async def test_a_lost_hand_off_turns_retryable_after_a_while(northgate, client, monkeypatch):
+    """The broker never got it: the row stays queued, and only once it has sat
+    a while does it offer Resend — not while the hand-off may be on its way."""
+    import uuid
+
+    from app.db.session import tenant_session
+    from app.models.identity import User
+    from app.services import invitations
+    from app.worker import tasks
+
+    monkeypatch.setattr(tasks, "enqueue_link_email", lambda *a, **k: False)
+    row = await _invite_colleague(northgate, client, email="lena.fischer@northgate.clinic")
+    assert (await _staff_row(northgate, row["id"]))["link_email_retryable"] is False
+
+    async with tenant_session(uuid.UUID(northgate.tenant_id)) as session:
+        user = await session.get(User, uuid.UUID(row["id"]))
+        user.link_email_at = user.link_email_at - invitations.STUCK_AFTER * 2
+    stuck = await _staff_row(northgate, row["id"])
+    assert (stuck["link_email_status"], stuck["link_email_retryable"]) == ("queued", True)
+
+
+async def test_one_hand_off_is_one_email(northgate, client, monkeypatch, link_emails):
+    """A redelivered job, or a second worker on the same hand-off, sends nothing."""
+    import uuid
+
+    from app.db.session import session_factory
+    from app.models.enums import AuthTokenPurpose
+    from app.services import invitations, mailer
+
+    sent: list = []
+
+    async def capture(email):
+        sent.append(email)
+
+    monkeypatch.setattr(mailer, "send", capture)
+    row = await _invite_colleague(northgate, client, email="tomas.novak@northgate.clinic")
+    assert len(sent) == 1
+    again = await invitations.deliver(
+        session_factory, uuid.UUID(northgate.tenant_id), uuid.UUID(row["id"]), AuthTokenPurpose.INVITE
+    )
+    assert again == "skipped" and len(sent) == 1
+
+
+async def test_forgot_password_answers_first_and_the_worker_sends(client, monkeypatch, link_emails):
+    from app.services import mailer
+
+    sent: list = []
+
+    async def capture(email):
+        sent.append(email)
+
+    monkeypatch.setattr(mailer, "send", capture)
+    response = await client.post(
+        "/v1/auth/password/forgot", headers={"Host": NORTHGATE}, json={"email": "admin@northgate.clinic"}
+    )
+    assert response.status_code == 202, response.text
+    assert link_emails.outcomes[-1] == "sent"
+    assert [e.to for e in sent] == ["admin@northgate.clinic"]
+    assert "reset-password?token=" in sent[0].text
+
+
+async def test_the_console_will_not_resend_to_a_locked_account(console, northgate, client):
+    row = await _invite_colleague(northgate, client, email="kai.berg@northgate.clinic")
+    locked = await northgate.patch(f"/v1/users/{row['id']}/status", json={"status": "locked"})
+    assert locked.status_code == 200, locked.text
+    response = await console.post(f"/v1/platform/tenants/{northgate.tenant_id}/users/{row['id']}/invite")
+    assert response.status_code == 409, response.text

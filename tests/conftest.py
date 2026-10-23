@@ -241,11 +241,8 @@ async def audit_lines(tenant_id: str, *, action: str | None = None) -> list[dict
 
 
 def token_from(url: str) -> str:
-    """The `token` query parameter of an invitation or reset link.
-
-    Under the `console` mail transport the API hands the console the URL it
-    would have emailed, which is how a test reads an inbox it does not have.
-    """
+    """The `token` query parameter of an invitation or reset link — read from
+    the email a test captured, which is how it reads an inbox it does not have."""
     from urllib.parse import parse_qs, urlparse
 
     assert url, "no link was issued"
@@ -261,7 +258,64 @@ def reset_rate_limiter():
     limiter.reset()
 
 
+class LinkEmails:
+    """The worker's half of invitation and reset emails, run in the test.
+
+    A route hands the email off in a background task, which Starlette runs in a
+    worker thread once the request's session has committed; from there it is
+    delivered at once, on the test's event loop, so the email is in the
+    captured outbox by the time the response is back. A hand-off made on the
+    event loop itself — a staff import's worker half, inside its transaction —
+    cannot be delivered then, and waits for `await link_emails.deliver()`.
+    """
+
+    def __init__(self) -> None:
+        self.handed: list[tuple] = []
+        self.pending: list[tuple] = []
+        #: what each delivery came to: `sent`, `failed`, `skipped`, `missing`
+        self.outcomes: list[str] = []
+
+    def enqueue(self, tenant_id, user_id, purpose, *, issued_by_label="", ip="", user_agent="") -> bool:
+        import anyio.from_thread
+
+        call = (tenant_id, user_id, purpose, issued_by_label, ip, user_agent)
+        self.handed.append(call)
+        try:
+            anyio.from_thread.run(self._deliver, *call)
+        except RuntimeError:  # on the event loop, not in a worker thread
+            self.pending.append(call)
+        return True
+
+    async def deliver(self) -> list[str]:
+        calls, self.pending = self.pending, []
+        for call in calls:
+            await self._deliver(*call)
+        return self.outcomes[-len(calls):] if calls else []
+
+    async def _deliver(self, tenant_id, user_id, purpose, issued_by_label, ip, user_agent) -> None:
+        from app.db.session import session_factory
+        from app.services import invitations
+
+        self.outcomes.append(
+            await invitations.deliver(
+                session_factory, tenant_id, user_id, purpose,
+                issued_by_label=issued_by_label, ip=ip, user_agent=user_agent,
+            )
+        )
+
+
+@pytest.fixture(autouse=True)
+def link_emails(monkeypatch) -> LinkEmails:
+    from app.worker import tasks
+
+    emails = LinkEmails()
+    #: the real hand-off, for a test about what it puts on the wire
+    emails.real_enqueue = tasks.enqueue_link_email
+    monkeypatch.setattr(tasks, "enqueue_link_email", emails.enqueue)
+    return emails
+
+
 __all__ = [
     "rid", "sign_in", "patients_of", "Signed", "NORTHGATE", "CLEARVIEW", "ROWAN", "CONSOLE",
-    "APEX", "token_from", "audit_lines",
+    "APEX", "token_from", "audit_lines", "LinkEmails",
 ]

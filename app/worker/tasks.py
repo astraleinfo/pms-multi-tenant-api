@@ -20,7 +20,8 @@ from sqlalchemy.pool import NullPool
 
 from app.core.config import settings
 from app.db import guard  # noqa: F401 - the ORM tenant guard applies to jobs too
-from app.services import import_jobs, rent, support
+from app.models.enums import AuthTokenPurpose
+from app.services import import_jobs, invitations, rent, support
 from app.worker.celery_app import celery_app
 
 log = logging.getLogger("pms.worker")
@@ -44,9 +45,8 @@ def _run(job: Callable[[async_sessionmaker[AsyncSession]], Awaitable[T]]) -> T:
     name="pms.support.deliver",
     bind=True,
     # Only for `missing`: the request that queued this may not have committed
-    # yet. Mail failures are not Celery retries — they are written to the row
-    # and the sweep brings them back when their backoff expires, so a long
-    # backoff never sits in the broker as an ETA job.
+    # yet. A mail failure is not a Celery retry — the row is marked failed and
+    # the desk sends it again from the console.
     max_retries=3,
     default_retry_delay=10,
 )
@@ -59,15 +59,41 @@ def deliver_support_request(self, tenant_id: str, request_id: str) -> str:
     return outcome
 
 
-@celery_app.task(name="pms.support.sweep")
-def sweep() -> int:
-    """Re-queue every support request still waiting to be emailed."""
-    pending = _run(lambda factory: support.due(factory))
-    for tenant_id, request_id in pending:
-        deliver_support_request.delay(str(tenant_id), str(request_id))
-    if pending:
-        log.info("sweep re-queued %s support request(s)", len(pending))
-    return len(pending)
+#: How a link email's purpose reads on the wire and in the job monitor. The
+#: stored value stays `reset`; a job queued before this said so, and still runs.
+PURPOSE_ON_WIRE = {AuthTokenPurpose.INVITE: "invite", AuthTokenPurpose.RESET: "reset_password"}
+_PURPOSE_FROM_WIRE = {v: k for k, v in PURPOSE_ON_WIRE.items()} | {p.value: p for p in AuthTokenPurpose}
+
+
+@celery_app.task(
+    name="pms.invitations.deliver",
+    bind=True,
+    # Only for `missing`: the request that queued this may not have committed
+    # yet. A mail failure is not a Celery retry — the account is marked failed
+    # and Resend sends it again.
+    max_retries=3,
+    default_retry_delay=5,
+)
+def deliver_link_email(
+    self,
+    tenant_id: str,
+    user_id: str,
+    purpose: str,
+    issued_by_label: str = "",
+    ip: str = "",
+    user_agent: str = "",
+) -> str:
+    """An invitation or reset email. Who to write to, never the link: the worker
+    mints that itself, so the plaintext is not in the broker or the monitor."""
+    outcome = _run(
+        lambda factory: invitations.deliver(
+            factory, uuid.UUID(tenant_id), uuid.UUID(user_id), _PURPOSE_FROM_WIRE[purpose],
+            issued_by_label=issued_by_label, ip=ip, user_agent=user_agent,
+        )
+    )
+    if outcome == "missing" and self.request.retries < self.max_retries:
+        raise self.retry()
+    return outcome
 
 
 def _run_import(task, tenant_id: str, job_id: str) -> str:
@@ -98,17 +124,6 @@ def run_inventory_import(self, tenant_id: str, job_id: str) -> str:
     return _run_import(self, tenant_id, job_id)
 
 
-@celery_app.task(name="pms.imports.sweep")
-def sweep_imports() -> int:
-    """Re-queue every import still waiting — its hand-off to the broker was lost."""
-    pending = _run(lambda factory: import_jobs.due(factory))
-    for tenant_id, job_id in pending:
-        run_import.delay(str(tenant_id), str(job_id))
-    if pending:
-        log.info("sweep re-queued %s import(s)", len(pending))
-    return len(pending)
-
-
 @celery_app.task(name="pms.rent.cycle")
 def rent_cycle() -> dict:
     """Raise this month's bills, send due reminders, hold or release clinics.
@@ -123,28 +138,78 @@ def rent_cycle() -> dict:
 
 
 def enqueue_support_request(tenant_id: uuid.UUID, request_id: uuid.UUID) -> bool:
-    """Hand a new request to the worker. Never raises.
+    """Hand a request to the worker. Never raises.
 
-    The row is already written, so a broker that is down costs latency, not
-    the request: the sweep finds it. The short countdown gives the creating
-    transaction time to commit before the worker looks for the row.
+    The row is already written, so a broker that is down costs the email, not
+    the request: it stays `queued`, turns retryable, and the desk sends it from
+    the console. The short countdown gives the creating transaction time to
+    commit before the worker looks for the row.
     """
     try:
         deliver_support_request.apply_async(
-            args=(str(tenant_id), str(request_id)), countdown=2, retry=False
+            kwargs={"tenant_id": str(tenant_id), "request_id": str(request_id)}, countdown=2, retry=False
         )
         return True
     except Exception as exc:  # noqa: BLE001 - deliberately swallowed, see docstring
-        log.warning("could not queue support request %s, the sweep will: %s", request_id, exc)
+        log.warning("could not queue support request %s, it waits for a retry: %s", request_id, exc)
         return False
+
+
+def enqueue_link_email(
+    tenant_id: uuid.UUID,
+    user_id: uuid.UUID,
+    purpose: AuthTokenPurpose,
+    *,
+    issued_by_label: str = "",
+    ip: str = "",
+    user_agent: str = "",
+) -> bool:
+    """Hand an invitation or reset email to the worker. Never raises.
+
+    The account is already marked `queued`, so a broker that is down costs the
+    email, not the account: it turns retryable and Resend sends it. The short
+    countdown gives the queuing transaction time to commit.
+    """
+    try:
+        who = {"tenant_id": str(tenant_id), "user_id": str(user_id), "purpose": PURPOSE_ON_WIRE[purpose]}
+        deliver_link_email.apply_async(
+            kwargs={**who, "issued_by_label": issued_by_label, "ip": ip, "user_agent": user_agent},
+            # What the job monitor shows. The requester's address and browser
+            # go to the worker, which writes them on the link's row; they are
+            # not put on display beside every job.
+            kwargsrepr=repr({**who, "requested_by": issued_by_label or "the account holder"}),
+            countdown=1,
+            retry=False,
+        )
+        return True
+    except Exception as exc:  # noqa: BLE001 - deliberately swallowed, see docstring
+        log.warning(
+            "could not queue %s email for %s, it waits for a resend: %s",
+            PURPOSE_ON_WIRE[purpose], user_id, exc,
+        )
+        return False
+
+
+def enqueue_link_emails(
+    tenant_id: uuid.UUID, user_ids: list[uuid.UUID], *, issued_by_label: str = ""
+) -> int:
+    """Invitations for a batch of new accounts — a staff import. Returns how
+    many reached the broker; the rest wait for a resend, like any other."""
+    return sum(
+        enqueue_link_email(tenant_id, user_id, AuthTokenPurpose.INVITE, issued_by_label=issued_by_label)
+        for user_id in user_ids
+    )
 
 
 def enqueue_import(tenant_id: uuid.UUID, job_id: uuid.UUID) -> bool:
     """Hand a stored upload to the worker. Never raises — the row is written,
-    so a broker that is down costs a sweep's delay, not the import."""
+    so a broker that is down leaves the job `queued` until the person retries
+    it, and loses nothing."""
     try:
-        run_import.apply_async(args=(str(tenant_id), str(job_id)), countdown=1, retry=False)
+        run_import.apply_async(
+            kwargs={"tenant_id": str(tenant_id), "job_id": str(job_id)}, countdown=1, retry=False
+        )
         return True
     except Exception as exc:  # noqa: BLE001 - deliberately swallowed, see docstring
-        log.warning("could not queue import %s, the sweep will: %s", job_id, exc)
+        log.warning("could not queue import %s, it waits for a retry: %s", job_id, exc)
         return False

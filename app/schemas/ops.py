@@ -19,6 +19,7 @@ from app.models.enums import (
     ServiceKind,
 )
 from app.schemas.common import ApiModel, IdStr, InputModel, iso_date, money, stamp
+from app.services.import_jobs import retryable
 
 
 class InventoryItemOut(ApiModel):
@@ -204,13 +205,15 @@ class ImportJobOut(ApiModel):
     error: str = ""
     #: counts once finished; on a failure, the rows that need fixing
     report: ImportReportOut | None = None
+    #: still queued well after its hand-off — the worker never got it; offer Retry
+    retryable: bool = False
 
     @classmethod
     def of(cls, job, tz: str) -> ImportJobOut:
         return cls(
             id=str(job.id), status=job.status, filename=job.filename,
             created_at=stamp(job.created_at, tz) or "", finished_at=stamp(job.finished_at, tz),
-            error=job.error,
+            error=job.error, retryable=retryable(job),
             report=ImportReportOut(committed=job.status == ImportJobStatus.DONE, **job.report)
             if job.report else None,
         )

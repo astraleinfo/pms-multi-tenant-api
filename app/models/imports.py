@@ -26,7 +26,7 @@ from app.models.enums import ImportJobStatus
 class ImportJob(Base, TenantScoped, TimestampMixin):
     __tablename__ = "import_jobs"
     __extra_table_args__ = (
-        # The sweep: still to run, oldest first.
+        # Still to run, oldest first.
         Index("ix_import_jobs_status_created", "status", "created_at"),
         Index("ix_import_jobs_tenant_kind_created", "tenant_id", "kind", "created_at"),
     )

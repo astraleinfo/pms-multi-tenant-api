@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Request, Response, status
 from fastapi.responses import JSONResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -321,6 +321,7 @@ async def inspect_invitation(
 async def forgot_password(
     payload: PasswordForgotIn,
     request: Request,
+    tasks: BackgroundTasks,
     session: AsyncSession = Depends(db_session, scope="function"),
     host: HostContext = Depends(host_context),
 ) -> dict:
@@ -360,15 +361,16 @@ async def forgot_password(
         return answer
 
     # An account that has never had a password gets its invitation again rather
-    # than a reset, because that is what it is.
-    purpose = AuthTokenPurpose.INVITE if user.password_hash is None else AuthTokenPurpose.RESET
-    await invitations.invite_user(
-        session,
-        user=user,
-        tenant=tenant,
-        purpose=purpose,
-        ip=client_ip(request),
-        user_agent=user_agent(request),
+    # than a reset, because that is what it is. The worker mints the link and
+    # sends it, after the response — so the answer takes as long whether or not
+    # the address has an account, and a slow mail server never holds it up.
+    from app.worker.tasks import enqueue_link_email
+
+    purpose = invitations.purpose_for(user)
+    await invitations.queue(session, user)
+    tasks.add_task(
+        enqueue_link_email, tenant.id, user.id, purpose,
+        ip=client_ip(request), user_agent=user_agent(request),
     )
     await audit.record(
         session, action="auth.reset_requested", tenant_id=tenant.id, actor_kind="user",

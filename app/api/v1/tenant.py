@@ -37,7 +37,7 @@ from app.schemas.tenancy import (
     TenantConfigPatch,
     TenantOut,
 )
-from app.services import audit, import_jobs, invitations, mailer, staff_io
+from app.services import audit, import_jobs, invitations, staff_io
 from app.services import auth as auth_service
 from app.services import imports as import_service
 from app.services import referrals as referral_service
@@ -453,9 +453,30 @@ async def staff_import_job(
     return ImportJobOut.of(job, ctx.tz)
 
 
+@router.post("/users/import/jobs/{job_id}/retry", response_model=ImportJobOut)
+async def retry_staff_import(
+    job_id: str,
+    tasks: BackgroundTasks,
+    ctx: TenantContext = Depends(require_permission(Permission.USER_MANAGE)),
+) -> ImportJobOut:
+    """Hand a stuck import to the worker again — one still queued well after
+    its upload, whose hand-off to the broker was lost. `409` for any other."""
+    job = await import_jobs.get_job(
+        ctx.session, ctx.tenant_id, parse_uuid(job_id, what="import"), staff_io.KIND
+    )
+    if job is None:
+        raise NotFound("No such import.")
+    await import_jobs.retry(ctx.session, job)
+    from app.worker.tasks import enqueue_import
+
+    tasks.add_task(enqueue_import, ctx.tenant_id, job.id)
+    return ImportJobOut.of(job, ctx.tz)
+
+
 @router.post("/users", response_model=UserOut, status_code=status.HTTP_201_CREATED)
 async def create_user(
     payload: UserCreateIn,
+    tasks: BackgroundTasks,
     ctx: TenantContext = Depends(require_permission(Permission.USER_MANAGE)),
 ) -> UserOut:
     if payload.role not in {r.value for r in Role}:
@@ -491,20 +512,11 @@ async def create_user(
     await ctx.session.flush()
 
     # No password means the ordinary path: the account has no hash at all and
-    # their own link is on its way. A send that fails is logged and reported,
-    # not raised — the row is written and "resend" exists for exactly this.
-    invited = False
-    if payload.password is None:
-        try:
-            await invitations.invite_user(
-                ctx.session,
-                user=user,
-                tenant=ctx.tenant,
-                issued_by_label=ctx.principal.label,
-            )
-            invited = True
-        except mailer.MailError as exc:
-            log.error("could not send invitation to %s: %s", user.email, exc)
+    # the worker mints their link and emails it. A send that fails shows on
+    # their row, and "resend" exists for exactly this.
+    invited = payload.password is None
+    if invited:
+        await _queue_link(ctx, user, tasks)
 
     await audit.record(
         ctx.session, action="user.create", tenant_id=ctx.tenant_id, actor_kind=ctx.actor_kind,
@@ -517,6 +529,7 @@ async def create_user(
 @router.post("/users/{user_id}/invite", response_model=UserOut)
 async def resend_invitation(
     user_id: str,
+    tasks: BackgroundTasks,
     ctx: TenantContext = Depends(require_permission(Permission.USER_MANAGE)),
 ) -> UserOut:
     """Send this colleague their link again.
@@ -534,29 +547,27 @@ async def resend_invitation(
     if user.status == AccountStatus.LOCKED:
         raise Conflict("Unlock the account first.")
 
-    purpose = (
-        AuthTokenPurpose.INVITE if user.password_hash is None else AuthTokenPurpose.RESET
-    )
-    sent = True
-    try:
-        await invitations.invite_user(
-            ctx.session,
-            user=user,
-            tenant=ctx.tenant,
-            purpose=purpose,
-            issued_by_label=ctx.principal.label,
-        )
-    except mailer.MailError as exc:
-        sent = False
-        log.error("could not send %s to %s: %s", purpose.value, user.email, exc)
-
+    purpose = await _queue_link(ctx, user, tasks)
+    # Who asked. Whether the email left is the worker's entry, `auth.*_email`.
     await audit.record(
-        ctx.session, action=f"user.{purpose.value}_sent", tenant_id=ctx.tenant_id,
+        ctx.session, action=f"user.{purpose.value}_requested", tenant_id=ctx.tenant_id,
         actor_kind=ctx.actor_kind, actor_id=ctx.actor_id, actor_label=ctx.principal.label,
-        entity="user", entity_id=str(user.id), outcome="ok" if sent else "failed",
-        meta={"email": user.email},
+        entity="user", entity_id=str(user.id), meta={"email": user.email},
     )
     return UserOut.of(user, ctx.tz)
+
+
+async def _queue_link(ctx: TenantContext, user: User, tasks: BackgroundTasks) -> AuthTokenPurpose:
+    """Mark the account's link email queued and hand it to the worker after the
+    response, once the row has committed. Returns which link it will be."""
+    from app.worker.tasks import enqueue_link_email
+
+    purpose = invitations.purpose_for(user)
+    await invitations.queue(ctx.session, user)
+    tasks.add_task(
+        enqueue_link_email, ctx.tenant_id, user.id, purpose, issued_by_label=ctx.principal.label
+    )
+    return purpose
 
 
 async def _staff_member(ctx: TenantContext, user_id: str) -> User:
@@ -594,6 +605,7 @@ async def _other_admins(ctx: TenantContext, user: User) -> int:
 async def update_user(
     user_id: str,
     payload: UserUpdateIn,
+    tasks: BackgroundTasks,
     ctx: TenantContext = Depends(require_permission(Permission.USER_MANAGE)),
 ) -> UserOut:
     """Correct a colleague's name, sign-in email, role or speciality.
@@ -648,13 +660,8 @@ async def update_user(
         # A link to the old address is a way in for whoever reads that inbox.
         await invitations.revoke_all_for_user(ctx.session, user_id=user.id)
         if user.status == AccountStatus.INVITED:
-            try:
-                await invitations.invite_user(
-                    ctx.session, user=user, tenant=ctx.tenant, issued_by_label=ctx.principal.label
-                )
-                invited = True
-            except mailer.MailError as exc:
-                log.error("could not send invitation to %s: %s", user.email, exc)
+            await _queue_link(ctx, user, tasks)
+            invited = True
 
     after = {"name": user.name, "email": user.email, "role": user.role, "speciality": user.speciality}
     await audit.record(

@@ -194,12 +194,14 @@ Keep the folder names exactly as they are: Docker names containers and volumes a
 This one file holds every setting and password for the API stack. The web app has its
 own one-line `.env`, created in Step 11.
 
-**If you prepared `.env` on your laptop**, copy it across and skip the rest of this step
-except the `chmod`:
+**If you prepared the production settings on your laptop** (as `.env.prod`), copy them
+across as `.env` and skip the rest of this step except the `chmod`. Copy `.env.prod`, not
+your laptop's `.env`: that one holds the development settings, and with it every
+invitation and reset link points at `localhost:3000`.
 
 ```bash
 # on your laptop
-scp ~/astrale/pms-multi-tenant-api/.env root@<server-ip>:~/project/pms-multi-tenant-api/.env
+scp ~/astrale/pms-multi-tenant-api/.env.prod root@<server-ip>:~/project/pms-multi-tenant-api/.env
 ```
 
 **Otherwise**, build it on the server:
@@ -499,9 +501,10 @@ Never add `-v` to `docker compose down` in production: it deletes the database.
 | `required variable … is missing a value` | A value is missing from `.env` | API: add it (Step 7). Web: `NEXT_PUBLIC_APP_DOMAIN` (Step 11) |
 | `pms.astraleinfo.com` shows a clinic page or "unclaimed" | Web built without `NEXT_PUBLIC_APP_DOMAIN` | Step 11, then `docker compose up -d --build` |
 | `migrate` shows `Exited (1)` | Database not ready, or a wrong password | `docker compose logs migrate`; if the passwords are wrong on a fresh install, redo Step 8's reset |
-| `api` shows `unhealthy` or keeps restarting | A production check failed | `docker compose logs api` names the setting, e.g. `MAIL_PROVIDER` or `PUBLIC_SCHEME` |
+| `api` shows `unhealthy` or keeps restarting | A production check failed | `docker compose logs api` names the setting, e.g. `MAIL_PROVIDER` or `COOKIE_SECURE` |
 | Browser shows a certificate error, `nginx -t` fails, or the WebSocket check fails | nginx or the certificate | [NGINX.md, Troubleshooting](NGINX.md#troubleshooting) |
 | `502 Bad Gateway` on a PMS address | The API or web container is down | `docker compose ps` in both repos; start what's down |
 | Clinic address doesn't load at all | `*.pms` DNS record missing | Step 4 |
 | Invitation emails don't arrive | SMTP settings | Check the `SMTP_*` values; `docker compose logs worker` |
+| Invitation links point at `localhost:3000` | The server's `.env` is the laptop's development one | Step 7: copy `.env.prod` as `.env`, then `docker compose up -d`. Re-send the invitation |
 | Changed a password in `.env`, database still uses the old one | It's only read on the first start | Change it in Postgres with `ALTER ROLE`, or reset the empty volume (Step 8) |

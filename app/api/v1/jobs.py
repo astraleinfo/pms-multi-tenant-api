@@ -148,10 +148,11 @@ async def read_jobs(
     limit: int = Query(default=25, ge=0, le=200),
     offset: int = Query(default=0, ge=0),
     staff: PlatformUser = Depends(current_super_admin),
+    session: AsyncSession = Depends(db_session, scope="function"),
 ) -> JobsOut:
     return await jobs_service.overview(
         status=status, task=task, worker=worker, since=since, until=until,
-        search=search, limit=limit, offset=offset,
+        search=search, limit=limit, offset=offset, session=session,
     )
 
 
@@ -159,8 +160,9 @@ async def read_jobs(
 async def read_job(
     task_id: str,
     staff: PlatformUser = Depends(current_super_admin),
+    session: AsyncSession = Depends(db_session, scope="function"),
 ) -> JobOut:
-    found = await jobs_service.job(task_id)
+    found = await jobs_service.job(task_id, session)
     if found is None:
         raise NotFound("No such job — the monitor's history may have rolled past it.")
     return found

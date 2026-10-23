@@ -36,7 +36,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ValidationFailed
 from app.core.permissions import Role
-from app.db.session import set_tenant
 from app.models.clinical import Patient
 from app.models.enums import FieldEntity, FieldType, Sex
 from app.models.identity import User
@@ -516,17 +515,17 @@ async def check_patients(
 # --- writing staff ------------------------------------------------------------------------
 
 
-async def create_users(
-    session: AsyncSession, clinic: Tenant, results: list[RowResult], *, issued_by: str
-) -> tuple[int, int]:
-    """Open an invited account for every row and email each person their link.
+async def create_users(session: AsyncSession, clinic: Tenant, results: list[RowResult]) -> list[User]:
+    """Open an invited account for every row, each with its invitation queued.
 
-    Returns (created, invited). A send that fails is logged, not raised: the
-    account exists, and "resend" is on the clinic's staff list for exactly
-    this. The caller has the clinic bound and has checked every row.
+    Returns the accounts. The caller hands them to the worker once its
+    transaction has committed (`app.worker.tasks.enqueue_link_emails`); a send
+    that fails shows on the person's row, and "resend" is on the clinic's staff
+    list for exactly this. The caller has the clinic bound and has checked
+    every row.
     """
     from app.models.enums import AccountStatus
-    from app.services import invitations, mailer
+    from app.services import invitations
     from app.services.platform import initials_of
 
     users = []
@@ -545,14 +544,6 @@ async def create_users(
         users.append(user)
     await session.flush()
 
-    invited = 0
     for user in users:
-        # Bound again each time: an invitation writes a token row under the
-        # clinic's policy, and an earlier audit write may have released it.
-        await set_tenant(session, clinic.id)
-        try:
-            await invitations.invite_user(session, user=user, tenant=clinic, issued_by_label=issued_by)
-            invited += 1
-        except mailer.MailError as exc:
-            log.error("could not send invitation to %s: %s", user.email, exc)
-    return len(users), invited
+        await invitations.queue(session, user)
+    return users

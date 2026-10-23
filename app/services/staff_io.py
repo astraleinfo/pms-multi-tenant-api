@@ -69,13 +69,20 @@ async def process(
     if invalid:
         raise import_jobs.Rejected({**report, "rows": [_row(r) for r in invalid]})
 
-    created, invited = await create_users(session, tenant, results, issued_by=actor.label)
+    users = await create_users(session, tenant, results)
+    created = invited = len(users)
     await audit.record(
         session, action="user.import", tenant_id=tenant.id,
         actor_kind=actor.kind, actor_id=actor.id, actor_label=actor.label,
         entity="import", entity_id=filename,
         meta={"rows": len(results), "created": created, "invited": invited},
     )
+    # This runs in the worker, inside the import's transaction, so the accounts
+    # are not committed yet: each email job's short countdown, and its retry
+    # while the row is not visible, cover the moment until they are.
+    from app.worker.tasks import enqueue_link_emails
+
+    enqueue_link_emails(tenant.id, [u.id for u in users], issued_by_label=actor.label)
     return {**report, "created": created, "invited": invited, "rows": []}
 
 

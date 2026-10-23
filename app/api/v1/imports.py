@@ -13,7 +13,7 @@ import logging
 from datetime import datetime
 from typing import Literal
 
-from fastapi import APIRouter, Depends, File, Query, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Query, Request, UploadFile
 from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -51,8 +51,9 @@ class ImportReportOut(ApiModel):
     invalid: int
     committed: bool
     created: int = 0
-    #: staff only: invitations that left. A failed send is not a failed import
-    #: — the account exists and "resend" is on the clinic's staff list.
+    #: staff only: invitations queued for the worker. A send that fails later
+    #: is not a failed import — the account exists, its row says so, and
+    #: "resend" is on the clinic's staff list.
     invited: int = 0
     rows: list[ImportRowOut]
 
@@ -97,6 +98,7 @@ async def run_import(
     tenant_id: str,
     kind: Kind,
     request: Request,
+    tasks: BackgroundTasks,
     file: UploadFile = File(..., description="The filled-in sample sheet (.xlsx) or a .csv."),
     commit: bool = Query(default=False, description="Write the rows. Refused unless every row passes."),
     staff: PlatformUser = Depends(current_platform_user),
@@ -130,7 +132,11 @@ async def run_import(
 
     label = f"{staff.name} <{staff.email}>"
     if kind == "users":
-        created, invited = await import_service.create_users(session, clinic, results, issued_by=label)
+        from app.worker.tasks import enqueue_link_emails
+
+        users = await import_service.create_users(session, clinic, results)
+        created = invited = len(users)
+        tasks.add_task(enqueue_link_emails, clinic.id, [u.id for u in users], issued_by_label=label)
     else:
         created, invited = await _create_patients(session, clinic, results), 0
 

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,10 +26,11 @@ from app.api.deps import (
     user_agent,
 )
 from app.core.config import settings
-from app.core.errors import NotFound
+from app.core.errors import Conflict, NotFound
 from app.db.session import set_tenant
-from app.models.enums import AuthTokenPurpose
+from app.models.enums import AccountStatus
 from app.models.identity import PlatformUser
+from app.models.support import SupportRequest
 from app.models.tenancy import ClinicalType, LabTest, MedicineSuggestion, Tenant
 from app.schemas.common import local_today
 from app.schemas.identity import PlatformUserOut, UserOut
@@ -55,7 +56,7 @@ from app.schemas.tenancy import (
     TenantPatchIn,
     TenantStatusIn,
 )
-from app.services import audit, invitations, mailer
+from app.services import audit, invitations
 from app.services import auth as auth_service
 from app.services import platform as platform_service
 from app.services import rent as rent_service
@@ -107,6 +108,7 @@ async def check_slug(
 async def create_tenant(
     payload: TenantCreateIn,
     request: Request,
+    tasks: BackgroundTasks,
     staff: PlatformUser = Depends(current_platform_user),
     session: AsyncSession = Depends(db_session, scope="function"),
 ) -> TenantCreatedOut:
@@ -116,10 +118,10 @@ async def create_tenant(
 
     The console never sees a password, because none is created. The admin row
     is written with no hash at all, and the person named on it is emailed a
-    single-use link to choose one. If that email cannot be sent the clinic
-    still exists — undoing the subdomain claim would be worse — but the
-    response says so plainly, because a clinic nobody can sign into is not a
-    finished job.
+    single-use link to choose one — by the worker, after the response. If that
+    email cannot be sent the clinic still exists (undoing the subdomain claim
+    would be worse), and the admin's row on the staff list says it failed,
+    because a clinic nobody can sign into is not a finished job.
     """
     tenant, admin = await platform_service.create_tenant(session, payload, today=local_today())
     await get_config(session, tenant.id)
@@ -130,16 +132,9 @@ async def create_tenant(
         meta={"slug": tenant.slug},
     )
 
-    sent, url = await _invite(
-        session, user=admin, tenant=tenant, staff=staff, request=request,
-        purpose=AuthTokenPurpose.INVITE,
-    )
+    await _invite(session, user=admin, tenant=tenant, staff=staff, request=request, tasks=tasks)
     return TenantCreatedOut(
-        tenant=TenantOut.of(tenant),
-        admin_user_id=str(admin.id),
-        admin_email=admin.email,
-        invitation_sent=sent,
-        invitation_url=url,
+        tenant=TenantOut.of(tenant), admin_user_id=str(admin.id), admin_email=admin.email
     )
 
 
@@ -150,50 +145,34 @@ async def _invite(
     tenant: Tenant,
     staff: PlatformUser,
     request: Request,
-    purpose: AuthTokenPurpose,
-) -> tuple[bool, str | None]:
-    """Mint a link, email it, and record what happened.
+    tasks: BackgroundTasks,
+) -> None:
+    """Queue the account's link email and record who asked.
 
-    The token is written whether or not the email leaves — so a send that fails
-    can be retried with "resend" instead of stranding the account. The URL is
-    returned to the console only under the `console` mail transport, which is
-    development; with a real transport the link exists in one inbox and nowhere
-    else.
+    The worker mints the link and sends it after the response; the console
+    never sees it, in development or anywhere else. Whether it left is the
+    worker's audit entry and the account's `link_email_status`.
     """
+    from app.worker.tasks import enqueue_link_email
+
     # `record_for_tenant` releases the binding when it is done, and a console
     # session has none of its own — so the clinic is bound again here. The
-    # token row names a tenant and its policy is checked like any other write:
-    # the console gets no special path through row-level security either.
+    # account is the clinic's row and its policy is checked like any other
+    # write: the console gets no special path through row-level security.
     await set_tenant(session, tenant.id)
 
-    timings = await platform_service.get_timings(session)
-    _, raw = await invitations.issue_for_user(
-        session,
-        user=user,
-        tenant=tenant,
-        purpose=purpose,
-        timings=timings,
-        issued_by_label=f"{staff.name} <{staff.email}>",
-        ip=client_ip(request),
-        user_agent=user_agent(request),
+    purpose = invitations.purpose_for(user)
+    label = f"{staff.name} <{staff.email}>"
+    await invitations.queue(session, user)
+    tasks.add_task(
+        enqueue_link_email, tenant.id, user.id, purpose,
+        issued_by_label=label, ip=client_ip(request), user_agent=user_agent(request),
     )
-    url = invitations.link_for(slug=tenant.slug, purpose=purpose, raw_token=raw)
-
-    sent = True
-    try:
-        await invitations.send_link(user=user, tenant=tenant, purpose=purpose, raw_token=raw, timings=timings)
-    except mailer.MailError as exc:
-        sent = False
-        log.error("could not send %s to %s: %s", purpose.value, user.email, exc)
-
     await audit.record_for_tenant(
-        session, tenant.id, action=f"platform.{purpose.value}_sent", actor_kind="platform",
-        actor_id=staff.id, actor_label=f"{staff.name} <{staff.email}>", entity="user",
-        entity_id=str(user.id), outcome="ok" if sent else "failed",
-        ip=client_ip(request), user_agent=user_agent(request),
-        meta={"email": user.email},
+        session, tenant.id, action=f"platform.{purpose.value}_requested", actor_kind="platform",
+        actor_id=staff.id, actor_label=label, entity="user", entity_id=str(user.id),
+        ip=client_ip(request), user_agent=user_agent(request), meta={"email": user.email},
     )
-    return sent, url if settings.mail_provider == "console" else None
 
 
 @router.patch("/tenants/{tenant_id}", response_model=TenantOut)
@@ -244,6 +223,46 @@ async def tenant_support_requests(
     return [SupportRequestOut.of(r, clinic.timezone) for r in rows]
 
 
+@router.post(
+    "/tenants/{tenant_id}/support-requests/{request_id}/retry", response_model=SupportRequestOut
+)
+async def retry_support_request(
+    tenant_id: str,
+    request_id: str,
+    request: Request,
+    tasks: BackgroundTasks,
+    staff: PlatformUser = Depends(current_platform_user),
+    session: AsyncSession = Depends(db_session, scope="function"),
+) -> SupportRequestOut:
+    """Email the desk about this request again — one that failed, or is still
+    queued well after it was handed to the worker. `409` for any other."""
+    clinic = await _clinic(session, tenant_id)
+    # The row is the clinic's, and its policy is checked like any other write.
+    await set_tenant(session, clinic.id)
+    row = (
+        await session.execute(
+            select(SupportRequest).where(
+                SupportRequest.id == parse_uuid(request_id, what="request"),
+                SupportRequest.tenant_id == clinic.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise NotFound("No such request.")
+    await support_service.retry(session, row)
+    out = SupportRequestOut.of(row, clinic.timezone)
+
+    await audit.record_for_tenant(
+        session, clinic.id, action="platform.support_request_retry", actor_kind="platform",
+        actor_id=staff.id, actor_label=f"{staff.name} <{staff.email}>", entity="support_request",
+        entity_id=str(row.id), ip=client_ip(request), user_agent=user_agent(request),
+    )
+    from app.worker.tasks import enqueue_support_request
+
+    tasks.add_task(enqueue_support_request, clinic.id, row.id)
+    return out
+
+
 @router.get("/tenants/{tenant_id}/users", response_model=list[UserOut])
 async def tenant_users(
     tenant_id: str,
@@ -271,14 +290,16 @@ async def resend_invitation(
     tenant_id: str,
     user_id: str,
     request: Request,
+    tasks: BackgroundTasks,
     staff: PlatformUser = Depends(current_platform_user),
     session: AsyncSession = Depends(db_session, scope="function"),
 ) -> TenantCreatedOut:
     """Send this account its link again.
 
-    Issuing a new one spends the previous, so the email that just went out is
-    the only one that works — a link that has been sitting in an old inbox
-    stops being a way in the moment support sends a fresh one.
+    The worker's new link spends the previous, so the email it sends is the
+    only one that works — a link that has been sitting in an old inbox stops
+    being a way in the moment support sends a fresh one. A locked account is
+    refused, as it is from the clinic's own staff list.
     """
     from app.models.identity import User
 
@@ -294,19 +315,12 @@ async def resend_invitation(
     ).scalar_one_or_none()
     if user is None:
         raise NotFound("No such account.")
+    if user.status == AccountStatus.LOCKED:
+        raise Conflict("Unlock the account first.")
 
-    purpose = (
-        AuthTokenPurpose.INVITE if user.password_hash is None else AuthTokenPurpose.RESET
-    )
-    sent, url = await _invite(
-        session, user=user, tenant=clinic, staff=staff, request=request, purpose=purpose
-    )
+    await _invite(session, user=user, tenant=clinic, staff=staff, request=request, tasks=tasks)
     return TenantCreatedOut(
-        tenant=TenantOut.of(clinic),
-        admin_user_id=str(user.id),
-        admin_email=user.email,
-        invitation_sent=sent,
-        invitation_url=url,
+        tenant=TenantOut.of(clinic), admin_user_id=str(user.id), admin_email=user.email
     )
 
 

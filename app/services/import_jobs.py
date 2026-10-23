@@ -13,8 +13,9 @@ the rows that need fixing). Inventory and staff are the kinds today; see
 
 A worker that dies mid-import leaves the row `running` with the file still in
 place, and the redelivered job starts it again — the import is one
-transaction, so a half-written one was never committed. The beat sweep
-re-queues anything still `queued` whose hand-off to the broker was lost.
+transaction, so a half-written one was never committed. One still `queued`
+well after its hand-off was lost on the way to the broker; it shows as
+`retryable`, and the person hands it over again with `retry`.
 """
 
 from __future__ import annotations
@@ -31,7 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.concurrency import run_in_threadpool
 
 from app.core.config import settings
-from app.core.errors import ValidationFailed
+from app.core.errors import Conflict, ValidationFailed
 from app.db.session import set_tenant
 from app.models.enums import ImportJobStatus
 from app.models.imports import ImportJob
@@ -162,6 +163,38 @@ async def get_job(
     ).scalar_one_or_none()
 
 
+#: How long a job may sit `queued` after its hand-off before it counts as lost.
+#: Longer than the enqueue's countdown, so it never races a hand-off that is
+#: still on its way.
+STUCK_AFTER = timedelta(seconds=30)
+
+
+def retryable(job: ImportJob) -> bool:
+    """Queued long enough that its hand-off to the broker must have been lost.
+
+    A failed import is not retried: its file is gone, and what it needs is a
+    corrected sheet, not another run of the same one.
+    """
+    if job.status != ImportJobStatus.QUEUED:
+        return False
+    cutoff = datetime.now(timezone.utc) - STUCK_AFTER
+    # `created_at` first: a job this new is never stuck, and the check then
+    # never reaches `updated_at`, which a fresh upload may not have loaded.
+    return job.created_at <= cutoff and job.updated_at <= cutoff
+
+
+async def retry(session: AsyncSession, job: ImportJob) -> ImportJob:
+    """Mark a stuck job as handed over again. The caller enqueues it once this
+    transaction has committed."""
+    if not retryable(job):
+        raise Conflict("This import is not stuck — it is running or already finished.")
+    # What restarts the stuck clock; set here rather than left to `onupdate`
+    # so the response can read it without another round trip.
+    job.updated_at = datetime.now(timezone.utc)
+    await session.flush()
+    return job
+
+
 # --- the worker's half ------------------------------------------------------------------------
 
 
@@ -245,32 +278,3 @@ async def run(factory: async_sessionmaker[AsyncSession], tenant_id: uuid.UUID, j
         except Exception as exc:  # noqa: BLE001 - the row no longer points at it; log and move on
             log.error("could not delete import upload %s: %s", key, exc)
     return outcome.value
-
-
-async def due(
-    factory: async_sessionmaker[AsyncSession], *, limit: int = 50, grace_seconds: int = 30
-) -> list[tuple[uuid.UUID, uuid.UUID]]:
-    """Every `(tenant_id, job_id)` still queued a little after it was stored,
-    clinic by clinic — the ones whose hand-off to the broker was lost. The
-    grace keeps the sweep from racing the enqueue that is already on its way."""
-    cutoff = datetime.now(timezone.utc) - timedelta(seconds=grace_seconds)
-    async with factory() as session:
-        tenant_ids = list((await session.execute(select(Tenant.id))).scalars())
-
-    found: list[tuple[uuid.UUID, uuid.UUID]] = []
-    for tenant_id in tenant_ids:
-        async with factory() as session:
-            async with session.begin():
-                await set_tenant(session, tenant_id)
-                ids = (
-                    await session.execute(
-                        select(ImportJob.id)
-                        .where(ImportJob.status == ImportJobStatus.QUEUED, ImportJob.created_at <= cutoff)
-                        .order_by(ImportJob.created_at)
-                        .limit(limit)
-                    )
-                ).scalars()
-                found.extend((tenant_id, i) for i in ids)
-        if len(found) >= limit:
-            break
-    return found[:limit]

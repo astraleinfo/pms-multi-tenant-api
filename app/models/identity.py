@@ -21,6 +21,7 @@ from sqlalchemy import (
     Integer,
     Numeric,
     String,
+    Text,
     UniqueConstraint,
     func,
 )
@@ -78,6 +79,15 @@ class User(Base, TenantScoped, TimestampMixin):
     is_support: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )
+
+    #: The newest invitation or reset email: `queued`, `sent` or `failed`
+    #: (`LinkEmailStatus`), and when it last changed. NULL when none was ever
+    #: asked for. The link itself is minted by the worker, so it never sits in
+    #: the broker; this is how a screen knows whether it went.
+    link_email_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    link_email_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: why the last send failed — for the logs and the console, not the clinic
+    link_email_error: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
 
     #: How this person has set the interface up for themselves — which is not
     #: clinical data and not the clinic's configuration (§3.3), so it lives

@@ -367,3 +367,66 @@ def test_a_date_window_is_read_in_utc():
     }
     # a1 finished at 08:53:23 and falls outside; the two later ones do not.
     assert "a1" not in kept and {"b2", "c3"} <= kept
+
+
+# --- what a job is, in words ---------------------------------------------------
+
+
+def _one(name: str, *, args: str = "()", kwargs: str = "{}"):
+    return jobs_service._job("x", {"uuid": "x", "name": name, "state": "SUCCESS", "args": args, "kwargs": kwargs})
+
+
+def test_every_registered_task_has_a_label():
+    from app.worker import tasks  # noqa: F401 - registers them
+    from app.worker.celery_app import celery_app
+
+    registered = {t for t in celery_app.tasks if t.startswith("pms.")}
+    assert registered <= set(jobs_service.TASK_LABELS), registered - set(jobs_service.TASK_LABELS)
+
+
+def test_an_email_job_is_named_for_what_it_sends():
+    reset = _one("pms.invitations.deliver", kwargs="{'tenant_id': 't', 'user_id': 'u', 'purpose': 'reset_password'}")
+    invite = _one("pms.invitations.deliver", kwargs="{'purpose': 'invite'}")
+    # sent positionally, before arguments went by name
+    old = _one("pms.invitations.deliver", args="('t', 'u', 'reset', '', '::1', 'Mozilla/5.0')")
+    assert (reset.label, invite.label, old.label) == ("Password reset email", "Invitation email", "Password reset email")
+    assert _one("pms.support.deliver").label == "Support request email"
+    assert _one("pms.something.new").label == "pms.something.new"
+
+
+async def test_arguments_are_labelled_and_never_show_the_address_or_browser():
+    old = _one("pms.invitations.deliver", args="('t-1', 'u-1', 'reset', '', '::1', 'Mozilla/5.0')")
+    await jobs_service._describe(None, [old])
+    assert [(a.label, a.value) for a in old.arguments] == [
+        ("Email", "Password reset"), ("Clinic", "t-1"), ("Account", "u-1"),
+    ]
+
+    named = _one(
+        "pms.imports.run", kwargs="{'tenant_id': 't-2', 'job_id': 'j-7', 'note': 'x'}"
+    )
+    await jobs_service._describe(None, [named])
+    assert [(a.label, a.value) for a in named.arguments] == [("Clinic", "t-2"), ("Import", "j-7"), ("Note", "x")]
+
+    # a repr that is not one is shown as nothing, and never run
+    odd = _one("pms.support.deliver", kwargs="__import__('os').system('true')")
+    await jobs_service._describe(None, [odd])
+    assert odd.arguments == []
+
+
+async def test_clinics_and_accounts_are_shown_by_name(northgate):
+    from app.db.session import session_factory
+
+    me = next(u for u in (await northgate.get("/v1/users")).json() if u["email"] == "admin@northgate.clinic")
+    job = _one(
+        "pms.invitations.deliver",
+        kwargs=f"{{'tenant_id': '{northgate.tenant_id}', 'user_id': '{me['id']}', 'purpose': 'invite', "
+        "'requested_by': 'Ines <ines@astrale.health>'}",
+    )
+    async with session_factory() as session:
+        await jobs_service._describe(session, [job])
+    assert dict((a.label, a.value) for a in job.arguments) == {
+        "Email": "Invitation",
+        "Clinic": "Northgate Dental Studio",
+        "Account": f"{me['name']} <admin@northgate.clinic>",
+        "Requested by": "Ines <ines@astrale.health>",
+    }

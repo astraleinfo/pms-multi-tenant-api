@@ -3,6 +3,8 @@ isolation machinery honest as the model grows."""
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from tests.conftest import CLEARVIEW, CONSOLE, NORTHGATE, audit_lines, token_from
@@ -157,13 +159,21 @@ async def test_appointment_types_are_the_clinics_own_and_validated(northgate, cl
 # --- §3.1 the console --------------------------------------------------------
 
 
-async def test_the_console_creates_a_clinic_that_is_immediately_usable(console, client):
+async def test_the_console_creates_a_clinic_that_is_immediately_usable(console, client, monkeypatch):
     """Creating a clinic, and the invitation that is the only way into it.
 
-    No password is sent, chosen, or returned anywhere in this flow. The console
-    gets a link (only because the test transport is `console`); the person named
-    on the account is the one who picks what it will be.
+    No password is sent, chosen, or returned anywhere in this flow — and no link
+    is returned either: the worker mints it and emails it, and the person named
+    on the account is the one who picks what the password will be.
     """
+    from app.services import mailer
+
+    sent: list[mailer.Email] = []
+
+    async def capture(email: mailer.Email) -> None:
+        sent.append(email)
+
+    monkeypatch.setattr(mailer, "send", capture)
     created = await console.post(
         "/v1/platform/tenants",
         json={
@@ -179,7 +189,10 @@ async def test_the_console_creates_a_clinic_that_is_immediately_usable(console, 
     body = created.json()
     tenant = body["tenant"]
     assert tenant["status"] == "trial"
-    assert body["invitation_sent"] is True
+    assert body["invitation_status"] == "queued"
+    assert "invitation_url" not in body
+    staff = (await console.get(f"/v1/platform/tenants/{tenant['id']}/users")).json()
+    assert [u["link_email_status"] for u in staff] == ["sent"]
 
     # Nothing can sign in yet: the account has no password at all.
     too_early = await client.post(
@@ -189,7 +202,8 @@ async def test_the_console_creates_a_clinic_that_is_immediately_usable(console, 
     )
     assert too_early.status_code == 401
 
-    invite_token = token_from(body["invitation_url"])
+    assert [e.to for e in sent] == ["dana@harbour.eye"]
+    invite_token = token_from(re.search(r"https?://\S+", sent[0].text).group(0))
 
     # The page behind the link knows who it is for, before anyone is signed in.
     preview = await client.get(

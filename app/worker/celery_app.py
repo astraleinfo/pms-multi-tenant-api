@@ -24,9 +24,10 @@ lets the running job finish first; give the container a stop grace period
 longer than one send. Redis runs with `--appendonly yes`, so the queue itself
 survives a Redis restart.
 
-And behind all of it, the row: every job's state lives in PostgreSQL, and beat
-runs `sweep` every `CELERY_SWEEP_SECONDS` to re-queue anything still pending.
-A broker wiped clean delays delivery by one sweep; it loses nothing.
+And behind all of it, the row: every job's state lives in PostgreSQL. Nothing
+re-queues on a timer. A job whose hand-off was lost stays `queued`, the screen
+that shows it offers Retry after a short wait, and a wiped broker loses
+nothing — it waits for someone to press the button.
 """
 
 from __future__ import annotations
@@ -61,19 +62,11 @@ celery_app.conf.update(
     broker_connection_retry_on_startup=True,
     broker_transport_options={"visibility_timeout": settings.celery_visibility_timeout_seconds},
     # Publishing from a request must fail fast if Redis is down: the row is
-    # already written and the sweep will enqueue it, so a hung request buys
-    # nothing.
+    # already written and can be retried from the screen, so a hung request
+    # buys nothing.
     broker_connection_timeout=3,
     worker_hijack_root_logger=False,
     beat_schedule={
-        "sweep-support-requests": {
-            "task": "pms.support.sweep",
-            "schedule": float(settings.celery_sweep_seconds),
-        },
-        "sweep-imports": {
-            "task": "pms.imports.sweep",
-            "schedule": float(settings.celery_sweep_seconds),
-        },
         # The monthly bills and their reminders. Only when switched on: with
         # it off, the console's "Run billing now" is the only way a bill is
         # raised — which is how a deployment tries the cycle before trusting it.

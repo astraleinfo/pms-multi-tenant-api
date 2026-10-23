@@ -1,7 +1,7 @@
 """Support requests: a clinic asking the desk, and the worker emailing it.
 
 The Celery hop is not exercised here — `enqueue_support_request` is replaced
-with a recorder, and the worker half (`support.deliver`, `support.due`) is
+with a recorder, and the worker half (`support.deliver`) is
 awaited directly, the way the message tests drive `drain`. Nothing reaches a
 mail server: `mailer.send` is replaced wherever a send would happen.
 """
@@ -194,13 +194,14 @@ async def test_the_worker_emails_the_desk_once(northgate, queued, outbox):
     assert any(line["entity_id"] == body["id"] and line["outcome"] == "ok" for line in trail)
 
 
-async def test_a_mail_failure_backs_off_then_parks(northgate, queued, monkeypatch):
+async def test_a_mail_failure_fails_at_once_and_the_desk_retries_it(
+    northgate, console, queued, monkeypatch
+):
+    """No backoff and no sweep: one attempt, then it waits for the console."""
     async def broken(_email):
         raise mailer.MailError("connection refused")
 
     monkeypatch.setattr(mailer, "send", broken)
-    monkeypatch.setattr(settings, "support_request_max_attempts", 2)
-
     body = (
         await northgate.post(
             "/v1/tenant/support-requests", json={"kind": "walkthrough", "message": "Retry me."}
@@ -208,35 +209,74 @@ async def test_a_mail_failure_backs_off_then_parks(northgate, queued, monkeypatc
     ).json()
     tenant_id, request_id = uuid.UUID(northgate.tenant_id), uuid.UUID(body["id"])
 
-    assert await support.deliver(session_factory, tenant_id, request_id) == "retry"
-    row = await _row(northgate.tenant_id, body["id"])
-    assert row.status == "queued" and row.attempts == 1
-    assert "connection refused" in row.last_error
-
-    # Not due until the backoff passes — neither a stray job nor the sweep sends it early.
-    assert await support.deliver(session_factory, tenant_id, request_id) == "skipped"
-    assert (tenant_id, request_id) not in await support.due(session_factory)
-
-    async with tenant_session(tenant_id) as session:
-        (await session.get(SupportRequest, request_id)).next_attempt_at = row.created_at
-
-    assert (tenant_id, request_id) in await support.due(session_factory)
     assert await support.deliver(session_factory, tenant_id, request_id) == "failed"
-
     row = await _row(northgate.tenant_id, body["id"])
-    assert row.status == "failed" and row.attempts == 2
+    assert row.status == "failed" and row.attempts == 1
+    assert "connection refused" in row.last_error
     trail = await audit_lines(northgate.tenant_id, action="support.request_email")
     assert any(line["entity_id"] == body["id"] and line["outcome"] == "failed" for line in trail)
 
+    listed = (await console.get(f"/v1/platform/tenants/{northgate.tenant_id}/support-requests")).json()
+    assert next(r for r in listed if r["id"] == body["id"])["retryable"] is True
 
-async def test_the_sweep_finds_what_the_broker_never_got(northgate, monkeypatch, outbox):
-    """The enqueue fails (Redis down); the row is still there for the sweep."""
-    from app.worker import tasks
-
-    monkeypatch.setattr(tasks, "enqueue_support_request", lambda t, r: False)
-    response = await northgate.post(
-        "/v1/tenant/support-requests", json={"kind": "general", "message": "Sweep me."}
+    queued.clear()
+    retried = await console.post(
+        f"/v1/platform/tenants/{northgate.tenant_id}/support-requests/{body['id']}/retry"
     )
-    assert response.status_code == 201
-    pending = await support.due(session_factory)
-    assert (uuid.UUID(northgate.tenant_id), uuid.UUID(response.json()["id"])) in pending
+    assert retried.status_code == 200, retried.text
+    assert retried.json()["status"] == "queued" and retried.json()["retryable"] is False
+    assert queued == [(tenant_id, request_id)]
+    trail = await audit_lines(northgate.tenant_id, action="platform.support_request_retry")
+    assert any(line["entity_id"] == body["id"] for line in trail)
+
+    sent: list[mailer.Email] = []
+
+    async def capture(email: mailer.Email) -> None:
+        sent.append(email)
+
+    monkeypatch.setattr(mailer, "send", capture)
+    assert await support.deliver(session_factory, tenant_id, request_id) == "sent"
+    assert len(sent) == 1
+    row = await _row(northgate.tenant_id, body["id"])
+    assert row.status == "sent" and row.attempts == 2
+
+    # Sent is final: nothing to retry.
+    again = await console.post(
+        f"/v1/platform/tenants/{northgate.tenant_id}/support-requests/{body['id']}/retry"
+    )
+    assert again.status_code == 409, again.text
+
+
+async def test_a_lost_hand_off_turns_retryable_after_a_while(northgate, console, queued):
+    """The broker never got it; the row stays queued, and only once it has sat
+    there a while does the console offer to send it — not while the hand-off
+    may still be on its way."""
+    body = (
+        await northgate.post(
+            "/v1/tenant/support-requests", json={"kind": "general", "message": "Lost me."}
+        )
+    ).json()
+    assert body["status"] == "queued" and body["retryable"] is False
+    url = f"/v1/platform/tenants/{northgate.tenant_id}/support-requests/{body['id']}/retry"
+    assert (await console.post(url)).status_code == 409
+
+    tenant_id = uuid.UUID(northgate.tenant_id)
+    async with tenant_session(tenant_id) as session:
+        row = await session.get(SupportRequest, uuid.UUID(body["id"]))
+        row.created_at = row.updated_at = row.created_at - support.STUCK_AFTER * 2
+
+    listed = (await console.get(f"/v1/platform/tenants/{northgate.tenant_id}/support-requests")).json()
+    assert next(r for r in listed if r["id"] == body["id"])["retryable"] is True
+    retried = await console.post(url)
+    assert retried.status_code == 200, retried.text
+    assert (tenant_id, uuid.UUID(body["id"])) in queued
+
+
+async def test_another_clinics_request_is_not_found(northgate, clearview, console, queued):
+    body = (
+        await northgate.post("/v1/tenant/support-requests", json={"kind": "walkthrough"})
+    ).json()
+    response = await console.post(
+        f"/v1/platform/tenants/{clearview.tenant_id}/support-requests/{body['id']}/retry"
+    )
+    assert response.status_code == 404, response.text
