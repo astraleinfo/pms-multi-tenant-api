@@ -293,8 +293,15 @@ class Settings(BaseSettings):
             problems.append("JWT_SECRET is still the development default")
         if len(self.jwt_secret) < 32:
             problems.append("JWT_SECRET must be at least 32 characters")
-        if not self.cookie_secure:
-            problems.append("COOKIE_SECURE must be true in production")
+        # A secure cookie is one a browser only sends over https, so the two
+        # settings have to agree: over http a secure cookie is never sent back
+        # and nobody stays signed in; over https an insecure one is a leak.
+        if self.public_scheme == "https" and not self.cookie_secure:
+            problems.append("COOKIE_SECURE must be true when PUBLIC_SCHEME=https")
+        if self.public_scheme == "http" and self.cookie_secure:
+            problems.append(
+                "COOKIE_SECURE must be false when PUBLIC_SCHEME=http — browsers drop secure cookies over http"
+            )
         if self.debug:
             problems.append("DEBUG must be false in production")
         if self.allow_tenant_header:
