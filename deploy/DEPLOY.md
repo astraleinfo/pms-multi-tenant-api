@@ -501,7 +501,7 @@ Never add `-v` to `docker compose down` in production: it deletes the database.
 | `required variable … is missing a value` | A value is missing from `.env` | API: add it (Step 7). Web: `NEXT_PUBLIC_APP_DOMAIN` (Step 11) |
 | `pms.astraleinfo.com` shows a clinic page or "unclaimed" | Web built without `NEXT_PUBLIC_APP_DOMAIN` | Step 11, then `docker compose up -d --build` |
 | `migrate` shows `Exited (1)` | Database not ready, or a wrong password | `docker compose logs migrate`; if the passwords are wrong on a fresh install, redo Step 8's reset |
-| `api` shows `unhealthy` or keeps restarting | A production check failed | `docker compose logs api` names the setting, e.g. `MAIL_PROVIDER` or `PUBLIC_SCHEME` |
+| `api` shows `unhealthy` or keeps restarting | A production check failed | `docker compose logs api` names the setting, e.g. `MAIL_PROVIDER` or `COOKIE_SECURE` |
 | Browser shows a certificate error, `nginx -t` fails, or the WebSocket check fails | nginx or the certificate | [NGINX.md, Troubleshooting](NGINX.md#troubleshooting) |
 | `502 Bad Gateway` on a PMS address | The API or web container is down | `docker compose ps` in both repos; start what's down |
 | Clinic address doesn't load at all | `*.pms` DNS record missing | Step 4 |

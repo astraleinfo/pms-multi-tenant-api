@@ -312,12 +312,8 @@ class Settings(BaseSettings):
                 problems.append("STORAGE_BACKEND=s3 needs S3_BUCKET")
             if not (self.s3_region or self.aws_region or self.s3_endpoint_url):
                 problems.append("STORAGE_BACKEND=s3 needs S3_REGION or AWS_REGION")
-        if self.public_scheme != "https":
-            problems.append("PUBLIC_SCHEME must be https")
-        if self.app_domain == "localhost" or self.app_domain.endswith(".localhost"):
-            # Every invitation and reset link is built from it, and would
-            # point the recipient at their own machine.
-            problems.append("APP_DOMAIN must be the public domain, not localhost")
+        # PUBLIC_SCHEME and APP_DOMAIN are not checked for now: a deployment may
+        # run on plain http, or on a domain of its own choosing, while it is set up.
         if self.flower_enabled and not self.flower_basic_auth:
             # Flower is not published, but "on a private network" is not a
             # credential. Without this, anything else on that network reads

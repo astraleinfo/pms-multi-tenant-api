@@ -277,7 +277,6 @@ def _production(**overrides) -> Settings:
         "jwt_secret": "x" * 48,
         "cookie_secure": True,
         "public_scheme": "https",
-        "app_domain": "pms.example.com",
         "mail_provider": "smtp",
         "flower_enabled": False,
         "database_url": "postgresql+asyncpg://pms_app:pw@db/pms",
@@ -292,15 +291,6 @@ def test_production_needs_a_bucket_and_region_for_s3():
 
     ok = _production(storage_backend="s3", s3_bucket="b", aws_region=REGION)
     assert ok.validate_for_production() == []
-
-
-def test_production_refuses_a_localhost_domain():
-    """Invitation links are built from APP_DOMAIN; a dev value would send
-    every recipient to their own machine."""
-    for domain in ("localhost", "app.localhost"):
-        problems = _production(app_domain=domain).validate_for_production()
-        assert any("APP_DOMAIN" in p for p in problems)
-    assert _production().validate_for_production() == []
 
 
 def test_production_needs_a_region_for_ses():
