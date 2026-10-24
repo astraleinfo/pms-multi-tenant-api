@@ -60,6 +60,9 @@ def resolve_host(host: str | None) -> HostContext:
     if not hostname or _IPV4.match(hostname) or hostname == "[::1]":
         return HostContext("platform", None, hostname or settings.app_domain, port)
 
+    if hostname == settings.app_domain.strip().lower():
+        return HostContext("platform", None, hostname, port)
+
     labels = hostname.split(".")
 
     if labels[-1] == "localhost":

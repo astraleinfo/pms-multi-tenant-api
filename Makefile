@@ -12,11 +12,14 @@ install:  ## create the virtualenv and install everything
 	$(PIP) install -q --upgrade pip
 	$(PIP) install -q -e ".[dev]"
 
-db:  ## start PostgreSQL (docker) and create both roles
-	docker compose -f docker-compose.dev.yml up -d db
+# PostgreSQL and Redis run on the host, not in docker. These only check they
+# are up. First-time setup creates both roles and both databases:
+#   sudo -u postgres psql -f scripts/bootstrap_db.sql
+db:  ## check the local PostgreSQL is accepting connections
+	@pg_isready -q -h localhost -p 5432 || { echo "PostgreSQL is not running on localhost:5432 — sudo service postgresql start"; exit 1; }
 
-redis:  ## start Redis (docker) — the Celery broker and the outbox nudge
-	docker compose -f docker-compose.dev.yml up -d redis
+redis:  ## check the local Redis — the Celery broker and the outbox nudge
+	@redis-cli -p 6379 ping >/dev/null 2>&1 || { echo "Redis is not running on localhost:6379 — sudo service redis-server start"; exit 1; }
 
 migrate:  ## apply migrations
 	$(VENV)/bin/alembic upgrade head
@@ -24,11 +27,11 @@ migrate:  ## apply migrations
 seed:  ## load the demo clinics
 	$(PY) scripts/seed.py
 
-run:  ## serve on http://localhost:8000
+run: db redis  ## serve on http://localhost:8000
 	$(VENV)/bin/uvicorn app.main:app --reload --port 8000
 
 # The three background processes, for when the API is run on the host rather
-# than in a container. `docker compose -f docker-compose.dev.yml up` starts all three itself.
+# than in a container. `docker compose up` (docker-compose.yml) starts all three itself.
 worker: redis  ## run a Celery worker (-E feeds the monitor)
 	$(VENV)/bin/celery -A app.worker.celery_app worker -Q pms --loglevel=INFO -E
 

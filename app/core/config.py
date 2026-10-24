@@ -120,7 +120,7 @@ class Settings(BaseSettings):
     # Where queued patient messages wait for the worker. The database row is
     # the source of truth; Redis only carries the wake-up, so losing Redis
     # delays delivery but never loses a message.
-    redis_url: str = "redis://localhost:6380/0"
+    redis_url: str = "redis://localhost:6379/0"
     outbox_stream: str = "pms:outbox"
     # A send is retried this many times before the message is parked as failed.
     message_max_attempts: int = 5

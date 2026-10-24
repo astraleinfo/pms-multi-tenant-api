@@ -18,11 +18,11 @@ sys.path.insert(0, str(ROOT))
 
 # Point the whole application at the test database before anything imports it.
 TEST_DB = os.environ.get(
-    "TEST_DATABASE_URL", "postgresql+asyncpg://pms_app:app-password-change-me@localhost:55432/pms_test"
+    "TEST_DATABASE_URL", "postgresql+asyncpg://pms_app:app-password-change-me@localhost:5432/pms_test"
 )
 TEST_MIGRATION_DB = os.environ.get(
     "TEST_MIGRATION_DATABASE_URL",
-    "postgresql+asyncpg://pms_owner:owner-password-change-me@localhost:55432/pms_test",
+    "postgresql+asyncpg://pms_owner:owner-password-change-me@localhost:5432/pms_test",
 )
 os.environ.update(
     {
