@@ -156,3 +156,19 @@ async def test_the_socket_is_gated_on_the_same_permission_as_the_queue(client):
     )
     async with socket(response.json()["access_token"]) as ws:
         assert (await ws.receive_json())["type"] == "hello"
+
+
+async def test_a_support_session_can_watch_the_queue(console, northgate):
+    """A support session passes every clinic route, so it passes the socket too."""
+    opened = await console.post(f"/v1/platform/tenants/{northgate.tenant_id}/impersonate")
+    async with socket(opened.json()["access_token"]) as ws:
+        hello = await ws.receive_json()
+    assert hello["type"] == "hello"
+    assert hello["tenant"] == northgate.tenant_id
+
+
+async def test_a_console_token_is_not_a_clinic_session(console):
+    with pytest.raises(SocketClosed) as exc:
+        async with socket(console.token):
+            pass
+    assert exc.value.code == 4401

@@ -28,7 +28,7 @@ from app.core.security import TokenError, decode_access_token
 from app.core.tenancy import HostContext
 from app.db.session import set_tenant
 from app.models.enums import AccountStatus, TenantStatus
-from app.models.identity import User
+from app.models.identity import PlatformUser, User
 from app.services import tenants as tenant_service
 
 router = APIRouter(tags=["realtime"])
@@ -56,7 +56,13 @@ async def queue_socket(
         await websocket.close(code=WS_UNAUTHORISED, reason="Sign in to continue.")
         return
 
-    if claims.subject_kind != "user" or claims.tenant_id is None:
+    # The same token shapes `tenant_context` accepts: a clinic session, or a
+    # support session opened from the console. Never a scoped token.
+    if (
+        claims.scope
+        or claims.tenant_id is None
+        or (claims.subject_kind == "platform" and not claims.impersonated)
+    ):
         await websocket.close(code=WS_UNAUTHORISED, reason="Not a clinic session.")
         return
 
@@ -65,15 +71,38 @@ async def queue_socket(
         return
 
     tenant = await tenant_service.tenant_by_slug(session, host.slug)
-    if tenant is None or tenant.id != claims.tenant_id or tenant.status == TenantStatus.SUSPENDED:
+    if tenant is None or tenant.id != claims.tenant_id:
         await websocket.close(code=WS_UNAUTHORISED, reason="Wrong address for this session.")
+        return
+    if tenant.status == TenantStatus.SUSPENDED and not claims.impersonated:
+        await websocket.close(code=WS_UNAUTHORISED, reason="This clinic is suspended.")
         return
 
     await set_tenant(session, tenant.id)
-    user = await session.get(User, claims.subject_id)
-    if user is None or user.tenant_id != tenant.id or user.status != AccountStatus.ACTIVE:
-        await websocket.close(code=WS_UNAUTHORISED, reason="Sign in to continue.")
-        return
+    if claims.impersonated:
+        # Staff and the support account they act through are both re-checked,
+        # as on every request.
+        staff = await session.get(PlatformUser, claims.subject_id)
+        user = await session.get(User, claims.acting_user_id)
+        if (
+            staff is None
+            or staff.status != AccountStatus.ACTIVE
+            or user is None
+            or user.tenant_id != tenant.id
+            or not user.is_support
+        ):
+            await websocket.close(code=WS_UNAUTHORISED, reason="Sign in to continue.")
+            return
+    else:
+        user = await session.get(User, claims.subject_id)
+        if (
+            user is None
+            or user.tenant_id != tenant.id
+            or user.status != AccountStatus.ACTIVE
+            or user.is_support
+        ):
+            await websocket.close(code=WS_UNAUTHORISED, reason="Sign in to continue.")
+            return
 
     if not role_has(user.role, Permission.QUEUE_READ):
         await websocket.close(code=WS_FORBIDDEN, reason="Your role does not allow that.")
