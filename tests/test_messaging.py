@@ -353,18 +353,17 @@ async def test_an_appointment_can_be_moved_twice(northgate):
 async def test_moving_onto_a_taken_slot_is_refused(northgate):
     await _enable_console(northgate)
     doctors = (await northgate.get("/v1/users/doctors")).json()
-    patient = await _patient_with_phone(northgate)
-    common = {
-        "patient_id": patient["id"], "doctor_id": doctors[0]["id"],
-        "duration_min": 20, "created_via": "front_desk",
-    }
+    # two patients: one patient is only ever booked once a day
+    first_patient, second_patient = (await patients_of(northgate, limit=2))[:2]
+    common = {"doctor_id": doctors[0]["id"], "duration_min": 20, "created_via": "front_desk"}
     await northgate.post(
-        "/v1/appointments", json={**common, "date": "2028-03-03", "time": "09:00", "reason": "first"}
+        "/v1/appointments",
+        json={**common, "patient_id": first_patient["id"], "date": "2028-03-03", "time": "09:00", "reason": "first"},
     )
     second = (
         await northgate.post(
             "/v1/appointments",
-            json={**common, "date": "2028-03-03", "time": "15:00", "reason": "second"},
+            json={**common, "patient_id": second_patient["id"], "date": "2028-03-03", "time": "15:00", "reason": "second"},
         )
     ).json()
 

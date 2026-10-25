@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import date, timedelta
+
 from tests.conftest import patients_of, sign_in
 
 #: Every clinic has every module, so every dashboard carries every panel.
@@ -10,6 +12,10 @@ ALL_PANELS = {"pharmacy", "lab", "inventory", "billing", "advanced_reports"}
 
 async def _doctor(signed) -> dict:
     return (await signed.get("/v1/users/doctors")).json()[0]
+
+
+async def _today(signed) -> date:
+    return date.fromisoformat((await signed.get("/v1/tenant")).json()["today"])
 
 
 async def test_register_book_check_in_consult_prescribe_dispense_bill(client, northgate):
@@ -32,10 +38,11 @@ async def test_register_book_check_in_consult_prescribe_dispense_bill(client, no
     assert patient["clinical_ext"]["bruxism"] is True
 
     # 3.5 — booking, with the availability check behind it.
+    day = (await _today(northgate) + timedelta(days=60)).isoformat()
     booking = {
         "patient_id": patient["id"],
         "doctor_id": doctor["id"],
-        "date": "2026-09-15",
+        "date": day,
         "time": "10:00",
         "duration_min": 30,
         "reason": "New patient assessment",
@@ -51,7 +58,7 @@ async def test_register_book_check_in_consult_prescribe_dispense_bill(client, no
             "/v1/appointments/availability",
             params={
                 "doctor_id": doctor["id"],
-                "date": "2026-09-15",
+                "date": day,
                 "time": "10:15",
                 "duration_min": 30,
             },
@@ -102,8 +109,9 @@ async def test_register_book_check_in_consult_prescribe_dispense_bill(client, no
     queue_after = (await northgate.get(f"/v1/queue/{entry['id']}")).json()
     assert queue_after["status"] == "completed"
 
-    frozen = await northgate.patch(f"/v1/encounters/{encounter['id']}", json={"notes": "changed"})
-    assert frozen.status_code == 409, "a signed consultation is not editable"
+    corrected = await northgate.patch(f"/v1/encounters/{encounter['id']}", json={"notes": "Enamel wear, LR quadrant."})
+    assert corrected.status_code == 200, "signed but not yet billed: still open to correction"
+    assert corrected.json()["status"] == "signed"
 
     # 3.8 — prescribing is core.
     items = (await northgate.get("/v1/inventory/items")).json()
@@ -146,6 +154,11 @@ async def test_register_book_check_in_consult_prescribe_dispense_bill(client, no
     assert dispensed["status"] == "dispensed"
     assert dispensed["items"][0]["dispensed_qty"] == 9
 
+    rewrite = await northgate.put(
+        f"/v1/encounters/{encounter['id']}/prescription", json={"items": [{"medicine": "Something else"}]}
+    )
+    assert rewrite.status_code == 409, "once stock has been handed over the prescription stays as it is"
+
     levels_after = {r["item_id"]: r["on_hand"] for r in (await northgate.get("/v1/inventory/levels")).json()}
     assert levels_after[stock_item["id"]] == levels_before[stock_item["id"]] - 9
 
@@ -179,6 +192,9 @@ async def test_register_book_check_in_consult_prescribe_dispense_bill(client, no
     assert invoice["status"] == "issued"
     assert invoice["totals"]["total"] == 46.8
 
+    issued = await northgate.patch(f"/v1/encounters/{encounter['id']}", json={"notes": "corrected after issue"})
+    assert issued.status_code == 200, "an unpaid bill leaves the consultation open"
+
     part = (
         await northgate.post(
             f"/v1/billing/invoices/{invoice['id']}/payments",
@@ -201,10 +217,57 @@ async def test_register_book_check_in_consult_prescribe_dispense_bill(client, no
     assert settled["status"] == "paid"
     assert settled["totals"]["balance"] == 0
 
+    frozen = await northgate.patch(f"/v1/encounters/{encounter['id']}", json={"notes": "changed"})
+    assert frozen.status_code == 409, "a paid consultation is not editable"
+
     # 3.13 — the history composition sees all of it, in one place.
     history = (await northgate.get(f"/v1/patients/{patient['id']}/history")).json()
     kinds = {event["kind"] for event in history}
     assert {"registration", "appointment", "queue", "encounter", "prescription", "invoice", "payment"} <= kinds
+
+
+async def test_an_appointment_cannot_be_booked_for_a_past_day(northgate):
+    doctor = await _doctor(northgate)
+    patient = (await patients_of(northgate))[4]
+    today = await _today(northgate)
+    booking = {"patient_id": patient["id"], "doctor_id": doctor["id"], "time": "11:00", "reason": "Past"}
+
+    past = await northgate.post("/v1/appointments", json={**booking, "date": (today - timedelta(days=1)).isoformat()})
+    assert past.status_code == 422
+
+    ahead = await northgate.post("/v1/appointments", json={**booking, "date": (today + timedelta(days=70)).isoformat()})
+    assert ahead.status_code == 201, ahead.text
+    moved_back = await northgate.patch(
+        f"/v1/appointments/{ahead.json()['id']}", json={"date": (today - timedelta(days=2)).isoformat()}
+    )
+    assert moved_back.status_code == 422
+
+
+async def test_a_patient_is_booked_once_a_day(northgate):
+    doctors = (await northgate.get("/v1/users/doctors")).json()
+    patient = (await patients_of(northgate))[5]
+    day = await _today(northgate) + timedelta(days=71)
+    booking = {"patient_id": patient["id"], "date": day.isoformat(), "reason": "Twice"}
+
+    first = await northgate.post("/v1/appointments", json={**booking, "doctor_id": doctors[0]["id"], "time": "09:00"})
+    assert first.status_code == 201, first.text
+
+    # another time, and another clinician, are still the same patient on the same day
+    again = await northgate.post("/v1/appointments", json={**booking, "doctor_id": doctors[-1]["id"], "time": "15:00"})
+    assert again.status_code == 409
+
+    other_day = await northgate.post(
+        "/v1/appointments",
+        json={**booking, "doctor_id": doctors[0]["id"], "time": "15:00", "date": (day + timedelta(days=1)).isoformat()},
+    )
+    assert other_day.status_code == 201
+    onto_the_first = await northgate.patch(f"/v1/appointments/{other_day.json()['id']}", json={"date": day.isoformat()})
+    assert onto_the_first.status_code == 409
+
+    # a cancelled booking does not hold the day
+    await northgate.patch(f"/v1/appointments/{first.json()['id']}/status", json={"status": "cancelled"})
+    rebooked = await northgate.post("/v1/appointments", json={**booking, "doctor_id": doctors[0]["id"], "time": "10:00"})
+    assert rebooked.status_code == 201, rebooked.text
 
 
 async def test_a_walk_in_needs_no_appointment(northgate):
@@ -265,6 +328,107 @@ async def test_the_queue_state_machine_refuses_impossible_moves(northgate):
 
     reopened = await northgate.patch(f"/v1/queue/{entry['id']}/status", json={"status": "waiting"})
     assert reopened.status_code == 409
+
+
+async def test_signing_closes_the_token_even_when_the_encounter_was_opened_without_it(northgate):
+    """A consultation started from "New encounter" or the patient record carries
+    no queue link. Signing it must still release the patient's token, or they sit
+    "in consultation" after being seen and billed."""
+    doctor = await _doctor(northgate)
+    patients = await patients_of(northgate)
+
+    async def in_the_room(patient: dict) -> dict:
+        entry = (
+            await northgate.post(
+                "/v1/queue/walkin",
+                json={"patient_id": patient["id"], "doctor_id": doctor["id"], "reason": "Unlinked"},
+            )
+        ).json()
+        await northgate.patch(f"/v1/queue/{entry['id']}/status", json={"status": "called"})
+        await northgate.patch(f"/v1/queue/{entry['id']}/status", json={"status": "in_consultation"})
+        return entry
+
+    # signed on creation
+    entry = await in_the_room(patients[2])
+    encounter = (
+        await northgate.post(
+            "/v1/encounters",
+            json={"patient_id": patients[2]["id"], "chief_complaint": "Unlinked", "sign": True},
+        )
+    ).json()
+    assert encounter["queue_entry_id"] == entry["id"]
+    assert (await northgate.get(f"/v1/queue/{entry['id']}")).json()["status"] == "completed"
+
+    # saved as a draft, signed afterwards
+    entry = await in_the_room(patients[3])
+    draft = (
+        await northgate.post(
+            "/v1/encounters",
+            json={"patient_id": patients[3]["id"], "chief_complaint": "Unlinked draft"},
+        )
+    ).json()
+    assert (await northgate.get(f"/v1/queue/{entry['id']}")).json()["status"] == "in_consultation"
+    signed = (await northgate.patch(f"/v1/encounters/{draft['id']}", json={"sign": True})).json()
+    assert signed["status"] == "signed"
+    assert (await northgate.get(f"/v1/queue/{entry['id']}")).json()["status"] == "completed"
+
+
+async def test_a_consultation_and_its_prescription_stay_editable_until_billed(northgate):
+    patient = (await patients_of(northgate))[6]
+    encounter = (
+        await northgate.post(
+            "/v1/encounters",
+            json={"patient_id": patient["id"], "chief_complaint": "Editable", "sign": True},
+        )
+    ).json()
+    url = f"/v1/encounters/{encounter['id']}"
+    line = {"medicine": "Typed by hand", "strength": "5 mg", "qty": 2}
+
+    # no prescription yet: replacing creates one
+    rx = (await northgate.put(f"{url}/prescription", json={"items": [line]})).json()
+    assert [i["medicine"] for i in rx["items"]] == ["Typed by hand"]
+
+    # rewriting it keeps one prescription, with the new lines
+    rx = (
+        await northgate.put(
+            f"{url}/prescription", json={"items": [{**line, "medicine": "Corrected"}, {**line, "medicine": "Added"}]}
+        )
+    ).json()
+    assert [i["medicine"] for i in rx["items"]] == ["Corrected", "Added"]
+    listed = (await northgate.get("/v1/prescriptions", params={"patient_id": patient["id"]})).json()
+    assert [p["id"] for p in listed["items"] if p["encounter_id"] == encounter["id"]] == [rx["id"]]
+
+    assert (await northgate.patch(url, json={"diagnosis": "Revised"})).json()["diagnosis"] == "Revised"
+
+    # a draft invoice has not gone to the patient
+    draft = (
+        await northgate.post(
+            "/v1/billing/invoices",
+            json={
+                "patient_id": patient["id"],
+                "line_items": [{"description": "Consultation", "source": "consultation", "qty": 1,
+                                "unit_price": 10, "ref_id": encounter["id"]}],
+                "issue": False,
+            },
+        )
+    ).json()
+    assert (await northgate.patch(url, json={"notes": "still open"})).status_code == 200
+
+    # issued from the billing desk, without naming the encounter: still open until paid
+    await northgate.post(f"/v1/billing/invoices/{draft['id']}/issue")
+    assert (await northgate.patch(url, json={"notes": "issued, unpaid"})).status_code == 200
+
+    # paid: now it is locked
+    await northgate.post(f"/v1/billing/invoices/{draft['id']}/payments", json={"amount": 10, "method": "cash"})
+    assert (await northgate.patch(url, json={"notes": "too late"})).status_code == 409
+    assert (await northgate.put(f"{url}/prescription", json={"items": [line]})).status_code == 409
+
+    # voiding the paid bill opens it again
+    await northgate.post(f"/v1/billing/invoices/{draft['id']}/void")
+    assert (await northgate.patch(url, json={"notes": "reopened"})).status_code == 200
+
+    # taking every line off removes the prescription
+    assert (await northgate.put(f"{url}/prescription", json={"items": []})).json() is None
 
 
 async def test_lab_results_are_withheld_until_verified(client, northgate):

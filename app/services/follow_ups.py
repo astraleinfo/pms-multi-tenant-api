@@ -297,6 +297,7 @@ async def record_call(
             AppointmentRescheduleIn(
                 date=slot.date, time=slot.time, doctor_id=slot.doctor_id, duration_min=slot.duration_min
             ),
+            today=today,
         )
         # The patient chose this slot on the phone, so it is confirmed as booked.
         appointment.status = AppointmentStatus.CONFIRMED

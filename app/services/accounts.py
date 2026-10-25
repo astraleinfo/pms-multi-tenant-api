@@ -374,12 +374,71 @@ async def raise_invoice(
     return invoice
 
 
+async def raise_final_invoice(
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    patient_id: uuid.UUID,
+    *,
+    today: date,
+) -> Invoice | None:
+    """Everything this patient still owes for, on one bill.
+
+    What a counter was paid for at its window stays on that counter's paid bill
+    and is not asked for again. Everything else — the consultation, medicine or
+    tests put "on the bill", and any counter bill issued but never paid — goes
+    onto this one, so the patient settles the visit once. A bill already part
+    paid is left as it is; its balance is still owed and is collected with this.
+    """
+    await patient_service.get_patient(session, tenant_id, patient_id)
+
+    # The unpaid bills' lines are carried over exactly as they were charged;
+    # creating the new bill then withdraws them (`create_invoice` folds any
+    # unpaid bill it fully covers).
+    carried = [
+        InvoiceLineItemIn(
+            description=line.description,
+            source=line.source,
+            qty=line.qty,
+            unit_price=float(line.unit_price),
+            tax_pct=float(line.tax_pct),
+            ref_id=str(line.ref_id),
+        )
+        for invoice in await billing_service.foldable_invoices(session, tenant_id, patient_id)
+        for line in sorted(invoice.line_items, key=lambda line: line.position)
+    ]
+    fresh = [
+        InvoiceLineItemIn(
+            description=charge.description,
+            source=charge.source,
+            qty=charge.qty,
+            unit_price=charge.unit_price,
+            tax_pct=charge.tax_pct,
+            ref_id=charge.ref_id,
+        )
+        for charge in await unbilled_charges(session, tenant_id, patient_id)
+    ]
+    if not carried and not fresh:
+        return None
+    return await billing_service.create_invoice(
+        session,
+        tenant_id,
+        InvoiceIn(patient_id=str(patient_id), issue=True, line_items=fresh + carried),
+        today=today,
+    )
+
+
+async def outstanding(session: AsyncSession, tenant_id: uuid.UUID, patient_id: uuid.UUID) -> float:
+    """What is owed on bills already issued, across every counter."""
+    invoices = await _unpaid_invoices(session, tenant_id, patient_id)
+    return round(sum(billing_service.totals_for(invoice)["balance"] for invoice in invoices), 2)
+
+
 async def settle(
     session: AsyncSession,
     tenant_id: uuid.UUID,
     patient_id: uuid.UUID,
     *,
-    department: BillingDepartment,
+    department: BillingDepartment | None,
     amount: float,
     method: PaymentMethod,
     reference: str | None,
@@ -388,7 +447,8 @@ async def settle(
     """Take one payment against one counter, oldest invoice first.
 
     A patient hands over one amount at one window; which invoices it clears is
-    the ledger's problem, not theirs. Anything beyond what that counter is owed
+    the ledger's problem, not theirs. No department means every counter — the
+    final settlement at the desk. Anything beyond what that counter is owed
     is refused rather than left sitting as a credit — an overpayment is nearly
     always a typed figure, and a credit nobody can see is worse than a refusal.
     """

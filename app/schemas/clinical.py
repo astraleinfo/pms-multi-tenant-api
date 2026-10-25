@@ -502,6 +502,13 @@ class PrescriptionIn(InputModel):
     items: list[PrescriptionItemIn] = Field(min_length=1, max_length=50)
 
 
+class PrescriptionReplaceIn(InputModel):
+    """The whole of a consultation's prescription, as it should now read.
+    Empty takes the prescription away."""
+
+    items: list[PrescriptionItemIn] = Field(default_factory=list, max_length=50)
+
+
 class DispenseLineIn(InputModel):
     item_id: IdStr  # the prescription item, not the stock item
     qty: int = Field(ge=1, le=10_000)

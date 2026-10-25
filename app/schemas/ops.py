@@ -422,6 +422,24 @@ class CounterPaymentIn(InputModel):
     reference: str | None = Field(default=None, max_length=120)
 
 
+class FinalSettlementIn(InputModel):
+    """Close the visit at the desk: one bill for everything still owing, and,
+    unless they will pay later, one payment for all of it."""
+
+    collect: bool = True
+    method: PaymentMethod = PaymentMethod.CASH
+    reference: str | None = Field(default=None, max_length=120)
+
+
+class FinalSettlementOut(ApiModel):
+    #: the one bill raised now, if anything was left to bill
+    invoice: InvoiceOut | None
+    #: every bill a counter had issued and nobody paid, now folded into it
+    folded: list[str]
+    paid: float
+    remaining: float
+
+
 class CounterPaymentOut(ApiModel):
     """What that payment did — which invoices it touched, and what is left."""
 
@@ -445,6 +463,8 @@ class SuggestedLineOut(ApiModel):
     unit_price: float
     tax_pct: float
     priced: bool = True
+    #: what the line bills for — the encounter, lab order or prescription item
+    ref_id: str | None = None
 
 
 class AlreadyBilledLineOut(ApiModel):

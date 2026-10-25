@@ -14,11 +14,24 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import Conflict, NotFound
-from app.models.clinical import Encounter, Patient, Prescription, PrescriptionItem, QueueEntry
-from app.models.enums import DispenseStatus, EncounterStatus, FieldEntity, QueueStatus
-from app.models.ops import InventoryItem
+from app.models.clinical import (
+    Encounter,
+    LabOrder,
+    Patient,
+    Prescription,
+    PrescriptionItem,
+    QueueEntry,
+)
+from app.models.enums import DispenseStatus, EncounterStatus, FieldEntity, InvoiceStatus, QueueStatus
+from app.models.ops import InventoryItem, Invoice, InvoiceLineItem
 from app.models.tenancy import Tenant
-from app.schemas.clinical import EncounterIn, EncounterPatch, PrescriptionIn
+from app.schemas.clinical import (
+    EncounterIn,
+    EncounterPatch,
+    PrescriptionIn,
+    PrescriptionItemIn,
+    PrescriptionReplaceIn,
+)
 from app.services import paging
 from app.services import tenants as tenant_service
 
@@ -87,6 +100,38 @@ async def get_encounter(session: AsyncSession, tenant_id: uuid.UUID, encounter_i
     return row
 
 
+async def _close_queue_entry(session: AsyncSession, encounter: Encounter) -> None:
+    """Signing ends the visit, so the patient's token leaves the room.
+
+    An encounter opened without its token (from "New encounter" or the
+    patient record rather than from the queue) is matched to the patient's
+    token still being seen that day; otherwise it would sit "in consultation"
+    long after the visit was signed and billed.
+    """
+    entry: QueueEntry | None = None
+    if encounter.queue_entry_id:
+        entry = await session.get(QueueEntry, encounter.queue_entry_id)
+    else:
+        entry = (
+            await session.execute(
+                select(QueueEntry)
+                .where(
+                    QueueEntry.tenant_id == encounter.tenant_id,
+                    QueueEntry.patient_id == encounter.patient_id,
+                    QueueEntry.queue_date == encounter.date,
+                    QueueEntry.status.in_((QueueStatus.CALLED, QueueStatus.IN_CONSULTATION)),
+                )
+                .order_by(QueueEntry.token_no)
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if entry is not None:
+            encounter.queue_entry_id = entry.id
+    if entry is not None and entry.status != QueueStatus.COMPLETED:
+        entry.status = QueueStatus.COMPLETED
+        entry.completed_at = _now()
+
+
 async def create_encounter(
     session: AsyncSession,
     tenant: Tenant,
@@ -147,20 +192,65 @@ async def create_encounter(
 
     if payload.sign:
         patient.last_visit = encounter.date
-        if queue_entry is not None and queue_entry.status != QueueStatus.COMPLETED:
-            queue_entry.status = QueueStatus.COMPLETED
-            queue_entry.completed_at = _now()
+        await _close_queue_entry(session, encounter)
 
     await session.flush()
     return encounter
+
+
+#: Only a settled invoice closes the visit. Issued or part-paid, the bill can
+#: still be voided and raised again to match a corrected consultation.
+BILLED_STATUSES = (InvoiceStatus.PAID,)
+
+
+async def billed_on(session: AsyncSession, tenant_id: uuid.UUID, encounter: Encounter) -> str | None:
+    """The number of a paid invoice that bills this visit, if one does.
+
+    Until then the consultation and its prescription stay open to correction;
+    after it, they are what the patient was charged for and are not rewritten.
+    An invoice bills the visit if it was raised from it, or if any of its lines
+    settles the consultation, one of its prescription lines or one of its lab
+    orders — the billing desk raises invoices without naming the encounter.
+    """
+    rx_items = (
+        select(PrescriptionItem.id)
+        .join(Prescription, Prescription.id == PrescriptionItem.prescription_id)
+        .where(Prescription.tenant_id == tenant_id, Prescription.encounter_id == encounter.id)
+    )
+    labs = select(LabOrder.id).where(LabOrder.tenant_id == tenant_id, LabOrder.encounter_id == encounter.id)
+    settles = select(InvoiceLineItem.invoice_id).where(
+        InvoiceLineItem.tenant_id == tenant_id,
+        or_(
+            InvoiceLineItem.ref_id == encounter.id,
+            InvoiceLineItem.ref_id.in_(rx_items),
+            InvoiceLineItem.ref_id.in_(labs),
+        ),
+    )
+    return (
+        await session.execute(
+            select(Invoice.number)
+            .where(
+                Invoice.tenant_id == tenant_id,
+                Invoice.status.in_(BILLED_STATUSES),
+                or_(Invoice.encounter_id == encounter.id, Invoice.id.in_(settles)),
+            )
+            .order_by(Invoice.issued_at, Invoice.number)
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
+async def _require_unbilled(session: AsyncSession, tenant_id: uuid.UUID, encounter: Encounter) -> None:
+    number = await billed_on(session, tenant_id, encounter)
+    if number is not None:
+        raise Conflict(f"Invoice {number} for this consultation has been paid, so it can no longer be changed.")
 
 
 async def update_encounter(
     session: AsyncSession, tenant: Tenant, encounter_id: uuid.UUID, payload: EncounterPatch
 ) -> Encounter:
     encounter = await get_encounter(session, tenant.id, encounter_id)
-    if encounter.status == EncounterStatus.SIGNED:
-        raise Conflict("A signed consultation cannot be edited.")
+    await _require_unbilled(session, tenant.id, encounter)
 
     data = payload.model_dump(exclude_unset=True)
     sign = data.pop("sign", None)
@@ -177,17 +267,14 @@ async def update_encounter(
     for key, value in data.items():
         setattr(encounter, key, value)
 
-    if sign:
+    # Correcting a signed consultation keeps the signature it already has.
+    if sign and encounter.status != EncounterStatus.SIGNED:
         encounter.status = EncounterStatus.SIGNED
         encounter.signed_at = _now()
         patient = await session.get(Patient, encounter.patient_id)
         if patient is not None:
             patient.last_visit = encounter.date
-        if encounter.queue_entry_id:
-            entry = await session.get(QueueEntry, encounter.queue_entry_id)
-            if entry is not None and entry.status != QueueStatus.COMPLETED:
-                entry.status = QueueStatus.COMPLETED
-                entry.completed_at = _now()
+        await _close_queue_entry(session, encounter)
 
     await session.flush()
     return encounter
@@ -285,6 +372,7 @@ async def create_prescription(
     doctor_id: uuid.UUID,
 ) -> Prescription:
     encounter = await get_encounter(session, tenant_id, encounter_id)
+    await _require_unbilled(session, tenant_id, encounter)
 
     prescription = Prescription(
         tenant_id=tenant_id,
@@ -296,8 +384,62 @@ async def create_prescription(
     )
     session.add(prescription)
     await session.flush()
+    await _add_items(session, tenant_id, prescription, payload.items)
 
-    for position, item in enumerate(payload.items):
+    await session.flush()
+    await session.refresh(prescription, ["items", "patient"])
+    return prescription
+
+
+async def replace_prescription(
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    encounter_id: uuid.UUID,
+    payload: PrescriptionReplaceIn,
+    *,
+    doctor_id: uuid.UUID,
+) -> Prescription | None:
+    """Rewrite what this consultation prescribes, before it is billed.
+
+    Creates the prescription if there was none, and removes it if every line
+    has been taken off. Once the pharmacy has handed anything over, the stock
+    has moved and the prescription is a record of that, so it stays as it is.
+    """
+    encounter = await get_encounter(session, tenant_id, encounter_id)
+    await _require_unbilled(session, tenant_id, encounter)
+
+    existing = await get_prescription_for_encounter(session, tenant_id, encounter.id)
+    if existing is None:
+        if not payload.items:
+            return None
+        return await create_prescription(
+            session, tenant_id, encounter.id, PrescriptionIn(items=payload.items), doctor_id=doctor_id
+        )
+
+    if any(item.dispensed_qty > 0 for item in existing.items):
+        raise Conflict("The pharmacy has already dispensed from this prescription, so it can no longer be changed.")
+
+    if not payload.items:
+        await session.delete(existing)
+        await session.flush()
+        return None
+
+    for item in list(existing.items):
+        await session.delete(item)
+    await session.flush()
+    session.expire(existing, ["items"])
+    await _add_items(session, tenant_id, existing, payload.items)
+    existing.status = DispenseStatus.PENDING
+
+    await session.flush()
+    await session.refresh(existing, ["items", "patient"])
+    return existing
+
+
+async def _add_items(
+    session: AsyncSession, tenant_id: uuid.UUID, prescription: Prescription, items: list[PrescriptionItemIn]
+) -> None:
+    for position, item in enumerate(items):
         stock_item_id: uuid.UUID | None = None
         if item.item_id:
             stock = (
@@ -329,7 +471,3 @@ async def create_prescription(
                 status=DispenseStatus.PENDING,
             )
         )
-
-    await session.flush()
-    await session.refresh(prescription, ["items", "patient"])
-    return prescription

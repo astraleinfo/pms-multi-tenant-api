@@ -215,6 +215,15 @@ async def create_invoice(
             raise Conflict("That consultation belongs to a different patient.")
         encounter_id = encounter.id
 
+    # One visit, one bill: an unpaid counter bill for the same items is
+    # withdrawn in favour of this one rather than left beside it.
+    await fold_unpaid(
+        session,
+        tenant_id,
+        patient.id,
+        ref_ids={uuid.UUID(line.ref_id) for line in payload.line_items if line.ref_id},
+    )
+
     config = await tenant_service.get_config(session, tenant_id)
     number = await tenant_service.next_invoice_number(session, tenant_id)
 
@@ -319,16 +328,86 @@ async def add_payment(
     return invoice
 
 
+def is_foldable(invoice: Invoice) -> bool:
+    """An issued bill nobody has paid anything towards, every line of which
+    points at what it bills. Such a bill can be withdrawn and its lines put on
+    the patient's one final bill instead — nothing is lost, and nobody is asked
+    to pay at two windows for one visit. A bill with any money against it is
+    history and is never touched."""
+    return (
+        invoice.status == InvoiceStatus.ISSUED
+        and not invoice.payments
+        and bool(invoice.line_items)
+        and all(line.ref_id is not None for line in invoice.line_items)
+    )
+
+
+async def foldable_invoices(
+    session: AsyncSession, tenant_id: uuid.UUID, patient_id: uuid.UUID
+) -> list[Invoice]:
+    rows = (
+        await session.execute(
+            select(Invoice).where(
+                Invoice.tenant_id == tenant_id,
+                Invoice.patient_id == patient_id,
+                Invoice.status == InvoiceStatus.ISSUED,
+            )
+        )
+    ).scalars()
+    return [invoice for invoice in rows if is_foldable(invoice)]
+
+
+async def fold_unpaid(
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    patient_id: uuid.UUID,
+    *,
+    ref_ids: set[uuid.UUID] | None = None,
+) -> list[Invoice]:
+    """Void the unpaid bills a new one is about to re-bill.
+
+    `ref_ids` is what the new bill covers; a foldable bill is voided only when
+    the new one covers everything on it, so no charge falls between the two.
+    Left out, every foldable bill is voided — the final settlement re-bills
+    whatever they held. Returns what was voided.
+    """
+    folded: list[Invoice] = []
+    for invoice in await foldable_invoices(session, tenant_id, patient_id):
+        refs = {line.ref_id for line in invoice.line_items}
+        if ref_ids is not None:
+            if not refs & ref_ids:
+                continue
+            if not refs <= ref_ids:
+                raise Conflict(
+                    f"Invoice {invoice.number} also bills items that are not on this one. "
+                    "Add them too, or void that invoice first."
+                )
+        invoice.status = InvoiceStatus.VOID
+        invoice.voided_at = _now()
+        folded.append(invoice)
+    if folded:
+        await session.flush()
+    return folded
+
+
 async def billed_ref_lines(
-    session: AsyncSession, tenant_id: uuid.UUID, source: LineItemSource, ref_ids: list[uuid.UUID]
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    source: LineItemSource,
+    ref_ids: list[uuid.UUID],
+    *,
+    ignore_invoice_ids: set[uuid.UUID] | None = None,
 ) -> dict[uuid.UUID, list[dict]]:
     """Every non-void invoice line that already bills each ref_id — which
     invoice it's on, that invoice's status, and how much of the ref it
     accounts for. Void invoices do not count: voiding one is how a mistaken
-    charge is undone, and what it undoes is exactly this."""
+    charge is undone, and what it undoes is exactly this.
+
+    `ignore_invoice_ids` leaves out bills that are about to be folded into a
+    new one, so what they hold is offered again rather than reported billed."""
     if not ref_ids:
         return {}
-    rows = await session.execute(
+    stmt = (
         select(InvoiceLineItem, Invoice)
         .join(Invoice, Invoice.id == InvoiceLineItem.invoice_id)
         .where(
@@ -339,6 +418,9 @@ async def billed_ref_lines(
         )
         .order_by(Invoice.issued_at, Invoice.number)
     )
+    if ignore_invoice_ids:
+        stmt = stmt.where(Invoice.id.notin_(ignore_invoice_ids))
+    rows = await session.execute(stmt)
     out: dict[uuid.UUID, list[dict]] = {}
     for line, invoice in rows.all():
         out.setdefault(line.ref_id, []).append(
@@ -366,12 +448,21 @@ async def suggest_lines(
     default_tax = float(config.tax_pct)
     lines: list[dict] = []
     already_billed: list[dict] = []
+    # A counter bill nobody has paid is offered again: raising this one folds
+    # it in, so the patient pays for the visit once.
+    unpaid = {
+        invoice.id
+        for invoice in await foldable_invoices(session, tenant_id, encounter.patient_id)
+    }
 
-    def _line(description, source, qty, unit_price, tax_pct, priced) -> dict:
+    def _line(description, source, qty, unit_price, tax_pct, priced, ref_id) -> dict:
+        # `ref_id` is what the line bills for. Sent back on the invoice, it is
+        # what marks the consultation, test or medicine as billed.
         return {
             "description": description, "source": source.value,
             "department": DEPARTMENT_OF_SOURCE[source].value, "qty": qty,
             "unit_price": unit_price, "tax_pct": tax_pct, "priced": priced,
+            "ref_id": str(ref_id),
         }
 
     def _already(description, source, qty, unit_price, tax_pct, invoices) -> dict:
@@ -386,7 +477,7 @@ async def suggest_lines(
         await pricing_service.resolve_consultation_price(session, tenant_id, encounter.doctor_id)
     )
     consultation_billed = await billed_ref_lines(
-        session, tenant_id, LineItemSource.CONSULTATION, [encounter.id]
+        session, tenant_id, LineItemSource.CONSULTATION, [encounter.id], ignore_invoice_ids=unpaid
     )
     if encounter.id in consultation_billed:
         already_billed.append(_already(
@@ -401,6 +492,7 @@ async def suggest_lines(
             float(consultation_price),
             float(consultation_tax),
             consultation_priced,
+            encounter.id,
         ))
 
     # -- lab orders: one charge each, either billed or not -------------------
@@ -410,7 +502,7 @@ async def suggest_lines(
         )
     ).scalars())
     lab_billed = await billed_ref_lines(
-        session, tenant_id, LineItemSource.LAB, [order.id for order in orders]
+        session, tenant_id, LineItemSource.LAB, [order.id for order in orders], ignore_invoice_ids=unpaid
     )
     for order in orders:
         tariff = await pricing_service.price_for(
@@ -424,7 +516,9 @@ async def suggest_lines(
                 _already(description, LineItemSource.LAB, 1, unit_price, tax_pct, lab_billed[order.id])
             )
         else:
-            lines.append(_line(description, LineItemSource.LAB, 1, unit_price, tax_pct, tariff is not None))
+            lines.append(
+                _line(description, LineItemSource.LAB, 1, unit_price, tax_pct, tariff is not None, order.id)
+            )
 
     # -- pharmacy: partial billing is normal, so split by outstanding qty ----
     prescriptions = (
@@ -436,7 +530,11 @@ async def suggest_lines(
     ).scalars()
     dispensed_items = [item for rx in prescriptions for item in rx.items if item.dispensed_qty > 0]
     pharmacy_billed = await billed_ref_lines(
-        session, tenant_id, LineItemSource.PHARMACY, [item.id for item in dispensed_items]
+        session,
+        tenant_id,
+        LineItemSource.PHARMACY,
+        [item.id for item in dispensed_items],
+        ignore_invoice_ids=unpaid,
     )
     for item in dispensed_items:
         unit_price = 0.0
@@ -460,7 +558,9 @@ async def suggest_lines(
             )
         if outstanding > 0:
             lines.append(
-                _line(description, LineItemSource.PHARMACY, outstanding, unit_price, default_tax, priced)
+                _line(
+                    description, LineItemSource.PHARMACY, outstanding, unit_price, default_tax, priced, item.id
+                )
             )
 
     return {"lines": lines, "already_billed": already_billed}

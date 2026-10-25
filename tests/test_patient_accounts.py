@@ -644,3 +644,86 @@ async def test_every_clinic_can_read_its_own_patients_accounts(rowan):
     patient = (await rowan.get("/v1/patients", params={"limit": 1})).json()["items"][0]
     account = await rowan.get(f"/v1/billing/patients/{patient['id']}/account")
     assert account.status_code == 200, account.text
+
+
+# --- one visit, one bill -----------------------------------------------------
+
+
+async def test_the_final_settlement_is_one_bill_and_one_payment(northgate, northgate_doctor):
+    """The pharmacy put its medicine "on the bill" and the desk raised the
+    consultation separately — two unpaid bills for one visit. Settling folds
+    them into one, and one payment clears it."""
+    patient = await _new_patient(northgate, "One Bill")
+    doctor = await _doctor(northgate)
+    item = await _stocked_item(northgate)
+    await _dispensed(northgate_doctor, northgate, doctor, patient, item, qty=3)
+    url = f"/v1/billing/patients/{patient['id']}"
+
+    for department in ("pharmacy", "clinic"):
+        raised = await northgate.post(f"{url}/invoices", json={"department": department, "issue": True})
+        assert raised.status_code == 201, raised.text
+    before = (await northgate.get(f"{url}/account")).json()["total_due"]
+    assert before > 0
+
+    result = await northgate.post(f"{url}/final-settlement", json={"collect": True, "method": "cash"})
+    assert result.status_code == 200, result.text
+    body = result.json()
+    assert len(body["folded"]) == 2
+    assert body["invoice"]["status"] == "paid"
+    assert body["invoice"]["totals"]["total"] == before
+    assert {line["source"] for line in body["invoice"]["line_items"]} == {"pharmacy", "consultation"}
+    assert body["remaining"] == 0
+
+    invoices = (await northgate.get("/v1/billing/invoices", params={"limit": 0, "search": patient["mrn"]})).json()["items"]
+    live = [i for i in invoices if i["patient_id"] == patient["id"] and i["status"] != "void"]
+    assert [i["id"] for i in live] == [body["invoice"]["id"]], "one visit, one bill"
+
+
+async def test_what_the_window_was_paid_is_not_asked_for_again(northgate, northgate_doctor):
+    patient = await _new_patient(northgate, "Paid At Window")
+    doctor = await _doctor(northgate)
+    item = await _stocked_item(northgate)
+    await _dispensed(northgate_doctor, northgate, doctor, patient, item, qty=2)
+    url = f"/v1/billing/patients/{patient['id']}"
+
+    await northgate.post(f"{url}/invoices", json={"department": "pharmacy", "issue": True})
+    owed = (await northgate.get(f"{url}/account")).json()["departments"]["pharmacy"]["due"]
+    await northgate.post(f"{url}/payments", json={"department": "pharmacy", "amount": owed, "method": "cash"})
+
+    body = (await northgate.post(f"{url}/final-settlement", json={"collect": False})).json()
+    assert body["folded"] == []
+    assert {line["source"] for line in body["invoice"]["line_items"]} == {"consultation"}
+    assert body["invoice"]["status"] == "issued", "pay later leaves it owing"
+    assert body["remaining"] == body["invoice"]["totals"]["total"]
+
+
+async def test_composing_the_visit_bill_folds_an_unpaid_counter_bill(northgate, northgate_doctor):
+    patient = await _new_patient(northgate, "Composer Folds")
+    doctor = await _doctor(northgate)
+    item = await _stocked_item(northgate)
+    visit = await _dispensed(northgate_doctor, northgate, doctor, patient, item, qty=2)
+    url = f"/v1/billing/patients/{patient['id']}"
+    pharmacy_bill = (await northgate.post(f"{url}/invoices", json={"department": "pharmacy", "issue": True})).json()
+
+    suggested = (
+        await northgate.get("/v1/billing/invoices/suggestions", params={"encounter_id": visit["encounter"]["id"]})
+    ).json()
+    assert {line["source"] for line in suggested["lines"]} == {"consultation", "pharmacy"}, (
+        "an unpaid counter bill is offered again, to be folded in"
+    )
+
+    composed = await northgate.post(
+        "/v1/billing/invoices",
+        json={
+            "patient_id": patient["id"],
+            "encounter_id": visit["encounter"]["id"],
+            "issue": True,
+            "line_items": [
+                {**{k: line[k] for k in ("description", "source", "qty", "unit_price", "tax_pct")},
+                 "ref_id": line.get("ref_id")}
+                for line in suggested["lines"]
+            ],
+        },
+    )
+    assert composed.status_code == 201, composed.text
+    assert (await northgate.get(f"/v1/billing/invoices/{pharmacy_bill['id']}")).json()["status"] == "void"

@@ -31,6 +31,8 @@ from app.schemas.ops import (
     CounterPaymentIn,
     CounterPaymentOut,
     DepartmentAccountOut,
+    FinalSettlementIn,
+    FinalSettlementOut,
     ImportJobOut,
     InventoryBatchOut,
     InventoryItemIn,
@@ -833,6 +835,63 @@ async def raise_counter_invoice(
         meta={"number": invoice.number, "department": payload.department.value, "counter": True},
     )
     return InvoiceOut.of(invoice, ctx.tz, billing_service.totals_for(invoice))
+
+
+@billing_router.post("/patients/{patient_id}/final-settlement", response_model=FinalSettlementOut)
+async def final_settlement(
+    patient_id: str,
+    payload: FinalSettlementIn,
+    ctx: TenantContext = Depends(require_permission(Permission.BILLING_WRITE)),
+) -> FinalSettlementOut:
+    """The patient is leaving: one bill for everything still owing, and one
+    payment for it. What a counter was paid at its window is not asked for
+    again; a counter bill nobody paid is folded into this one."""
+    uid = parse_uuid(patient_id, what="patient")
+    unpaid_before = {
+        invoice.id: invoice.number
+        for invoice in await billing_service.foldable_invoices(ctx.session, ctx.tenant_id, uid)
+    }
+    invoice = await account_service.raise_final_invoice(ctx.session, ctx.tenant_id, uid, today=ctx.today)
+    folded = [number for inv_id, number in unpaid_before.items() if invoice is not None and inv_id != invoice.id]
+    if invoice is not None:
+        await audit.record(
+            ctx.session, action="invoice.create", tenant_id=ctx.tenant_id, actor_kind=ctx.actor_kind,
+            actor_id=ctx.actor_id, actor_label=ctx.principal.label, entity="invoice",
+            entity_id=str(invoice.id),
+            meta={"number": invoice.number, "final": True, "folded": folded},
+        )
+
+    owed = await account_service.outstanding(ctx.session, ctx.tenant_id, uid)
+    paid = 0.0
+    if payload.collect and owed > 0.005:
+        settled = await account_service.settle(
+            ctx.session,
+            ctx.tenant_id,
+            uid,
+            department=None,
+            amount=owed,
+            method=payload.method,
+            reference=payload.reference,
+            actor_id=ctx.actor_id,
+        )
+        paid = owed
+        await audit.record(
+            ctx.session, action="invoice.payment", tenant_id=ctx.tenant_id, actor_kind=ctx.actor_kind,
+            actor_id=ctx.actor_id, actor_label=ctx.principal.label, entity="patient",
+            entity_id=str(uid),
+            meta={"amount": owed, "method": payload.method.value, "final": True,
+                  "invoices": [str(i.id) for i in settled]},
+        )
+
+    if invoice is not None:
+        invoice = await billing_service.get_invoice(ctx.session, ctx.tenant_id, invoice.id)
+        await ctx.session.refresh(invoice, ["payments", "line_items"])
+    return FinalSettlementOut(
+        invoice=InvoiceOut.of(invoice, ctx.tz, billing_service.totals_for(invoice)) if invoice else None,
+        folded=folded,
+        paid=paid,
+        remaining=await account_service.outstanding(ctx.session, ctx.tenant_id, uid),
+    )
 
 
 @billing_router.post("/patients/{patient_id}/payments", response_model=CounterPaymentOut)

@@ -179,13 +179,48 @@ async def hold_diary(
     )
 
 
+async def _require_bookable_day(
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    *,
+    patient_id: uuid.UUID,
+    day: date,
+    today: date,
+    ignore_id: uuid.UUID | None = None,
+) -> None:
+    """A booking is a plan: never for a day already gone, and one per patient
+    per day — a second one is almost always the desk booking them twice."""
+    if day < today:
+        raise ValidationFailed("Appointments cannot be booked for a past date.")
+
+    stmt = select(Appointment).where(
+        Appointment.tenant_id == tenant_id,
+        Appointment.patient_id == patient_id,
+        Appointment.date == day,
+        Appointment.status.in_(
+            [AppointmentStatus.SCHEDULED, AppointmentStatus.CONFIRMED, AppointmentStatus.CHECKED_IN]
+        ),
+    )
+    if ignore_id is not None:
+        stmt = stmt.where(Appointment.id != ignore_id)
+    existing = (await session.execute(stmt.limit(1))).scalar_one_or_none()
+    if existing is not None:
+        raise Conflict(
+            f"This patient already has an appointment that day at {existing.time}.",
+            details={"conflicts": [{"id": str(existing.id), "time": existing.time, "reason": existing.reason}]},
+        )
+
+
 async def create_appointment(
-    session: AsyncSession, tenant_id: uuid.UUID, payload: AppointmentIn
+    session: AsyncSession, tenant_id: uuid.UUID, payload: AppointmentIn, *, today: date
 ) -> Appointment:
     patient = await _require_patient(session, tenant_id, uuid.UUID(payload.patient_id))
     doctor = await _require_doctor(session, tenant_id, uuid.UUID(payload.doctor_id))
 
     await hold_diary(session, tenant_id, doctor.id, payload.date)
+    await _require_bookable_day(
+        session, tenant_id, patient_id=patient.id, day=payload.date, today=today
+    )
     clashes = await conflicts_for(
         session,
         tenant_id,
@@ -224,6 +259,8 @@ async def reschedule_appointment(
     tenant_id: uuid.UUID,
     appointment_id: uuid.UUID,
     payload: AppointmentRescheduleIn,
+    *,
+    today: date,
 ) -> tuple[Appointment, dict[str, str]]:
     """Move an appointment, and say what it moved from.
 
@@ -267,6 +304,10 @@ async def reschedule_appointment(
     # `ignore_id` keeps the appointment from clashing with itself when only the
     # duration or the clinician changes.
     await hold_diary(session, tenant_id, doctor_id, day)
+    await _require_bookable_day(
+        session, tenant_id, patient_id=appointment.patient_id, day=day, today=today,
+        ignore_id=appointment.id,
+    )
     clashes = await conflicts_for(
         session,
         tenant_id,

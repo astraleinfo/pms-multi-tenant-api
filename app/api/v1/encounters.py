@@ -19,6 +19,7 @@ from app.schemas.clinical import (
     LabOrderIn,
     LabOrderOut,
     PrescriptionIn,
+    PrescriptionReplaceIn,
     PrescriptionOut,
     PrescriptionPageOut,
 )
@@ -189,6 +190,29 @@ async def create_prescription(
     )
     return PrescriptionOut.of(prescription, ctx.tz)
 
+
+
+@router.put("/{encounter_id}/prescription", response_model=PrescriptionOut | None)
+async def replace_prescription(
+    encounter_id: str,
+    payload: PrescriptionReplaceIn,
+    ctx: TenantContext = Depends(require_permission(Permission.PRESCRIPTION_WRITE)),
+) -> PrescriptionOut | None:
+    """Correct the prescription until the visit is billed. `null` when the
+    last line was taken off and there is no prescription any more."""
+    prescription = await encounter_service.replace_prescription(
+        ctx.session,
+        ctx.tenant_id,
+        parse_uuid(encounter_id, what="consultation"),
+        payload,
+        doctor_id=ctx.actor_id,
+    )
+    await audit.record(
+        ctx.session, action="prescription.replace", tenant_id=ctx.tenant_id, actor_kind=ctx.actor_kind,
+        actor_id=ctx.actor_id, actor_label=ctx.principal.label, entity="encounter",
+        entity_id=encounter_id, meta={"lines": len(payload.items)},
+    )
+    return PrescriptionOut.of(prescription, ctx.tz) if prescription is not None else None
 
 # --- lab orders from a consultation (§3.10) -----------------------------------
 
