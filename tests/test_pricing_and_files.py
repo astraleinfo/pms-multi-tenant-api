@@ -215,7 +215,7 @@ async def test_a_doctor_with_their_own_fee_overrides_the_clinic_default(northgat
     patient = (
         await northgate.post(
             "/v1/patients",
-            json={"full_name": "Doctor Fee Test", "dob": "1985-05-05", "sex": "male", "phone": "+44 7700 900557"},
+            json={"full_name": "Doctor Fee Test", "dob": "1985-05-05", "sex": "male", "phone": "9770090055"},
         )
     ).json()
     encounter = (

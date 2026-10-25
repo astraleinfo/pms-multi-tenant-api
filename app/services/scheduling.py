@@ -391,6 +391,27 @@ async def get_queue_entry(session: AsyncSession, tenant_id: uuid.UUID, entry_id:
     return row
 
 
+async def _refuse_if_on_the_board(
+    session: AsyncSession, tenant_id: uuid.UUID, patient, today: date
+) -> None:
+    """One person, one place in the line. Someone already waiting, called or in
+    the room is on the board; they may come back once they are seen or gone."""
+    on_the_board = (
+        await session.execute(
+            select(QueueEntry.token_no).where(
+                QueueEntry.tenant_id == tenant_id,
+                QueueEntry.patient_id == patient.id,
+                QueueEntry.queue_date == today,
+                QueueEntry.status.in_(
+                    (QueueStatus.WAITING, QueueStatus.CALLED, QueueStatus.IN_CONSULTATION)
+                ),
+            )
+        )
+    ).first()
+    if on_the_board is not None:
+        raise Conflict(f"{patient.full_name} is already in the queue today (token {on_the_board[0]}).")
+
+
 async def check_in(
     session: AsyncSession, tenant_id: uuid.UUID, appointment_id: uuid.UUID, *, today: date
 ) -> QueueEntry:
@@ -407,6 +428,7 @@ async def check_in(
     ).scalar_one_or_none()
     if existing is not None:
         raise Conflict("That appointment has already been checked in.")
+    await _refuse_if_on_the_board(session, tenant_id, appointment.patient, today)
 
     entry = QueueEntry(
         tenant_id=tenant_id,
@@ -434,6 +456,8 @@ async def add_walk_in(
     patient = await _require_patient(session, tenant_id, uuid.UUID(payload.patient_id))
     doctor = await _require_doctor(session, tenant_id, uuid.UUID(payload.doctor_id))
 
+    await _refuse_if_on_the_board(session, tenant_id, patient, today)
+
     entry = QueueEntry(
         tenant_id=tenant_id,
         patient_id=patient.id,
@@ -452,6 +476,50 @@ async def add_walk_in(
     return entry
 
 
+async def require_doctor_free(session: AsyncSession, tenant_id: uuid.UUID, entry: QueueEntry) -> None:
+    """A clinician sees one patient at a time.
+
+    Starting a consultation is refused while another of the same clinician's
+    tokens that day is still in the room. Calling the next patient is not —
+    only the start. The check is put in line behind a lock on this clinician's
+    day, so two screens pressing "start" together cannot both get through.
+    """
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+        {"key": f"consulting:{tenant_id}:{entry.doctor_id}:{entry.queue_date.isoformat()}"},
+    )
+    busy = (
+        await session.execute(
+            select(QueueEntry)
+            .where(
+                QueueEntry.tenant_id == tenant_id,
+                QueueEntry.doctor_id == entry.doctor_id,
+                QueueEntry.queue_date == entry.queue_date,
+                QueueEntry.status == QueueStatus.IN_CONSULTATION,
+                QueueEntry.id != entry.id,
+            )
+            .order_by(QueueEntry.token_no)
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if busy is None:
+        return
+    doctor = await session.get(User, entry.doctor_id)
+    who = doctor.name if doctor is not None else "This clinician"
+    raise Conflict(
+        f"{who} is still consulting {busy.patient.full_name} (token {busy.token_no}). "
+        "Complete that consultation before starting the next.",
+        details={
+            "reason": "doctor_busy",
+            "queue_entry_id": str(busy.id),
+            "token_no": busy.token_no,
+            "patient_id": str(busy.patient_id),
+            "patient_name": busy.patient.full_name,
+            "doctor_id": str(entry.doctor_id),
+        },
+    )
+
+
 async def set_queue_status(
     session: AsyncSession, tenant_id: uuid.UUID, entry_id: uuid.UUID, status: QueueStatus
 ) -> QueueEntry:
@@ -461,6 +529,8 @@ async def set_queue_status(
         return entry
     if status not in QUEUE_TRANSITIONS[current]:
         raise Conflict(f"A queue entry cannot go from {current.value} to {status.value}.")
+    if status == QueueStatus.IN_CONSULTATION:
+        await require_doctor_free(session, tenant_id, entry)
 
     now = _now()
     entry.status = status

@@ -24,6 +24,7 @@ from app.models.enums import MessageChannel, MessageStatus, MessageTemplate
 from app.models.identity import User
 from app.models.messaging import Message, MessagingConfig
 from app.models.tenancy import Tenant, TenantConfig
+from app.schemas.clinical import to_e164
 from app.services.messaging import templates
 
 log = logging.getLogger("pms.messaging")
@@ -109,7 +110,7 @@ async def queue_message(
         channel=channel or MessageChannel.SMS,
         template=template,
         status=MessageStatus.QUEUED,
-        to_address=patient.phone[:40],
+        to_address=to_e164(patient.phone)[:40],
         body=text,
         send_after=send_after or datetime.now(timezone.utc),
     )

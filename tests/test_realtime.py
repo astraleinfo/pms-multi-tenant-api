@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 from app.main import app
-from tests.conftest import CLEARVIEW, NORTHGATE, patients_of
+from tests.conftest import CLEARVIEW, NORTHGATE, patients_off_the_board
 from tests.ws import ASGIWebSocket, SocketClosed
 
 
@@ -43,7 +43,7 @@ async def test_a_socket_opens_and_names_its_clinic(northgate):
 async def test_a_walk_in_reaches_the_open_screens(northgate):
     """The point of the whole thing: the desk adds someone, the waiting-room
     screen hears about it without asking."""
-    patient = (await patients_of(northgate))[0]
+    patient = (await patients_off_the_board(northgate))[0]
     doctor = (await northgate.get("/v1/users/doctors")).json()[0]
 
     async with socket(northgate.token) as ws:
@@ -70,7 +70,7 @@ async def test_a_walk_in_reaches_the_open_screens(northgate):
 
 
 async def test_signing_a_consultation_announces_the_queue_moving_on(northgate):
-    patient = (await patients_of(northgate))[3]
+    patient = (await patients_off_the_board(northgate))[0]
     doctor = (await northgate.get("/v1/users/doctors")).json()[0]
 
     entry = (
@@ -103,7 +103,7 @@ async def test_signing_a_consultation_announces_the_queue_moving_on(northgate):
 
 
 async def test_one_clinics_events_never_reach_another(northgate, clearview):
-    patient = (await patients_of(northgate))[0]
+    patient = (await patients_off_the_board(northgate))[0]
     doctor = (await northgate.get("/v1/users/doctors")).json()[0]
 
     async with socket(clearview.token, host=CLEARVIEW) as eavesdropper:
@@ -121,7 +121,7 @@ async def test_one_clinics_events_never_reach_another(northgate, clearview):
 async def test_the_socket_carries_no_patient_data(northgate):
     """No name, no reason, no clinical detail — clients re-read `GET /v1/queue`,
     which is where the guards are."""
-    patient = (await patients_of(northgate))[1]
+    patient = (await patients_off_the_board(northgate))[0]
     doctor = (await northgate.get("/v1/users/doctors")).json()[0]
 
     async with socket(northgate.token) as ws:

@@ -71,7 +71,7 @@ async def test_a_planted_tenant_id_in_the_body_is_rejected(northgate, clearview)
             "full_name": "Planted Tenant",
             "dob": "1990-01-01",
             "sex": "other",
-            "phone": "+44 7700 900000",
+            "phone": "9770090000",
             "tenant_id": clearview.tenant_id,
         },
     )
@@ -82,7 +82,7 @@ async def test_a_planted_tenant_id_in_the_body_is_rejected(northgate, clearview)
 async def test_created_rows_are_stamped_with_the_callers_tenant(northgate):
     response = await northgate.post(
         "/v1/patients",
-        json={"full_name": "Stamped Correctly", "dob": "1991-02-03", "sex": "female", "phone": "1"},
+        json={"full_name": "Stamped Correctly", "dob": "1991-02-03", "sex": "female", "phone": "9000000001"},
     )
     assert response.status_code == 201, response.text
     assert response.json()["tenant_id"] == northgate.tenant_id

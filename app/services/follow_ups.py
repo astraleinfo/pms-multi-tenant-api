@@ -15,6 +15,7 @@ that the new slot is still ahead of us, and inside the clinic's day.
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import date, timedelta
 from typing import Any
@@ -36,7 +37,9 @@ from app.services import scheduling as scheduling_service
 
 #: How far ahead the list looks when nobody says.
 DEFAULT_DAYS = 7
-MAX_DAYS = 60
+#: A consultation's follow-up can be months out ("review in 180 days"); once
+#: it is booked, the list has to reach it. A year, and a day for leap years.
+MAX_DAYS = 366
 
 
 def _minutes(hhmm: str) -> int:
@@ -168,11 +171,15 @@ async def list_follow_ups(
         stmt = stmt.where(Appointment.doctor_id == doctor_id)
     if search:
         like = f"%{search.strip()}%"
+        digits = re.sub(r"\D", "", search)
+        phone_like = Patient.phone.ilike(like)
+        if len(digits) >= 3 and digits != search.strip():
+            phone_like = or_(phone_like, Patient.phone.ilike(f"%{digits}%"))
         stmt = stmt.where(
             or_(
                 Patient.full_name.ilike(like),
                 Patient.mrn.ilike(like),
-                Patient.phone.ilike(like),
+                phone_like,
                 Appointment.reason.ilike(like),
             )
         )

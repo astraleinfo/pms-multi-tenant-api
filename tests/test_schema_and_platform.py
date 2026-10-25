@@ -58,7 +58,7 @@ async def test_a_clinic_adds_and_removes_its_own_field(northgate):
                 "full_name": "Custom Field Patient",
                 "dob": "1979-09-09",
                 "sex": "male",
-                "phone": "+44 7700 900777",
+                "phone": "9770090077",
                 "clinical_ext": {"loyalty_scheme": "Gold"},
             },
         )
@@ -71,7 +71,7 @@ async def test_a_clinic_adds_and_removes_its_own_field(northgate):
             "full_name": "Bad Option",
             "dob": "1979-09-09",
             "sex": "male",
-            "phone": "1",
+            "phone": "9000000001",
             "clinical_ext": {"loyalty_scheme": "Platinum"},
         },
     )
@@ -105,7 +105,7 @@ async def test_a_required_custom_field_is_enforced(northgate):
 
     missing = await northgate.post(
         "/v1/patients",
-        json={"full_name": "No Consent", "dob": "1980-01-01", "sex": "other", "phone": "1"},
+        json={"full_name": "No Consent", "dob": "1980-01-01", "sex": "other", "phone": "9000000001"},
     )
     assert missing.status_code == 422
     assert missing.json()["error"]["details"]["fields"][0]["field"] == "consent_reference"

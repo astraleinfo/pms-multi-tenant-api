@@ -20,7 +20,7 @@ async def _doctor(signed) -> dict:
 async def _new_patient(signed, name: str) -> dict:
     response = await signed.post(
         "/v1/patients",
-        json={"full_name": name, "dob": "1990-02-02", "sex": "female", "phone": "+44 7700 900123"},
+        json={"full_name": name, "dob": "1990-02-02", "sex": "female", "phone": "9770090012"},
     )
     assert response.status_code == 201, response.text
     return response.json()

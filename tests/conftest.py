@@ -156,6 +156,19 @@ async def patients_of(signed: Signed, **params) -> list[dict]:
     return response.json()["items"]
 
 
+async def patients_off_the_board(signed: Signed) -> list[dict]:
+    """Patients who are not waiting, called or in the room today.
+
+    The database is seeded once and shared, and a patient already on today's
+    board cannot be walked in again — so a test that walks someone in picks
+    from these rather than from a fixed position in the register.
+    """
+    today = (await signed.get("/v1/tenant")).json()["today"]
+    queue = (await signed.get("/v1/queue", params={"date": today})).json()
+    on_board = {q["patient_id"] for q in queue if q["status"] in ("waiting", "called", "in_consultation")}
+    return [p for p in await patients_of(signed, limit=200) if p["id"] not in on_board]
+
+
 async def sign_in(client: AsyncClient, key: str) -> Signed:
     host, email, password = ACCOUNTS[key]
     response = await client.post(

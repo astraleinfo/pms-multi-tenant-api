@@ -7,6 +7,7 @@ one arrived it would never be read.
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import date
 
@@ -23,9 +24,12 @@ from app.services import tenants as tenant_service
 
 def _search(stmt: Select, term: str) -> Select:
     like = f"%{term.strip()}%"
-    return stmt.where(
-        or_(Patient.full_name.ilike(like), Patient.mrn.ilike(like), Patient.phone.ilike(like))
-    )
+    # Numbers are stored as ten bare digits; "98450 12345" should still find them.
+    digits = re.sub(r"\D", "", term)
+    phone_like = Patient.phone.ilike(like)
+    if len(digits) >= 3 and digits != term.strip():
+        phone_like = or_(phone_like, Patient.phone.ilike(f"%{digits}%"))
+    return stmt.where(or_(Patient.full_name.ilike(like), Patient.mrn.ilike(like), phone_like))
 
 
 # Only these can be sorted on, and the client names one rather than sending an

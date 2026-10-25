@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import date, timedelta
 
-from tests.conftest import patients_of, sign_in
+from tests.conftest import patients_of, patients_off_the_board, sign_in
 
 #: Every clinic has every module, so every dashboard carries every panel.
 ALL_PANELS = {"pharmacy", "lab", "inventory", "billing", "advanced_reports"}
@@ -29,7 +30,7 @@ async def test_register_book_check_in_consult_prescribe_dispense_bill(client, no
                 "full_name": "Whole Loop Patient",
                 "dob": "1988-04-11",
                 "sex": "female",
-                "phone": "+44 7700 900555",
+                "phone": "9770090055",
                 "clinical_ext": {"bruxism": True, "ortho_history": "None"},
             },
         )
@@ -272,7 +273,7 @@ async def test_a_patient_is_booked_once_a_day(northgate):
 
 async def test_a_walk_in_needs_no_appointment(northgate):
     doctor = await _doctor(northgate)
-    patient = (await patients_of(northgate))[0]
+    patient = (await patients_off_the_board(northgate))[0]
 
     entry = (
         await northgate.post(
@@ -298,6 +299,27 @@ async def test_a_walk_in_needs_no_appointment(northgate):
     assert patient["full_name"] not in str(display)
 
 
+async def test_a_patient_already_in_the_queue_cannot_be_walked_in_again(northgate):
+    doctor = await _doctor(northgate)
+    patient = (await patients_off_the_board(northgate))[0]
+    body = {"patient_id": patient["id"], "doctor_id": doctor["id"], "reason": "Twice"}
+
+    first = await northgate.post("/v1/queue/walkin", json=body)
+    assert first.status_code == 201, first.text
+
+    again = await northgate.post("/v1/queue/walkin", json=body)
+    assert again.status_code == 409
+
+    # still true once they have been called — they are in the building
+    await northgate.patch(f"/v1/queue/{first.json()['id']}/status", json={"status": "called"})
+    assert (await northgate.post("/v1/queue/walkin", json=body)).status_code == 409
+
+    # once seen (or gone) they may come back the same day
+    await northgate.patch(f"/v1/queue/{first.json()['id']}/status", json={"status": "in_consultation"})
+    await northgate.patch(f"/v1/queue/{first.json()['id']}/status", json={"status": "completed"})
+    assert (await northgate.post("/v1/queue/walkin", json=body)).status_code == 201
+
+
 async def test_tokens_are_per_clinic_per_day(northgate, clearview):
     """Two clinics issuing tokens on the same day do not collide."""
     ours = [q["token_no"] for q in (await northgate.get("/v1/queue")).json()]
@@ -308,7 +330,7 @@ async def test_tokens_are_per_clinic_per_day(northgate, clearview):
 
 async def test_the_queue_state_machine_refuses_impossible_moves(northgate):
     doctor = await _doctor(northgate)
-    patient = (await patients_of(northgate))[1]
+    patient = (await patients_off_the_board(northgate))[0]
     entry = (
         await northgate.post(
             "/v1/queue/walkin",
@@ -330,12 +352,79 @@ async def test_the_queue_state_machine_refuses_impossible_moves(northgate):
     assert reopened.status_code == 409
 
 
+async def test_a_doctor_consults_one_patient_at_a_time(northgate):
+    """Starting a second consultation while the first is still open is refused;
+    calling the next patient is not — the waiting room may be told to come in."""
+    doctors = (await northgate.get("/v1/users/doctors")).json()
+    doctor = doctors[0]
+    first_patient, second_patient = (await patients_off_the_board(northgate))[:2]
+
+    async def walk_in(patient: dict) -> dict:
+        response = await northgate.post(
+            "/v1/queue/walkin",
+            json={"patient_id": patient["id"], "doctor_id": doctor["id"], "reason": "One at a time"},
+        )
+        assert response.status_code == 201, response.text
+        return response.json()
+
+    async def move(entry: dict, status: str):
+        return await northgate.patch(f"/v1/queue/{entry['id']}/status", json={"status": status})
+
+    first, second = await walk_in(first_patient), await walk_in(second_patient)
+
+    assert (await move(first, "called")).status_code == 200
+    started = await move(first, "in_consultation")
+    assert started.status_code == 200, started.text
+
+    # calling the next one in is fine...
+    assert (await move(second, "called")).status_code == 200
+    # ...but starting them is not, and the refusal names who is still in the room
+    refused = await move(second, "in_consultation")
+    assert refused.status_code == 409
+    error = refused.json()["error"]
+    assert first_patient["full_name"] in error["message"]
+    assert f"token {first['token_no']}" in error["message"]
+    assert error["details"]["queue_entry_id"] == first["id"]
+    assert (await northgate.get(f"/v1/queue/{second['id']}")).json()["status"] == "called"
+
+    # repeating the move on the one in the room is still a no-op, not a clash
+    assert (await move(first, "in_consultation")).status_code == 200
+
+    # once the first is done the second can start
+    assert (await move(first, "completed")).status_code == 200
+    assert (await move(second, "in_consultation")).status_code == 200
+    assert (await move(second, "completed")).status_code == 200
+
+
+async def test_another_doctor_is_not_held_up_by_a_colleagues_consultation(northgate):
+    doctors = (await northgate.get("/v1/users/doctors")).json()
+    assert len(doctors) >= 2
+    today = (await northgate.get("/v1/tenant")).json()["today"]
+    queue = (await northgate.get("/v1/queue", params={"date": today})).json()
+    colleague = doctors[-1]
+    assert any(
+        q["doctor_id"] == colleague["id"] and q["status"] == "in_consultation" for q in queue
+    ), "the seed has a colleague with someone in the room"
+
+    patient = (await patients_off_the_board(northgate))[0]
+    entry = (
+        await northgate.post(
+            "/v1/queue/walkin",
+            json={"patient_id": patient["id"], "doctor_id": doctors[0]["id"], "reason": "In parallel"},
+        )
+    ).json()
+    await northgate.patch(f"/v1/queue/{entry['id']}/status", json={"status": "called"})
+    started = await northgate.patch(f"/v1/queue/{entry['id']}/status", json={"status": "in_consultation"})
+    assert started.status_code == 200, started.text
+    assert (await northgate.patch(f"/v1/queue/{entry['id']}/status", json={"status": "completed"})).status_code == 200
+
+
 async def test_signing_closes_the_token_even_when_the_encounter_was_opened_without_it(northgate):
     """A consultation started from "New encounter" or the patient record carries
     no queue link. Signing it must still release the patient's token, or they sit
     "in consultation" after being seen and billed."""
     doctor = await _doctor(northgate)
-    patients = await patients_of(northgate)
+    patients = await patients_off_the_board(northgate)
 
     async def in_the_room(patient: dict) -> dict:
         entry = (
@@ -373,6 +462,69 @@ async def test_signing_closes_the_token_even_when_the_encounter_was_opened_witho
     assert (await northgate.get(f"/v1/queue/{entry['id']}")).json()["status"] == "completed"
 
 
+async def test_signing_from_the_queue_takes_the_patient_off_the_board(northgate):
+    """What the consultation screen sends when "Record" is pressed on a token:
+    the token rides along, and signing — at once, or after a draft — completes
+    it, whether the doctor pressed "Start" first or went straight from "called"."""
+    doctor = await _doctor(northgate)
+    today = (await _today(northgate)).isoformat()
+
+    # the seeded register is shared and runs short of patients off the board,
+    # so this test registers its own
+    async def register(n: int) -> dict:
+        response = await northgate.post(
+            "/v1/patients",
+            json={"full_name": f"Queue Sign {n} {uuid.uuid4().hex[:6]}", "dob": "1984-02-03",
+                  "sex": "female", "phone": "9770090077"},
+        )
+        assert response.status_code == 201, response.text
+        return response.json()
+
+    patients = {n: await register(n) for n in (4, 5, 6)}
+
+    async def on_the_board(patient: dict, *, started: bool) -> dict:
+        entry = (
+            await northgate.post(
+                "/v1/queue/walkin",
+                json={"patient_id": patient["id"], "doctor_id": doctor["id"], "reason": "From the queue"},
+            )
+        ).json()
+        await northgate.patch(f"/v1/queue/{entry['id']}/status", json={"status": "called"})
+        if started:
+            await northgate.patch(f"/v1/queue/{entry['id']}/status", json={"status": "in_consultation"})
+        return entry
+
+    def form(patient: dict, entry: dict, *, sign: bool) -> dict:
+        return {
+            "patient_id": patient["id"], "queue_entry_id": entry["id"], "doctor_id": doctor["id"],
+            "date": today, "chief_complaint": "From the queue", "notes": "", "diagnosis": "",
+            "follow_up_days": None, "clinical_ext": {}, "sign": sign,
+        }
+
+    async def board_status(entry: dict) -> str:
+        queue = (await northgate.get("/v1/queue")).json()
+        return next(q["status"] for q in queue if q["id"] == entry["id"])
+
+    # in the room, signed on the spot
+    entry = await on_the_board(patients[4], started=True)
+    signed = await northgate.post("/v1/encounters", json=form(patients[4], entry, sign=True))
+    assert signed.status_code == 201, signed.text
+    assert await board_status(entry) == "completed"
+
+    # called but never started
+    entry = await on_the_board(patients[5], started=False)
+    signed = await northgate.post("/v1/encounters", json=form(patients[5], entry, sign=True))
+    assert signed.status_code == 201, signed.text
+    assert await board_status(entry) == "completed"
+
+    # a draft first, signed from its own page
+    entry = await on_the_board(patients[6], started=True)
+    draft = (await northgate.post("/v1/encounters", json=form(patients[6], entry, sign=False))).json()
+    assert await board_status(entry) == "in_consultation"
+    assert (await northgate.patch(f"/v1/encounters/{draft['id']}", json={"sign": True})).status_code == 200
+    assert await board_status(entry) == "completed"
+
+
 async def test_a_consultation_and_its_prescription_stay_editable_until_billed(northgate):
     patient = (await patients_of(northgate))[6]
     encounter = (
@@ -387,6 +539,7 @@ async def test_a_consultation_and_its_prescription_stay_editable_until_billed(no
     # no prescription yet: replacing creates one
     rx = (await northgate.put(f"{url}/prescription", json={"items": [line]})).json()
     assert [i["medicine"] for i in rx["items"]] == ["Typed by hand"]
+    assert rx["doctor_name"], "a prescription carries its prescriber's name, whoever may read the staff list"
 
     # rewriting it keeps one prescription, with the new lines
     rx = (
@@ -694,3 +847,27 @@ async def test_list_rows_name_their_patient(northgate):
 
     invoices = (await northgate.get("/v1/billing/invoices")).json()["items"]
     assert invoices[0]["patient_name"]
+
+
+async def test_checking_in_a_booking_is_refused_for_someone_already_in_the_queue(northgate):
+    doctor = await _doctor(northgate)
+    patient = (
+        await northgate.post(
+            "/v1/patients",
+            json={"full_name": "Booked And Walked In", "dob": "1990-01-01", "sex": "female", "phone": "9770090099"},
+        )
+    ).json()
+    day = (await _today(northgate)).isoformat()
+    booked = await northgate.post(
+        "/v1/appointments",
+        json={"patient_id": patient["id"], "doctor_id": doctor["id"], "date": day, "time": "17:45",
+              "duration_min": 15, "reason": "Booked"},
+    )
+    assert booked.status_code == 201, booked.text
+    walked = await northgate.post(
+        "/v1/queue/walkin", json={"patient_id": patient["id"], "doctor_id": doctor["id"], "reason": "Early"}
+    )
+    assert walked.status_code == 201, walked.text
+
+    refused = await northgate.post(f"/v1/appointments/{booked.json()['id']}/checkin")
+    assert refused.status_code == 409

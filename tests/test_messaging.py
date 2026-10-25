@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import pytest
 
+from app.schemas.clinical import to_e164
+
 from tests.conftest import patients_of
 
 
@@ -103,7 +105,7 @@ async def test_follow_up_is_queued_and_listed(northgate):
     assert created.status_code == 201, created.text
     body = created.json()
     assert body["status"] == "queued"
-    assert body["to_address"] == patient["phone"]
+    assert body["to_address"] == to_e164(patient["phone"])
     assert patient["full_name"].split(" ")[0] in body["body"]
 
     listed = (await northgate.get("/v1/messages", params={"patient_id": patient["id"]})).json()

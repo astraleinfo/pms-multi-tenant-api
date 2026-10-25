@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date as date_t
 from typing import Any, Literal
 
@@ -66,6 +67,36 @@ class PatientPageOut(ApiModel):
     offset: int
 
 
+def normalise_mobile(value: str) -> str:
+    """A patient's mobile as ten digits, or "" when none was given.
+
+    Spaces, dashes, brackets and a leading +91 / 91 / 0 are accepted and
+    dropped, so '+91 98765 43210' and '098765 43210' are both stored as
+    '9876543210'. Anything else that is not ten digits is refused.
+    """
+    if not value:
+        return ""
+    if not re.fullmatch(r"\+?[\d\s\-().]+", value):
+        raise ValueError("Enter a 10-digit mobile number.")
+    digits = re.sub(r"\D", "", value)
+    if len(digits) == 12 and digits.startswith("91"):
+        digits = digits[2:]
+    elif len(digits) == 11 and digits.startswith("0"):
+        digits = digits[1:]
+    if len(digits) != 10:
+        raise ValueError("Enter a 10-digit mobile number.")
+    return digits
+
+
+def to_e164(phone: str) -> str:
+    """The number as a messaging provider wants it.
+
+    A stored ten-digit mobile is Indian, so it gets +91. Anything else (a
+    number that already carries its country code) is left as it is.
+    """
+    return f"+91{phone}" if re.fullmatch(r"\d{10}", phone or "") else phone
+
+
 class PatientIn(InputModel):
     """Common fields are typed; everything else is validated against the
     tenant's effective schema (§3.3) and stored in `clinical_ext`."""
@@ -89,6 +120,11 @@ class PatientIn(InputModel):
             raise ValueError("That date of birth looks wrong.")
         return v
 
+    @field_validator("phone")
+    @classmethod
+    def _ten_digit_mobile(cls, v: str) -> str:
+        return normalise_mobile(v)
+
 
 class PatientPatch(InputModel):
     full_name: str | None = Field(default=None, min_length=1, max_length=200)
@@ -101,6 +137,11 @@ class PatientPatch(InputModel):
     allergies: str | None = Field(default=None, max_length=500)
     clinical_ext: dict[str, Any] | None = None
     tags: list[str] | None = Field(default=None, max_length=20)
+
+    @field_validator("phone")
+    @classmethod
+    def _ten_digit_mobile(cls, v: str | None) -> str | None:
+        return None if v is None else normalise_mobile(v)
 
 
 # --- appointments -----------------------------------------------------------
@@ -458,6 +499,9 @@ class PrescriptionOut(ApiModel):
     patient_name: str
     patient_mrn: str
     doctor_id: str
+    #: Denormalised like the patient's name: the prescriber is shown wherever
+    #: the staff list is not readable, or does not hold them.
+    doctor_name: str = ""
     created_at: str
     status: DispenseStatus
     items: list[PrescriptionItemOut]
@@ -468,6 +512,7 @@ class PrescriptionOut(ApiModel):
             id=str(rx.id), tenant_id=str(rx.tenant_id), encounter_id=str(rx.encounter_id),
             patient_id=str(rx.patient_id), patient_name=rx.patient.full_name,
             patient_mrn=rx.patient.mrn, doctor_id=str(rx.doctor_id),
+            doctor_name=rx.doctor.name,
             created_at=stamp(rx.issued_at, tz) or "", status=rx.status,
             items=[PrescriptionItemOut.of(i) for i in rx.items],
         )

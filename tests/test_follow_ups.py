@@ -18,7 +18,7 @@ async def _doctors(signed) -> list[dict]:
     return (await signed.get("/v1/users/doctors")).json()
 
 
-async def _patient(signed, phone: str = "+91 98450 12345") -> dict:
+async def _patient(signed, phone: str = "98450 12345") -> dict:
     """A patient of the test's own, with a name nothing else will match."""
     name = f"Follow Up {uuid.uuid4().hex[:8]}"
     response = await signed.post(
@@ -59,14 +59,14 @@ async def _call(signed, appointment: dict, **body):
 async def test_the_list_shows_upcoming_bookings_with_the_number_to_ring(northgate):
     today = await _today(northgate)
     doctor = (await _doctors(northgate))[0]
-    patient = await _patient(northgate, phone="+91 90000 11111")
+    patient = await _patient(northgate, phone="90000 11111")
     booking = await _book(northgate, patient, doctor, today + timedelta(days=30), "13:00")
 
     page = (await northgate.get("/v1/follow-ups", params={"days": 60, "search": patient["full_name"]})).json()
     assert page["total"] == 1
     row = page["items"][0]
     assert row["appointment"]["id"] == booking["id"]
-    assert row["patient_phone"] == "+91 90000 11111"
+    assert row["patient_phone"] == "9000011111"
     assert row["status"] == "pending"
     assert row["attempts"] == 0
     assert row["last_call"] is None
@@ -82,6 +82,37 @@ async def test_the_list_shows_upcoming_bookings_with_the_number_to_ring(northgat
     # Outside the window it is not on the list at all.
     near = (await northgate.get("/v1/follow-ups", params={"days": 7, "search": patient["full_name"]})).json()
     assert near["total"] == 0
+
+
+async def test_a_follow_up_booked_months_out_is_findable(northgate):
+    """A consultation's "follow-up in 90 days" becomes a booking that far out.
+    The call list has to reach it, a year ahead at most."""
+    today = await _today(northgate)
+    doctor = (await _doctors(northgate))[0]
+    patient = await _patient(northgate)
+    response = await northgate.post(
+        "/v1/appointments",
+        json={
+            "patient_id": patient["id"],
+            "doctor_id": doctor["id"],
+            "date": (today + timedelta(days=120)).isoformat(),
+            "time": "13:00",
+            "duration_min": 30,
+            "reason": "Follow-up",
+        },
+    )
+    assert response.status_code == 201, response.text
+    booking = response.json()
+
+    year = (await northgate.get("/v1/follow-ups", params={"days": 365, "search": patient["full_name"]})).json()
+    assert [r["appointment"]["id"] for r in year["items"]] == [booking["id"]]
+    assert year["items"][0]["appointment"]["reason"] == "Follow-up"
+
+    near = (await northgate.get("/v1/follow-ups", params={"days": 60, "search": patient["full_name"]})).json()
+    assert near["total"] == 0
+
+    too_far = await northgate.get("/v1/follow-ups", params={"days": 367})
+    assert too_far.status_code == 422
 
 
 async def test_no_answer_is_logged_and_another_attempt_can_confirm(northgate):

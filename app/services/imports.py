@@ -95,7 +95,7 @@ _PATIENT_CORE: tuple[Column, ...] = (
     Column("dob", "Date of birth", True, "YYYY-MM-DD, or a date cell. DD/MM/YYYY also works.", "1986-04-12"),
     Column("sex", "Sex", False, "female, male or other. Blank means other.", "female",
            tuple(s.value for s in Sex)),
-    Column("phone", "Phone", False, "With country code for SMS reminders.", "+91 98450 12345"),
+    Column("phone", "Phone", False, "A 10-digit mobile number; a +91 in front is fine.", "98450 12345"),
     Column("email", "Email", False, "", "anita.sharma@example.com"),
     Column("address", "Address", False, "", "14 MG Road, Bengaluru"),
     Column("blood_group", "Blood group", False, "e.g. O+, AB-", "B+"),

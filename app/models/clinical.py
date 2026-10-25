@@ -10,6 +10,7 @@ from __future__ import annotations
 import uuid
 from datetime import date as date_t
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     CheckConstraint,
@@ -41,6 +42,9 @@ from app.models.enums import (
     QueueStatus,
     Sex,
 )
+
+if TYPE_CHECKING:
+    from app.models.identity import User
 
 
 def _enum(cls, name: str):
@@ -274,6 +278,9 @@ class Prescription(Base, TenantScoped, TimestampMixin):
         lazy="selectin",
     )
     patient: Mapped[Patient] = relationship("Patient", lazy="selectin")
+    #: Read for the name only. The staff list hides support accounts, so a screen
+    #: that looks the prescriber up there finds nobody for a visit they recorded.
+    doctor: Mapped[User] = relationship("User", lazy="selectin", foreign_keys=[doctor_id])
 
 
 class PrescriptionItem(Base, TenantScoped, TimestampMixin):

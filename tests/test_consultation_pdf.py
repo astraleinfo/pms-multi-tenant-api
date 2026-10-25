@@ -38,7 +38,7 @@ async def _a_signed_consultation(signed, *, clinical_ext: dict | None = None) ->
                 "full_name": "Consultation PDF Patient",
                 "dob": "1988-04-11",
                 "sex": "female",
-                "phone": "+44 7700 900555",
+                "phone": "9770090055",
                 "blood_group": "O+",
                 "clinical_ext": clinical_ext or {},
             },
