@@ -50,13 +50,16 @@ from app.services.pdf import (
     _TD,
     _TH,
     _TITLE,
+    Theme,
     _logo_flowable,
+    band_header,
     document,
     esc,
     letterhead,
     monogram,
     paged,
     person,
+    theme_for,
 )
 from app.services.pdf_fonts import CURRENCY_SYMBOLS, FONT, FONT_BOLD, has_glyph
 
@@ -152,6 +155,55 @@ def _stamp(label: str, ink, ground) -> Table:
 # --- the invoice ----------------------------------------------------------------
 
 
+def _head(text: str, theme: Theme, *, right: bool = False) -> Paragraph:
+    """A column head: small bold type in the theme's dark step, over the tinted head row."""
+    style = ParagraphStyle(
+        "BrandHead", parent=_TH, textColor=theme.accent_dark, alignment=2 if right else 0,
+    )
+    return Paragraph(text, style)
+
+
+def _branded_grid(rows: list[list], widths: list[float], theme: Theme) -> Table:
+    """A table for the branded documents: a tinted head row, hairlines between rows, the
+    head repeating when the table runs onto another page."""
+    table = Table(rows, colWidths=widths, repeatRows=1)
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), theme.tint),
+        ("LINEBELOW", (0, 0), (-1, 0), 0.75, theme.strip),
+        ("LINEBELOW", (0, 1), (-1, -1), 0.5, _LINE),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6), ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+        ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+    ]))
+    return table
+
+
+def _card(label: str, body: list, theme: Theme, width: float) -> Table:
+    """A tinted card — a small label over a few lines — for who a bill is to and what it is."""
+    heading = ParagraphStyle("CardLabel", parent=_LABEL, textColor=theme.accent_dark, spaceAfter=3)
+    card = Table([[[Paragraph(label.upper(), heading), *body]]], colWidths=[width])
+    card.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), theme.tint_soft),
+        ("BOX", (0, 0), (-1, -1), 0.6, theme.strip),
+        ("ROUNDEDCORNERS", [3, 3, 3, 3]),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 9), ("RIGHTPADDING", (0, 0), (-1, -1), 9),
+        ("TOPPADDING", (0, 0), (-1, -1), 7), ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+    ]))
+    return card
+
+
+def _cards_row(doc, left: Table, right: Table) -> Table:
+    row = Table([[left, "", right]], colWidths=[doc.width * 0.6, doc.width * 0.03, doc.width * 0.37])
+    return _plain(row)
+
+
+_BALANCE_LABEL = ParagraphStyle(
+    "BalanceLabel", parent=_BODY, fontName=FONT_BOLD, fontSize=10.5, leading=14, textColor=colors.white,
+)
+_BALANCE_VALUE = ParagraphStyle("BalanceValue", parent=_BALANCE_LABEL, fontSize=12, alignment=2)
+
+
 def build_invoice_pdf(
     invoice: Invoice,
     totals: dict[str, float],
@@ -161,42 +213,44 @@ def build_invoice_pdf(
     currency: str,
     logo: bytes | None = None,
 ) -> bytes:
-    """One invoice, as the patient is handed it."""
+    """One invoice, as the patient is handed it: the clinic's own coloured band across
+    the top, who it is billed to and when, the lines, and a totals box that ends in
+    what is still owed."""
     buf = io.BytesIO()
     doc = document(buf, title=f"Invoice {invoice.number}", author=clinic)
+    theme = theme_for(config)
     status = InvoiceStatus(invoice.status)
-    label, ink, ground = _STATUS_LOOK[status]
-    story: list = letterhead(
-        doc, clinic=clinic, config=config, logo=logo,
-        kind="Invoice", ref=invoice.number,
-        facts=[
-            f"Issued {invoice.issued_at.strftime('%d %b %Y')}",
-            f"Due <b>{invoice.due_at.strftime('%d %b %Y')}</b>",
-        ],
+    label = _STATUS_LOOK[status][0]
+    story: list = band_header(
+        doc, theme=theme, clinic=clinic, config=config, logo=logo, title="Invoice",
+        reference=invoice.number,
     )
 
     patient = invoice.patient
-    bill_to = [
-        Paragraph("BILLED TO", _LABEL),
+    counter = invoice.department.value.title() if invoice.department else "Clinic"
+    billed_to = [
         Paragraph(f"<b>{_esc(patient.full_name)}</b>", _BODY),
         Paragraph(
-            " · ".join(v for v in (f"Record {_esc(patient.mrn)}", _esc(patient.phone)) if v),
-            _BODY_SM,
+            " · ".join(v for v in (f"Record {_esc(patient.mrn)}", _esc(patient.phone)) if v), _BODY_SM,
         ),
+        Paragraph(f"Counter: {counter}", _BODY_SM),
     ]
-    about = [
-        Paragraph("COUNTER", _LABEL),
-        Paragraph(invoice.department.value.title() if invoice.department else "Clinic", _BODY),
-        Spacer(1, 4),
-        _stamp(label, ink, ground),
+    details = [
+        Paragraph(f"Issued: <b>{invoice.issued_at.strftime('%d %b %Y')}</b>", _BODY_SM),
+        Paragraph(f"Due: <b>{invoice.due_at.strftime('%d %b %Y')}</b>", _BODY_SM),
+        Paragraph(f"Status: <b>{label}</b>", _BODY_SM),
     ]
-    story.append(_plain(Table([[bill_to, about]], colWidths=[doc.width * 0.7, doc.width * 0.3])))
+    story.append(_cards_row(
+        doc, _card("Billed to", billed_to, theme, doc.width * 0.6),
+        _card("Details", details, theme, doc.width * 0.37),
+    ))
     story.append(Spacer(1, 14))
 
     # --- lines
     rows: list[list] = [[
-        Paragraph("#", _TH), Paragraph("Description", _TH), Paragraph("Qty", _TH_RIGHT),
-        Paragraph("Unit price", _TH_RIGHT), Paragraph("Tax", _TH_RIGHT), Paragraph("Amount", _TH_RIGHT),
+        _head("#", theme), _head("Description", theme), _head("Qty", theme, right=True),
+        _head("Unit price", theme, right=True), _head("Tax", theme, right=True),
+        _head("Amount", theme, right=True),
     ]]
     for n, line in enumerate(invoice.line_items, start=1):
         amount = Decimal(line.qty) * Decimal(line.unit_price)
@@ -210,24 +264,28 @@ def build_invoice_pdf(
         ])
     if len(rows) == 1:
         rows.append([Paragraph("", _TD), Paragraph("No lines on this invoice.", _TD), "", "", "", ""])
-    story.append(_grid(rows, [doc.width * w for w in (0.06, 0.42, 0.08, 0.16, 0.10, 0.18)]))
+    widths = [doc.width * w for w in (0.06, 0.42, 0.08, 0.16, 0.10, 0.18)]
+    story.append(_branded_grid(rows, widths, theme))
     story.append(Spacer(1, 10))
 
-    # --- totals
+    # --- totals: the last row is what is still owed, filled in the clinic's colour
     total_rows = [
         [Paragraph("Subtotal", _BODY), Paragraph(money(totals["subtotal"], currency), _RIGHT)],
         [Paragraph("Tax", _BODY), Paragraph(money(totals["tax"], currency), _RIGHT)],
         [Paragraph("Total", _TOTAL_LABEL), Paragraph(money(totals["total"], currency), _TOTAL)],
         [Paragraph("Paid", _BODY), Paragraph(money(totals["paid"], currency), _RIGHT)],
-        [Paragraph("Balance due", _TOTAL_LABEL), Paragraph(money(totals["balance"], currency), _TOTAL)],
+        [
+            Paragraph("Balance due", _BALANCE_LABEL),
+            Paragraph(money(totals["balance"], currency), _BALANCE_VALUE),
+        ],
     ]
     totals_table = Table(total_rows, colWidths=[doc.width * 0.2, doc.width * 0.22])
     totals_table.setStyle(TableStyle([
-        ("LINEABOVE", (0, 2), (-1, 2), 0.75, _INK_3),
-        ("LINEABOVE", (0, 4), (-1, 4), 0.75, _INK_3),
-        ("BACKGROUND", (0, 4), (-1, 4), _ACCENT_SOFT),
-        ("LEFTPADDING", (0, 0), (-1, -1), 6), ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+        ("LINEABOVE", (0, 2), (-1, 2), 0.75, theme.strip),
+        ("BACKGROUND", (0, 4), (-1, 4), theme.accent),
+        ("LEFTPADDING", (0, 0), (-1, -1), 7), ("RIGHTPADDING", (0, 0), (-1, -1), 7),
         ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING", (0, 4), (-1, 4), 6), ("BOTTOMPADDING", (0, 4), (-1, 4), 6),
     ]))
     story.append(_plain(
         Table([["", totals_table]], colWidths=[doc.width * 0.58, doc.width * 0.42]),
@@ -235,10 +293,13 @@ def build_invoice_pdf(
 
     # --- payments
     if invoice.payments:
-        story.append(Paragraph("PAYMENTS RECEIVED", _SECTION))
+        heading = ParagraphStyle(
+            "PaymentsLabel", parent=_LABEL, textColor=theme.accent_dark, spaceBefore=16, spaceAfter=5,
+        )
+        story.append(Paragraph("PAYMENTS RECEIVED", heading))
         pay_rows: list[list] = [[
-            Paragraph("Date", _TH), Paragraph("Method", _TH), Paragraph("Reference", _TH),
-            Paragraph("Amount", _TH_RIGHT),
+            _head("Date", theme), _head("Method", theme), _head("Reference", theme),
+            _head("Amount", theme, right=True),
         ]]
         for p in invoice.payments:
             pay_rows.append([
@@ -247,7 +308,8 @@ def build_invoice_pdf(
                 Paragraph(_esc(p.reference) or "—", _TD),
                 Paragraph(money(p.amount, currency), _TD_RIGHT),
             ])
-        story.append(_grid(pay_rows, [doc.width * w for w in (0.22, 0.2, 0.36, 0.22)]))
+        pay_widths = [doc.width * w for w in (0.22, 0.2, 0.36, 0.22)]
+        story.append(_branded_grid(pay_rows, pay_widths, theme))
 
     # --- terms
     story.append(Spacer(1, 18))
@@ -265,7 +327,7 @@ def build_invoice_pdf(
         terms.append(f"Questions about this invoice: {_esc(config.contact_phone)}.")
     story.append(KeepTogether([Paragraph(" ".join(terms), _FOOT)]))
 
-    doc.build(story, canvasmaker=paged(f"{clinic} · Invoice {invoice.number}"))
+    doc.build(story, canvasmaker=paged(f"{clinic} · Invoice {invoice.number}", band=theme.accent))
     return buf.getvalue()
 
 

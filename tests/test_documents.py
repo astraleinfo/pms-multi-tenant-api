@@ -95,3 +95,68 @@ async def test_the_report_is_refused_where_the_dashboard_is(client):
 async def test_the_report_window_is_bounded(northgate):
     assert (await northgate.get("/v1/analytics/report.pdf", params={"days": 0})).status_code == 422
     assert (await northgate.get("/v1/analytics/report.pdf", params={"days": 366})).status_code == 422
+
+
+# --- the branded invoice ----------------------------------------------------------------------
+
+_STATUS_WORD = {
+    "draft": "DRAFT", "issued": "ISSUED", "partially_paid": "PART PAID", "paid": "PAID", "void": "VOID",
+}
+
+
+async def _invoices(signed) -> list[dict]:
+    return (await signed.get("/v1/billing/invoices", params={"limit": 50})).json()["items"]
+
+
+async def _invoice_text(signed, invoice: dict) -> str:
+    response = await signed.get(f"/v1/billing/invoices/{invoice['id']}/pdf")
+    assert response.status_code == 200, response.text
+    return _text(response.content)
+
+
+async def test_the_invoice_prints_the_clinics_registration_and_gstin_when_set(northgate):
+    invoice = await _an_invoice(northgate)
+    assert "GSTIN" not in await _invoice_text(northgate, invoice)
+
+    await northgate.patch(
+        "/v1/tenant/config", json={"registration_no": "KA/CL/2041", "gstin": "29ABCDE1234F1Z5"}
+    )
+    try:
+        text = await _invoice_text(northgate, invoice)
+    finally:
+        await northgate.patch("/v1/tenant/config", json={"registration_no": "", "gstin": ""})
+
+    assert "Clinic Reg. No. KA/CL/2041" in text
+    assert "GSTIN 29ABCDE1234F1Z5" in text
+
+
+async def test_the_invoice_spells_its_status_in_words(northgate):
+    first: dict[str, dict] = {}
+    for invoice in await _invoices(northgate):
+        first.setdefault(invoice["status"], invoice)
+    assert first, "the seed has invoices"
+
+    for status, invoice in first.items():
+        assert _STATUS_WORD[status] in await _invoice_text(northgate, invoice), status
+
+
+async def test_the_invoice_prints_the_balance_due_and_the_payments_received(northgate):
+    invoice = next(i for i in await _invoices(northgate) if i["payments"])
+
+    text = (await _invoice_text(northgate, invoice)).lower()
+
+    assert "balance due" in text
+    assert "payments received" in text
+    assert f"{invoice['totals']['balance']:,.2f}" in text
+    assert f"{invoice['payments'][0]['amount']:,.2f}" in text
+
+
+def test_the_theme_falls_back_to_the_default_for_a_colour_it_cannot_use():
+    from types import SimpleNamespace
+
+    from app.services.pdf import theme_for
+
+    default = theme_for(None).accent.hexval()
+    for bad in ("not-a-colour", "", None, "#ffff00"):
+        assert theme_for(SimpleNamespace(brand_color=bad)).accent.hexval() == default, bad
+    assert theme_for(SimpleNamespace(brand_color="#1e3a8a")).accent.hexval() != default

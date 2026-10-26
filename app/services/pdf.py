@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import io
 import logging
+from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import date
 
 from reportlab.graphics.shapes import Circle, Drawing, Rect, String
@@ -41,6 +43,7 @@ from reportlab.platypus import (
 from app.models.clinical import Patient
 from app.models.tenancy import TenantConfig
 from app.schemas.common import local_now, stamp
+from app.services.colour import DEFAULT_BRAND, MIN_CONTRAST, contrast_with_white, darken, parse_hex, tint
 from app.services.pdf_fonts import FONT, FONT_BOLD, glyph_safe
 
 log = logging.getLogger("pms.pdf")
@@ -180,28 +183,67 @@ def esc(text: object) -> str:
     return plain.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+#: where a branded document's first-page content starts, measured from the top edge — the
+#: coloured band behind it runs to the page edge, so it needs far less margin than a form.
+_BAND_TOP = 8 * mm
+
+
 class _Document(SimpleDocTemplate):
     """A4 whose frame has no inner padding. reportlab's default frame pads by
     6pt, so a table `doc.width` wide overhangs the paragraphs on both sides —
-    headings and tables then start at two different left edges."""
+    headings and tables then start at two different left edges.
+
+    A branded document asks for a coloured band with `set_band`: it is painted
+    across the top of page one, edge to edge, behind the header the document puts
+    there; every later page gets a thin strip of the same colour."""
+
+    _band: tuple[Theme, float] | None = None
+
+    def set_band(self, theme: Theme, height: float) -> None:
+        self._band = (theme, height)
+
+    def _paint_first(self, canvas, doc) -> None:  # noqa: ANN001 - reportlab's signature
+        if self._band is None:
+            return
+        theme, height = self._band
+        width, top = self.pagesize
+        canvas.saveState()
+        canvas.setFillColor(theme.accent)
+        canvas.rect(0, top - height, width, height, stroke=0, fill=1)
+        canvas.setFillColor(theme.strip)
+        canvas.rect(0, top - height - 1.4 * mm, width, 1.4 * mm, stroke=0, fill=1)
+        canvas.restoreState()
+
+    def _paint_later(self, canvas, doc) -> None:  # noqa: ANN001 - reportlab's signature
+        if self._band is None:
+            return
+        width, top = self.pagesize
+        canvas.saveState()
+        canvas.setFillColor(self._band[0].accent)
+        canvas.rect(0, top - 3.5 * mm, width, 3.5 * mm, stroke=0, fill=1)
+        canvas.restoreState()
 
     def build(self, flowables, canvasmaker=pdf_canvas.Canvas):  # noqa: ANN001 - reportlab's signature
         self._calc()
-        def frame() -> Frame:
+
+        def frame(top: float) -> Frame:
             return Frame(
-                self.leftMargin, self.bottomMargin, self.width, self.height, id="normal",
-                leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0,
+                self.leftMargin, self.bottomMargin, self.width, self.pagesize[1] - self.bottomMargin - top,
+                id="normal", leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0,
             )
 
+        first_top = _BAND_TOP if self._band else self.topMargin
         # the names SimpleDocTemplate moves between: page one, then every later page
         self.addPageTemplates([
-            PageTemplate(id="First", frames=[frame()], pagesize=self.pagesize),
-            PageTemplate(id="Later", frames=[frame()], pagesize=self.pagesize),
+            PageTemplate(id="First", frames=[frame(first_top)], onPage=self._paint_first,
+                         pagesize=self.pagesize),
+            PageTemplate(id="Later", frames=[frame(self.topMargin)], onPage=self._paint_later,
+                         pagesize=self.pagesize),
         ])
         BaseDocTemplate.build(self, flowables, canvasmaker=canvasmaker)
 
 
-def document(buf: io.BytesIO, *, title: str, author: str) -> SimpleDocTemplate:
+def document(buf: io.BytesIO, *, title: str, author: str) -> _Document:
     return _Document(buf, pagesize=A4, title=title, author=author, **PAGE_MARGINS)
 
 
@@ -404,6 +446,132 @@ def section_title(doc: SimpleDocTemplate, text: str) -> Table:
     return title
 
 
+# --- the Branded family ----------------------------------------------------------------
+# Bills and reports: documents of tables and figures, which a clinic puts its own
+# colour on. A coloured band carries the clinic's identity across the top of page one
+# and a matching strip closes every page. Whatever the colour, nothing is told by it
+# alone — a status is always spelled out in words.
+
+
+@dataclass(frozen=True)
+class Theme:
+    """One brand colour and the steps derived from it: the band, a darker step for text
+    on a pale ground, a pale wash for cards and table heads, a paler one still, and the
+    strip under the band."""
+
+    accent: colors.Color
+    accent_dark: colors.Color
+    tint: colors.Color
+    tint_soft: colors.Color
+    strip: colors.Color
+
+
+def _theme_from(hex_colour: str) -> Theme:
+    return Theme(
+        accent=colors.HexColor(hex_colour),
+        accent_dark=colors.HexColor(darken(hex_colour, 0.28)),
+        tint=colors.HexColor(tint(hex_colour, 0.16)),
+        tint_soft=colors.HexColor(tint(hex_colour, 0.07)),
+        strip=colors.HexColor(tint(hex_colour, 0.45)),
+    )
+
+
+def theme_for(config: TenantConfig | None) -> Theme:
+    """The clinic's theme. A row that holds no colour, one that is not a colour, or one white
+    text cannot be read on (anything stale or hand-edited — the API refuses to store it) gets
+    the product's default; a document is never refused for its decoration."""
+    raw = getattr(config, "brand_color", None) or DEFAULT_BRAND
+    try:
+        parse_hex(raw)
+        if contrast_with_white(raw) < MIN_CONTRAST:
+            raw = DEFAULT_BRAND
+    except ValueError:
+        raw = DEFAULT_BRAND
+    return _theme_from(raw)
+
+
+#: What the platform's own documents (the subscription bill) are printed in.
+PLATFORM_THEME = _theme_from("#2b4fd8")
+
+_BAND_NAME = ParagraphStyle(
+    "BandClinicName", parent=_STYLES["Normal"], fontName=FONT_BOLD, fontSize=14.5, leading=17,
+    textColor=colors.white,
+)
+_BAND_TITLE = ParagraphStyle(
+    "BandTitle", parent=_STYLES["Normal"], fontName=FONT_BOLD, fontSize=19, leading=22,
+    textColor=colors.white, alignment=2,
+)
+_BAND_REF = ParagraphStyle(
+    "BandRef", parent=_STYLES["Normal"], fontName=FONT_BOLD, fontSize=10.5, leading=13,
+    textColor=colors.white, alignment=2,
+)
+
+
+def band_monogram(name: str, theme: Theme, size: float = 15 * mm) -> Drawing:
+    """The clinic's initials on a white tile — the band's mark for a clinic with no logo."""
+    d = Drawing(size, size)
+    d.add(Rect(0, 0, size, size, rx=3 * mm, ry=3 * mm, fillColor=colors.white, strokeColor=None))
+    text = _initials(name)
+    font = size * (0.36 if len(text) > 1 else 0.44)
+    d.add(String(size / 2, size / 2 - font * 0.35, text, textAnchor="middle",
+                 fontName=FONT_BOLD, fontSize=font, fillColor=theme.accent))
+    return d
+
+
+def band_header(
+    doc: _Document,
+    *,
+    theme: Theme,
+    clinic: str,
+    config: TenantConfig | None,
+    logo: bytes | None,
+    title: str,
+    reference: str = "",
+    facts: Sequence[str] = (),
+    gstin: bool = True,
+) -> list:
+    """The top of a branded document's first page, over the band the document paints behind
+    it: the clinic's mark, name, address, contact and registration lines on the left in white,
+    what this paper is and its number on the right. Lines the clinic has not filled in are
+    left out. `doc` is told how tall the band must be."""
+    size = 15 * mm
+    mark = _logo_flowable(logo, size=size - 3 * mm)
+    if mark is not None:
+        tile = Table([[mark]], colWidths=[size], rowHeights=[size])
+        tile.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), colors.white), ("ROUNDEDCORNERS", [3 * mm] * 4),
+            ("ALIGN", (0, 0), (-1, -1), "CENTER"), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+            ("TOPPADDING", (0, 0), (-1, -1), 0), ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+        ]))
+        mark = tile
+    else:
+        mark = band_monogram(clinic, theme, size)
+
+    meta = ParagraphStyle("BandMeta", parent=_FORM_META, textColor=theme.tint, spaceBefore=2)
+    lines = [*_letterhead_lines(config, hours=False), *identity_lines(config, gstin=gstin)]
+    who: list = [Paragraph(esc(clinic or "Clinic"), _BAND_NAME)]
+    if lines:
+        who.append(Paragraph("<br/>".join(esc(line) for line in lines), meta))
+    what: list = [Paragraph(esc(title).upper(), _BAND_TITLE)]
+    if reference:
+        what.append(Paragraph(esc(reference), _BAND_REF))
+    for fact in facts:
+        what.append(Paragraph(esc(fact), ParagraphStyle("BandFact", parent=meta, alignment=2)))
+
+    mark_w = size + 4 * mm
+    head = Table([[mark, who, what]], colWidths=[mark_w, doc.width * 0.58 - mark_w, doc.width * 0.42])
+    head.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("TOPPADDING", (0, 0), (-1, -1), 0), ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+    ]))
+    _, head_height = head.wrap(doc.width, 10_000)
+    pad = 7 * mm
+    doc.set_band(theme, _BAND_TOP + head_height + pad)
+    return [head, Spacer(1, pad + 1.4 * mm + 6 * mm)]
+
+
 def allergy_box(doc: SimpleDocTemplate, allergies: str) -> Table:
     """The one thing on a clinical form that must not be missed: a heavy black box
     — it stands out on a photocopy, where a colour wash would not."""
@@ -416,10 +584,12 @@ def allergy_box(doc: SimpleDocTemplate, allergies: str) -> Table:
     return box
 
 
-def paged(note: str, *, confidential: bool = False):
+def paged(note: str, *, confidential: bool = False, band: colors.Color | None = None):
     """A canvas that knows how many pages there are, so the footer can say
     "Page 2 of 3" — paper gets separated, and a reader should know when a page
-    is missing. `note` names the document on every page."""
+    is missing. `note` names the document on every page. With a `band` colour the
+    footer is a filled strip with the note and the page number in white, the
+    branded documents' close; without one it is the form's rule and fine print."""
     note = glyph_safe(note)  # drawn straight on the canvas, so it skips `esc`
     fine_print = "Confidential medical information" if confidential else ""
 
@@ -445,6 +615,15 @@ def paged(note: str, *, confidential: bool = False):
             left, right = PAGE_MARGINS["leftMargin"], width - PAGE_MARGINS["rightMargin"]
             y = 13 * mm
             self.saveState()
+            if band is not None:
+                self.setFillColor(band)
+                self.rect(0, 0, width, 11 * mm, stroke=0, fill=1)
+                self.setFillColor(colors.white)
+                self.setFont(FONT, 7.4)
+                self.drawString(left, 4.2 * mm, note)
+                self.drawRightString(right, 4.2 * mm, f"Page {self._pageNumber} of {total}")
+                self.restoreState()
+                return
             self.setStrokeColor(_LINE)
             self.setLineWidth(0.5)
             self.line(left, y + 9, right, y + 9)
