@@ -126,3 +126,18 @@ async def test_temperature_and_spo2_are_kept_on_an_encounter(northgate):
     assert encounter["clinical_ext"]["temperature"] == 99.1
     assert encounter["clinical_ext"]["spo2"] == 97
     assert encounter["clinical_ext"]["bp"] == "118/76"
+
+
+async def test_the_settings_page_can_save_back_what_it_read(northgate, clean_identity):
+    """The configuration tab edits a copy of the whole config and PATCHes it back with only
+    the read-only keys removed (`stripReadOnly` in the web client). The new fields must ride
+    along without the patch refusing them as unknown."""
+    config = (await northgate.get("/v1/tenant/config")).json()
+    sent = {k: v for k, v in config.items() if k not in ("tenant_id", "timezone", "has_logo")}
+    sent.update(registration_no="KA/CL/2041", gstin="29ABCDE1234F1Z5", brand_color="#1E3A8A")
+
+    saved = await northgate.patch("/v1/tenant/config", json=sent)
+
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["brand_color"] == "#1e3a8a"  # stored lower-case
+    assert saved.json()["registration_no"] == "KA/CL/2041"
