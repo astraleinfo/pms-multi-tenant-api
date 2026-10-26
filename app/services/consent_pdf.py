@@ -38,21 +38,13 @@ from app.services.pdf import (
     _STYLES,
     document,
     esc,
-    letterhead,
+    form_header,
     paged,
 )
 from app.services.pdf_fonts import FONT_BOLD
 
 log = logging.getLogger("pms.consent")
 
-_TITLE = ParagraphStyle(
-    "ConsentTitle",
-    parent=_STYLES["Normal"],
-    fontName=FONT_BOLD,
-    fontSize=17,
-    leading=21,
-    textColor=_INK,
-)
 _H = ParagraphStyle(
     "ConsentHeading",
     parent=_STYLES["Normal"],
@@ -76,6 +68,7 @@ _LABEL = ParagraphStyle(
 )
 _VALUE = ParagraphStyle("ConsentValue", parent=_P, fontSize=9.6)
 _SMALL = ParagraphStyle("ConsentSmall", parent=_P, fontSize=8, leading=11, textColor=_INK_2)
+_FACTS = ParagraphStyle("ConsentFacts", parent=_SMALL, alignment=1)
 _BAND = ParagraphStyle(
     "ConsentBand",
     parent=_STYLES["Normal"],
@@ -221,15 +214,11 @@ def build_consent_pdf(
         facts.append(f"Signed {_when(doc_in.signed_at, tz)}")
     if not filled:
         facts.append("Blank form" if mode == "blank" else "Draft for review")
-    story: list = letterhead(
-        doc,
-        clinic=clinic,
-        config=config,
-        logo=logo,
-        kind="Consent form", ref=f"Version {doc_in.version_number}",
-        facts=facts,
-        gap=8,
-    )
+    story: list = form_header(doc, clinic=clinic, config=config, logo=logo, title=content.title)
+    story += [
+        Paragraph(esc(" · ".join(["Consent form", f"Version {doc_in.version_number}", *facts])), _FACTS),
+        Spacer(1, 10),
+    ]
 
     # --- what this paper is ----------------------------------------------------------
     band = {
@@ -252,9 +241,6 @@ def build_consent_pdf(
             )
         )
         story += [t, Spacer(1, 10)]
-
-    story.append(Paragraph(esc(content.title), _TITLE))
-    story.append(Spacer(1, 10))
 
     # --- the patient -----------------------------------------------------------------
     per_row = 3

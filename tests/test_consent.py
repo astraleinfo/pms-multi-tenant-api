@@ -356,6 +356,21 @@ async def test_the_document_carries_the_clinic_the_patient_the_version_and_signa
     assert images >= 1  # the drawn signature(s)
 
 
+async def test_the_consent_document_carries_the_forms_header(northgate):
+    form = await _default_form(northgate)
+    record = await _request(northgate, form)
+    await northgate.patch("/v1/tenant/config", json={"registration_no": "KA/CL/2041"})
+    try:
+        text = _text((await northgate.get(f"/v1/consent/records/{record['id']}/document.pdf")).content)
+    finally:
+        await northgate.patch("/v1/tenant/config", json={"registration_no": ""})
+
+    assert "NORTHGATE" in text  # the clinic's name in capitals, as every form's header prints it
+    assert "Clinic Reg. No. KA/CL/2041" in text
+    assert record["title"].upper() in text
+    assert f"Version {record['version_number']}" in text
+
+
 async def test_a_draft_prints_marked_as_a_draft_and_a_version_prints_blank(northgate):
     form = await _default_form(northgate)
     drafted = (await northgate.post(f"/v1/consent/forms/{form['id']}/draft", json={})).json()
