@@ -601,6 +601,14 @@ async def _other_admins(ctx: TenantContext, user: User) -> int:
     ).scalar() or 0
 
 
+def _staff_snapshot(user: User) -> dict:
+    """The fields `update_user` can change, as the audit trail records them."""
+    return {
+        "name": user.name, "email": user.email, "role": user.role, "speciality": user.speciality,
+        "qualifications": user.qualifications, "registration_no": user.registration_no,
+    }
+
+
 @router.patch("/users/{user_id}", response_model=UserOut)
 async def update_user(
     user_id: str,
@@ -620,7 +628,7 @@ async def update_user(
     """
     user = await _staff_member(ctx, user_id)
     changes = payload.model_dump(exclude_unset=True)
-    before = {"name": user.name, "email": user.email, "role": user.role, "speciality": user.speciality}
+    before = _staff_snapshot(user)
 
     role = changes.get("role")
     if role is not None and role != user.role:
@@ -651,8 +659,9 @@ async def update_user(
     if changes.get("name") is not None:
         user.name = changes["name"].strip()
         user.initials = "".join(p[0] for p in user.name.split()[:2]).upper()
-    if "speciality" in changes:
-        user.speciality = (changes["speciality"] or "").strip() or None
+    for field in ("speciality", "qualifications", "registration_no"):
+        if field in changes:
+            setattr(user, field, (changes[field] or "").strip() or None)
 
     await ctx.session.flush()
     invited = False
@@ -663,7 +672,7 @@ async def update_user(
             await _queue_link(ctx, user, tasks)
             invited = True
 
-    after = {"name": user.name, "email": user.email, "role": user.role, "speciality": user.speciality}
+    after = _staff_snapshot(user)
     await audit.record(
         ctx.session, action="user.update", tenant_id=ctx.tenant_id, actor_kind=ctx.actor_kind,
         actor_id=ctx.actor_id, actor_label=ctx.principal.label, entity="user", entity_id=str(user.id),

@@ -50,6 +50,11 @@ class User(Base, TenantScoped, TimestampMixin):
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     initials: Mapped[str] = mapped_column(String(4), nullable=False, default="")
     speciality: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    #: What a doctor writes after their name on paper — "MBBS, MD (General
+    #: Medicine)" — and the number they are registered under. Both optional;
+    #: a printed prescription carries them when they are set.
+    qualifications: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    registration_no: Mapped[str | None] = mapped_column(String(60), nullable=True)
     #: A doctor's own price for a consultation. NULL means "use the clinic's
     #: default" (the ServicePrice row with code CONSULTATION) — never zero,
     #: which would mean "this doctor's consultation is free."

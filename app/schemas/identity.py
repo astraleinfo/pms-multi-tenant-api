@@ -46,6 +46,9 @@ class UserOut(ApiModel):
     email: str
     initials: str
     speciality: str | None = None
+    #: printed after a clinician's name on a prescription, with their registration number
+    qualifications: str | None = None
+    registration_no: str | None = None
     consultation_fee: float | None = None
     status: AccountStatus
     failed_attempts: int
@@ -66,6 +69,7 @@ class UserOut(ApiModel):
         return cls(
             id=str(u.id), tenant_id=str(u.tenant_id), name=u.name, role=u.role, email=u.email,
             initials=u.initials, speciality=u.speciality,
+            qualifications=u.qualifications, registration_no=u.registration_no,
             consultation_fee=money(u.consultation_fee) if u.consultation_fee is not None else None,
             status=u.status,
             failed_attempts=u.failed_attempts, last_sign_in=day(u.last_sign_in, tz),
@@ -144,12 +148,15 @@ class UserCreateIn(InputModel):
 
 class UserUpdateIn(InputModel):
     """What a practice admin may change about a colleague. Everything is
-    optional; what is sent is what changes. A speciality sent as "" clears it."""
+    optional; what is sent is what changes. A speciality, qualifications or
+    registration number sent as "" clears it."""
 
     name: str | None = Field(default=None, min_length=2, max_length=160)
     email: EmailStr | None = None
     role: str | None = Field(default=None, max_length=40)
     speciality: str | None = Field(default=None, max_length=120)
+    qualifications: str | None = Field(default=None, max_length=160)
+    registration_no: str | None = Field(default=None, max_length=60)
 
 
 class PasswordSetIn(InputModel):

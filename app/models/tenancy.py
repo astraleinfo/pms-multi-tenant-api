@@ -43,6 +43,7 @@ from app.models.enums import (
     FieldType,
     TenantStatus,
 )
+from app.services.colour import DEFAULT_BRAND
 
 
 class ClinicalType(Base):
@@ -107,6 +108,16 @@ class TenantConfig(Base, TenantScoped, TimestampMixin):
     contact_phone: Mapped[str] = mapped_column(String(40), nullable=False, default="")
     contact_email: Mapped[str] = mapped_column(String(160), nullable=False, default="")
     address: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+    #: What a printed document says about who this clinic is — all optional, and
+    #: printed only when set. `brand_color` is the colour of the branded
+    #: documents' band (an invoice, say); it always has one, and always one that
+    #: white text can be read on (the schema refuses any other).
+    registration_no: Mapped[str] = mapped_column(String(60), nullable=False, default="", server_default="")
+    gstin: Mapped[str] = mapped_column(String(20), nullable=False, default="", server_default="")
+    brand_color: Mapped[str] = mapped_column(
+        String(7), nullable=False, default=DEFAULT_BRAND, server_default=DEFAULT_BRAND
+    )
 
     mrn_prefix: Mapped[str] = mapped_column(String(8), nullable=False, default="AS")
     mrn_sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=1501)

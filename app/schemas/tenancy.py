@@ -17,6 +17,7 @@ from app.models.enums import (
     TenantStatus,
 )
 from app.schemas.common import ApiModel, InputModel, iso_date, local_iso, money, zone
+from app.services.colour import MIN_CONTRAST, contrast_with_white
 
 
 class TenantOut(ApiModel):
@@ -95,6 +96,9 @@ class TenantConfigOut(ApiModel):
     contact_phone: str
     contact_email: str
     address: str
+    registration_no: str
+    gstin: str
+    brand_color: str
     mrn_prefix: str
     day_start: str
     day_end: str
@@ -116,6 +120,7 @@ class TenantConfigOut(ApiModel):
         return cls(
             tenant_id=str(c.tenant_id),
             contact_phone=c.contact_phone, contact_email=c.contact_email, address=c.address,
+            registration_no=c.registration_no, gstin=c.gstin, brand_color=c.brand_color,
             mrn_prefix=c.mrn_prefix, day_start=c.day_start, day_end=c.day_end,
             slot_minutes=c.slot_minutes, default_duration=c.default_duration,
             appointment_types=list(c.appointment_types or []),
@@ -133,6 +138,10 @@ class TenantConfigPatch(InputModel):
     contact_phone: str | None = Field(default=None, max_length=40)
     contact_email: str | None = Field(default=None, max_length=160)
     address: str | None = Field(default=None, max_length=500)
+    registration_no: str | None = Field(default=None, max_length=60)
+    gstin: str | None = Field(default=None, max_length=20)
+    #: the colour of the band on the branded documents; white text must be readable on it
+    brand_color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
     mrn_prefix: str | None = Field(default=None, pattern=r"^[A-Z0-9]{1,8}$")
     day_start: str | None = Field(default=None, pattern=_HHMM)
     day_end: str | None = Field(default=None, pattern=_HHMM)
@@ -147,6 +156,15 @@ class TenantConfigPatch(InputModel):
     payment_terms_days: int | None = Field(default=None, ge=0, le=365)
     expiry_alert_days: int | None = Field(default=None, ge=1, le=730)
     currency: Currency | None = None
+
+    @field_validator("brand_color")
+    @classmethod
+    def _readable_with_white(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        if contrast_with_white(value) < MIN_CONTRAST:
+            raise ValueError("That colour is too light for white text to be read on it. Pick a darker one.")
+        return value.lower()
 
     @field_validator("appointment_types")
     @classmethod

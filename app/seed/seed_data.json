@@ -3359,6 +3359,34 @@
    "group": "Vitals"
   },
   {
+   "id": "fd-94",
+   "scope": "common",
+   "clinical_type": null,
+   "tenant_id": null,
+   "entity": "encounter",
+   "field_key": "temperature",
+   "label": "Temperature (°F)",
+   "type": "number",
+   "required": false,
+   "order": 25,
+   "span": 1,
+   "group": "Vitals"
+  },
+  {
+   "id": "fd-95",
+   "scope": "common",
+   "clinical_type": null,
+   "tenant_id": null,
+   "entity": "encounter",
+   "field_key": "spo2",
+   "label": "SpO₂ (%)",
+   "type": "number",
+   "required": false,
+   "order": 35,
+   "span": 1,
+   "group": "Vitals"
+  },
+  {
    "id": "fd-70",
    "scope": "clinical_type",
    "clinical_type": "dental",
