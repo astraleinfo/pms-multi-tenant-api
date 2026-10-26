@@ -34,7 +34,6 @@ from app.models.tenancy import TenantConfig
 from app.schemas.common import local_now
 from app.services.pdf import (
     _ACCENT,
-    _ACCENT_SOFT,
     _BODY,
     _BODY_SM,
     _FOOT,
@@ -50,25 +49,19 @@ from app.services.pdf import (
     _TD,
     _TH,
     _TITLE,
+    PLATFORM_THEME,
     Theme,
     _logo_flowable,
     band_header,
+    band_monogram,
     document,
     esc,
     letterhead,
-    monogram,
     paged,
     person,
     theme_for,
 )
 from app.services.pdf_fonts import CURRENCY_SYMBOLS, FONT, FONT_BOLD, has_glyph
-
-_OK = colors.HexColor("#1f7a4d")
-_OK_SOFT = colors.HexColor("#e6f4ec")
-_WARN = colors.HexColor("#8a5a00")
-_WARN_SOFT = colors.HexColor("#fdf3dc")
-_VOID = colors.HexColor("#8a1f11")
-_VOID_SOFT = colors.HexColor("#fdecea")
 
 _RIGHT = ParagraphStyle("Right", parent=_BODY, alignment=2)
 _TD_RIGHT = ParagraphStyle("CellRight", parent=_TD, alignment=2)
@@ -91,12 +84,13 @@ _KPI_HINT = ParagraphStyle(
     "KpiHint", parent=_STYLES["Normal"], fontSize=7.4, leading=9.5, textColor=_INK_2,
 )
 
-_STATUS_LOOK = {
-    InvoiceStatus.DRAFT: ("DRAFT", _WARN, _WARN_SOFT),
-    InvoiceStatus.ISSUED: ("ISSUED", _ACCENT, _ACCENT_SOFT),
-    InvoiceStatus.PARTIALLY_PAID: ("PART PAID", _WARN, _WARN_SOFT),
-    InvoiceStatus.PAID: ("PAID", _OK, _OK_SOFT),
-    InvoiceStatus.VOID: ("VOID", _VOID, _VOID_SOFT),
+#: how an invoice's status is spelled on paper — always in words, never by colour alone
+_STATUS_WORD = {
+    InvoiceStatus.DRAFT: "DRAFT",
+    InvoiceStatus.ISSUED: "ISSUED",
+    InvoiceStatus.PARTIALLY_PAID: "PART PAID",
+    InvoiceStatus.PAID: "PAID",
+    InvoiceStatus.VOID: "VOID",
 }
 
 
@@ -135,21 +129,6 @@ def _grid(rows: list[list], widths: list[float], *, numeric_from: int | None = N
     style += [("BACKGROUND", (0, i), (-1, i), _ROW_ALT) for i in range(2, len(rows), 2)]
     table.setStyle(TableStyle(style))
     return table
-
-
-def _stamp(label: str, ink, ground) -> Table:
-    stamp = Table([[Paragraph(
-        label,
-        ParagraphStyle("Stamp", parent=_BODY, fontName=FONT_BOLD, fontSize=8.5,
-                       textColor=ink, alignment=1, leading=10),
-    )]])
-    stamp.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), ground),
-        ("BOX", (0, 0), (-1, -1), 0.8, ink),
-        ("LEFTPADDING", (0, 0), (-1, -1), 8), ("RIGHTPADDING", (0, 0), (-1, -1), 8),
-        ("TOPPADDING", (0, 0), (-1, -1), 3), ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-    ]))
-    return stamp
 
 
 # --- the invoice ----------------------------------------------------------------
@@ -220,7 +199,7 @@ def build_invoice_pdf(
     doc = document(buf, title=f"Invoice {invoice.number}", author=clinic)
     theme = theme_for(config)
     status = InvoiceStatus(invoice.status)
-    label = _STATUS_LOOK[status][0]
+    label = _STATUS_WORD[status]
     story: list = band_header(
         doc, theme=theme, clinic=clinic, config=config, logo=logo, title="Invoice",
         reference=invoice.number,
@@ -557,60 +536,58 @@ def build_report_pdf(
 def build_subscription_invoice_pdf(
     bill, *, clinic: str, hold_on: date, clinic_logo: bytes | None = None,
 ) -> bytes:
-    """The monthly subscription bill, from the platform to one clinic. The
-    letterhead is the platform's — it is the one sending the bill — and the
-    clinic it is addressed to carries its own mark in the billed-to block."""
+    """The monthly subscription bill, from the platform to one clinic. The band is the
+    platform's — it is the one sending the bill — and the clinic it is addressed to
+    carries its own mark in the billed-to card."""
     buf = io.BytesIO()
     doc = document(buf, title=f"Subscription bill {bill.number}", author="Astrale Practice OS")
     status = str(getattr(bill.status, "value", bill.status))
-    look = {
-        "open": ("DUE", _ACCENT, _ACCENT_SOFT),
-        "paid": ("PAID", _OK, _OK_SOFT),
-        "void": ("VOID", _VOID, _VOID_SOFT),
-    }[status]
+    label = {"open": "DUE", "paid": "PAID", "void": "VOID"}[status]
+    theme = PLATFORM_THEME
     code = bill.currency
-    story: list = letterhead(
-        doc, clinic="Astrale Practice OS", config=None, logo=None,
-        kind="Subscription bill", ref=bill.number,
-        facts=[
-            f"Issued {bill.issued_on.strftime('%d %b %Y')}",
-            f"Due <b>{bill.due_on.strftime('%d %b %Y')}</b>",
-        ],
+    story: list = band_header(
+        doc, theme=theme, clinic="Astrale Practice OS", config=None, logo=None,
+        title="Subscription bill", reference=bill.number,
     )
 
-    mark = _logo_flowable(clinic_logo, size=12 * mm) or monogram(clinic, size=12 * mm)
+    card_width = doc.width * 0.6
+    mark = _logo_flowable(clinic_logo, size=12 * mm) or band_monogram(clinic, theme, size=12 * mm)
     addressee = _plain(Table([[mark, [
-        Paragraph("BILLED TO", _LABEL),
         Paragraph(f"<b>{_esc(clinic)}</b>", _BODY),
         Paragraph(
             f"Period {bill.period_start.strftime('%d %b %Y')} – {bill.period_end.strftime('%d %b %Y')}",
             _BODY_SM,
         ),
-    ]]], colWidths=[16 * mm, doc.width * 0.7 - 16 * mm]))
-    story.append(_plain(Table(
-        [[addressee, [Spacer(1, 10), _stamp(*look)]]],
-        colWidths=[doc.width * 0.7, doc.width * 0.3],
-    )))
+    ]]], colWidths=[16 * mm, card_width - 18 - 16 * mm]))
+    details = [
+        Paragraph(f"Issued: <b>{bill.issued_on.strftime('%d %b %Y')}</b>", _BODY_SM),
+        Paragraph(f"Due: <b>{bill.due_on.strftime('%d %b %Y')}</b>", _BODY_SM),
+        Paragraph(f"Status: <b>{label}</b>", _BODY_SM),
+    ]
+    story.append(_cards_row(
+        doc, _card("Billed to", [addressee], theme, card_width),
+        _card("Details", details, theme, doc.width * 0.37),
+    ))
     story.append(Spacer(1, 14))
 
-    rows: list[list] = [[Paragraph("Item", _TH), Paragraph("Monthly", _TH_RIGHT)]]
+    rows: list[list] = [[_head("Item", theme), _head("Monthly", theme, right=True)]]
     rows += [
         [Paragraph(_esc(line["name"]), _TD), Paragraph(money(line["amount"], code), _TD_RIGHT)]
         for line in bill.lines or []
     ]
-    story.append(_grid(rows, [doc.width * 0.7, doc.width * 0.3]))
+    story.append(_branded_grid(rows, [doc.width * 0.7, doc.width * 0.3], theme))
     story.append(Spacer(1, 10))
 
-    totals = Table(
-        [[Paragraph("Total", _TOTAL_LABEL), Paragraph(money(bill.amount, code), _TOTAL)]],
+    total = Table(
+        [[Paragraph("Total", _BALANCE_LABEL), Paragraph(money(bill.amount, code), _BALANCE_VALUE)]],
         colWidths=[doc.width * 0.2, doc.width * 0.22],
     )
-    totals.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), _ACCENT_SOFT),
-        ("LEFTPADDING", (0, 0), (-1, -1), 6), ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-        ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+    total.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), theme.accent),
+        ("LEFTPADDING", (0, 0), (-1, -1), 7), ("RIGHTPADDING", (0, 0), (-1, -1), 7),
+        ("TOPPADDING", (0, 0), (-1, -1), 6), ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
     ]))
-    story.append(_plain(Table([["", totals]], colWidths=[doc.width * 0.58, doc.width * 0.42])))
+    story.append(_plain(Table([["", total]], colWidths=[doc.width * 0.58, doc.width * 0.42])))
     story.append(Spacer(1, 18))
 
     if status == "paid":
@@ -626,5 +603,6 @@ def build_subscription_invoice_pdf(
         )
     story.append(Paragraph(note, _FOOT))
 
-    doc.build(story, canvasmaker=paged(f"Astrale Practice OS · Subscription bill {bill.number} · {clinic}"))
+    note = f"Astrale Practice OS · Subscription bill {bill.number} · {clinic}"
+    doc.build(story, canvasmaker=paged(note, band=theme.accent))
     return buf.getvalue()

@@ -257,6 +257,41 @@ async def test_a_bill_raised_per_module_still_reads_as_name_and_amount(northgate
     assert pdf.status_code == 200 and pdf.content.startswith(b"%PDF")
 
 
+async def test_the_subscription_bill_is_the_platforms_branded_invoice(northgate, northgate_id):
+    from tests.test_consultation_pdf import _text
+
+    async with tenant_session(northgate_id) as session:
+        # one bill per clinic per month, so each status gets a month of its own
+        for suffix, status, month in (
+            ("OPEN", SubscriptionInvoiceStatus.OPEN, 10),
+            ("PAID", SubscriptionInvoiceStatus.PAID, 9),
+            ("VOID", SubscriptionInvoiceStatus.VOID, 8),
+        ):
+            session.add(
+                SubscriptionInvoice(
+                    tenant_id=northgate_id, number=f"AST-202610-{suffix}", period_start=date(2026, month, 1),
+                    period_end=date(2026, month, 28), currency="INR", amount=9999,
+                    lines=[{"name": "Astrale PMS subscription", "amount": 9999}],
+                    issued_on=date(2026, month, 1), due_on=date(2026, month, 8), status=status,
+                    reminder_stage="none",
+                )
+            )
+    bills = {b["number"]: b for b in (await northgate.get("/v1/tenant/subscription")).json()["invoices"]}
+
+    for suffix, word in (("OPEN", "DUE"), ("PAID", "PAID"), ("VOID", "VOID")):
+        number = f"AST-202610-{suffix}"
+        response = await northgate.get(f"/v1/tenant/subscription/invoices/{bills[number]['id']}/pdf")
+        assert response.status_code == 200, response.text
+        text = _text(response.content)
+
+        assert "Astrale Practice OS" in text, suffix  # the platform is the one sending the bill
+        assert "SUBSCRIPTION BILL" in text, suffix
+        assert number in text, suffix
+        assert "Northgate" in text, suffix  # the clinic it is addressed to
+        assert f"Status: {word}" in text, suffix
+        assert "₹9,999.00" in text, suffix
+
+
 # --- the ladder ------------------------------------------------------------------------------
 
 
