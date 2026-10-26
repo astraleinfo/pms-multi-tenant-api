@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import io
 
-from tests.conftest import sign_in
 from tests.test_pricing_and_files import PNG_BYTES
 
 
@@ -90,20 +89,20 @@ async def test_the_patient_grid_prints_weight_when_recorded(northgate):
         (await northgate.get(f"/v1/encounters/{encounter['id']}/consultation-pdf")).content
     )
 
-    assert "68.5" in text
-    assert "WEIGHT" in text
+    assert "Weight" in text
+    assert "68.5 kg" in text
 
 
-async def test_the_patient_grid_has_no_weight_row_left_blank_looking_odd(northgate):
-    """No weight recorded is not a crash and not a blank hole — same
-    treatment as every other optional field on this grid."""
+async def test_the_patient_box_has_no_weight_label_when_none_is_recorded(northgate):
+    """No weight recorded is not a crash and not a label with nothing after it —
+    same treatment as every other optional field in the box."""
     encounter = await _a_signed_consultation(northgate)
 
     response = await northgate.get(f"/v1/encounters/{encounter['id']}/consultation-pdf")
     assert response.status_code == 200, response.text
     text = _text(response.content)
 
-    assert "WEIGHT" in text
+    assert "weight" not in text.lower()
 
 
 async def test_the_letterhead_has_no_logo_when_the_clinic_has_not_set_one(northgate):
@@ -126,3 +125,170 @@ async def test_the_letterhead_prints_the_clinics_logo_once_it_sets_one(northgate
     assert len(_embedded_images(response.content)) == 1
 
     await northgate.delete("/v1/tenant/config/logo")
+
+
+# --- the hospital-form consultation ------------------------------------------------
+
+
+async def _consultation(signed, *, patient=None, encounter=None, items=None) -> dict:
+    """A patient, a signed consultation for them, and — when `items` are given — its prescription."""
+    doctor = await _a_doctor(signed)
+    made = (
+        await signed.post(
+            "/v1/patients",
+            json={
+                "full_name": "Consultation PDF Patient", "dob": "1988-04-11", "sex": "female",
+                "phone": "9770090055", "blood_group": "O+", **(patient or {}),
+            },
+        )
+    ).json()
+    visit = (
+        await signed.post(
+            "/v1/encounters",
+            json={
+                "patient_id": made["id"], "doctor_id": doctor["id"],
+                "chief_complaint": "Dry cough for six days", "diagnosis": "Acute bronchitis",
+                "sign": True, **(encounter or {}),
+            },
+        )
+    ).json()
+    assert "id" in visit, visit
+    if items:
+        rx = await signed.post(f"/v1/encounters/{visit['id']}/prescriptions", json={"items": items})
+        assert rx.status_code == 201, rx.text
+    return visit
+
+
+async def _printed(signed, visit: dict) -> str:
+    response = await signed.get(f"/v1/encounters/{visit['id']}/consultation-pdf")
+    assert response.status_code == 200, response.text
+    return _text(response.content)
+
+
+_AZITHROMYCIN = {
+    "medicine": "Azithromycin", "strength": "500 mg", "dosage": "1 tablet",
+    "frequency": "Once daily", "duration": "3 days", "instructions": "After food", "qty": 3,
+}
+
+
+async def test_the_consultation_reads_evidence_first(northgate):
+    visit = await _consultation(
+        northgate,
+        patient={"allergies": "Penicillin (rash)"},
+        encounter={"notes": "Chest clear except scattered wheeze.", "follow_up_days": 7},
+        items=[_AZITHROMYCIN],
+    )
+
+    text = await _printed(northgate, visit)
+
+    order = ["OPD CONSULTATION SUMMARY", "HISTORY", "EXAMINATION", "DIAGNOSIS", "MEDICATION ADVISED", "FOLLOW-UP"]
+    positions = [text.index(heading) for heading in order]
+    assert positions == sorted(positions), dict(zip(order, positions, strict=True))
+    assert "ALLERGIES" in text and "Penicillin (rash)" in text
+    assert "Azithromycin" in text
+
+
+async def test_the_consultation_has_a_reference_number(northgate):
+    visit = await _consultation(northgate)
+
+    text = await _printed(northgate, visit)
+
+    # the random tail of the id — a UUIDv7's head is a timestamp and repeats for hours
+    assert "CON-" + visit["id"].replace("-", "")[-6:].upper() in text
+
+
+async def test_the_consultation_prints_registration_numbers_when_set_and_not_otherwise(northgate):
+    doctor = await _a_doctor(northgate)
+    visit = await _consultation(northgate)
+    assert "Reg. No." not in await _printed(northgate, visit)
+
+    await northgate.patch("/v1/tenant/config", json={"registration_no": "KA/CL/2041"})
+    await northgate.patch(
+        f"/v1/users/{doctor['id']}",
+        json={"qualifications": "MBBS, MD (General Medicine)", "registration_no": "KMC 48213"},
+    )
+    try:
+        text = await _printed(northgate, visit)
+        assert "Clinic Reg. No. KA/CL/2041" in text
+        assert "MBBS, MD (General Medicine)" in text
+        assert "Reg. No. KMC 48213" in text
+    finally:
+        await northgate.patch("/v1/tenant/config", json={"registration_no": ""})
+        await northgate.patch(f"/v1/users/{doctor['id']}", json={"qualifications": "", "registration_no": ""})
+
+
+async def test_the_consultation_prints_the_vitals_that_were_recorded(northgate):
+    visit = await _consultation(
+        northgate,
+        encounter={"clinical_ext": {"bp": "118/76", "pulse": 82, "temperature": 99.1, "spo2": 97}},
+    )
+
+    text = await _printed(northgate, visit)
+
+    assert "BP 118/76" in text
+    assert "Pulse 82" in text
+    assert "Temp 99.1" in text
+    assert "SpO₂ 97" in text
+
+
+async def test_a_consultation_with_no_vitals_prints_no_vitals_line(northgate):
+    visit = await _consultation(northgate)
+
+    assert "vitals" not in (await _printed(northgate, visit)).lower()
+
+
+async def test_the_examination_prints_the_clinics_own_fields_and_the_structured_exam(northgate):
+    visit = await _consultation(
+        northgate,
+        encounter={"clinical_ext": {"pain_scale": 6, "tooth_chart": {"16": "caries"}, "procedures": ["Scaling"]}},
+    )
+
+    text = await _printed(northgate, visit)
+
+    assert "Pain score" in text
+    assert "Tooth chart" in text and "16" in text
+    assert "Scaling" in text
+
+
+async def test_nothing_optional_prints_as_an_empty_label(northgate):
+    visit = await _consultation(
+        northgate,
+        patient={"blood_group": None},
+        encounter={"chief_complaint": "", "diagnosis": "", "notes": ""},
+    )
+
+    text = (await _printed(northgate, visit)).lower()
+
+    for label in ("allergies", "medication advised", "follow-up", "weight", "blood group", "history", "none"):
+        assert label not in text, label
+
+
+async def test_medicine_text_is_printed_literally(northgate):
+    visit = await _consultation(
+        northgate, items=[{**_AZITHROMYCIN, "medicine": "Amox <500> & Clav", "instructions": "<b>after</b> food"}]
+    )
+
+    text = await _printed(northgate, visit)
+
+    assert "Amox <500> & Clav" in text
+    assert "<b>after</b> food" in text
+
+
+async def test_a_very_long_note_flows_onto_more_pages(northgate):
+    import re
+
+    visit = await _consultation(northgate, encounter={"notes": "Chest clear on auscultation. " * 250})
+
+    text = await _printed(northgate, visit)
+
+    pages = re.search(r"Page 1 of (\d+)", text)
+    assert pages and int(pages.group(1)) >= 2, "a long note should run on, not be cut off"
+    assert f"Page 2 of {pages.group(1)}" in text
+
+
+async def test_a_patient_name_in_an_unsupported_script_does_not_break_the_consultation(northgate):
+    visit = await _consultation(northgate, patient={"full_name": "अनिता Verma"})
+
+    text = await _printed(northgate, visit)
+
+    assert "Verma" in text

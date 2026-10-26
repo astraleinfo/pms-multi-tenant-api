@@ -28,9 +28,15 @@ from app.services import audit
 from app.services import encounters as encounter_service
 from app.services import lab as lab_service
 from app.services import tenants as tenant_service
-from app.services.pdf import build_consultation_pdf
+from app.services.consultation_pdf import build_consultation_pdf
 
 router = APIRouter(prefix="/encounters", tags=["consultation"])
+
+#: Printed in their own places on a consultation — the vitals as one line, the rest
+#: as sections — so they are not repeated as clinic fields under Examination.
+_PRINTED_ELSEWHERE = {
+    "chief_complaint", "notes", "diagnosis", "follow_up_days", "bp", "pulse", "temperature", "spo2",
+}
 
 
 @router.get("/schema", response_model=list[FieldDefinitionOut])
@@ -145,15 +151,25 @@ async def consultation_pdf(
     prescription = await encounter_service.get_prescription_for_encounter(ctx.session, ctx.tenant_id, eid)
     doctor = await ctx.session.get(User, encounter.doctor_id)
     logo_config = await tenant_service.config_with_logo(ctx.session, ctx.tenant_id)
+    schema = await tenant_service.effective_schema(ctx.session, ctx.tenant, FieldEntity.ENCOUNTER)
+    ext = encounter.clinical_ext or {}
+    exam_fields = [
+        (d.label, ext[d.field_key])
+        for d in schema
+        if d.field_key not in _PRINTED_ELSEWHERE
+        and ext.get(d.field_key) not in (None, "", [])
+        and not isinstance(ext.get(d.field_key), (dict, list))
+    ]
     pdf_bytes = build_consultation_pdf(
         encounter,
         prescription,
         encounter.patient,
         tenant_name=ctx.tenant.name,
-        doctor_name=doctor.name if doctor else "",
+        doctor=doctor,
         tz=ctx.tz,
         config=ctx.config,
         logo=await tenant_service.logo_bytes(logo_config),
+        exam_fields=exam_fields,
     )
     return Response(
         content=pdf_bytes,

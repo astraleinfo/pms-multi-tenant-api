@@ -1,8 +1,10 @@
-"""Rendering a consultation (encounter + prescription) as a printable PDF.
+"""What every printed document shares, and the patient record.
 
 Pure-Python via reportlab — no system/native dependencies, so it runs
-anywhere the API itself runs. `build_consultation_pdf` is the only entry
-point: everything else is layout detail for the one document it produces.
+anywhere the API itself runs. The page furniture here — palette, type,
+letterheads, footer, the escaping every typed string goes through — is used by
+the consultation (`consultation_pdf.py`), the consent form, the invoices and
+the practice report; `build_patient_record_pdf` is the one document built here.
 
 Every table cell holds a `Paragraph`, never a raw string — a raw string in a
 reportlab `Table` does not wrap, so a value longer than its column silently
@@ -14,9 +16,9 @@ from __future__ import annotations
 
 import io
 import logging
-from datetime import date, timedelta
+from datetime import date
 
-from reportlab.graphics.shapes import Drawing, Rect, String
+from reportlab.graphics.shapes import Circle, Drawing, Rect, String
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
@@ -28,7 +30,6 @@ from reportlab.platypus import (
     Frame,
     HRFlowable,
     Image,
-    KeepTogether,
     PageTemplate,
     Paragraph,
     SimpleDocTemplate,
@@ -37,7 +38,7 @@ from reportlab.platypus import (
     TableStyle,
 )
 
-from app.models.clinical import Encounter, Patient, Prescription
+from app.models.clinical import Patient
 from app.models.tenancy import TenantConfig
 from app.schemas.common import local_now, stamp
 from app.services.pdf_fonts import FONT, FONT_BOLD, glyph_safe
@@ -282,10 +283,144 @@ def person(label: str) -> str:
     return label.split("<")[0].strip() or label
 
 
+# --- the Form family -----------------------------------------------------------------
+# The consultation and the consent form are forms: read closely, signed, and
+# photocopied. Black ink on white — hierarchy comes from weight, boxes and rules,
+# never from colour, so they read the same from a monochrome printer.
+
+_BLACK = colors.black
+_GRID_HEAD = colors.HexColor("#e5e5e5")
+
+_FORM_NAME = ParagraphStyle(
+    "FormClinicName", parent=_STYLES["Normal"], fontName=FONT_BOLD, fontSize=14.5, leading=17,
+    textColor=_BLACK,
+)
+_FORM_META = ParagraphStyle(
+    "FormClinicMeta", parent=_STYLES["Normal"], fontSize=7.8, leading=11, textColor=_INK_2, spaceBefore=2,
+)
+_FORM_TITLE = ParagraphStyle(
+    "FormTitle", parent=_STYLES["Normal"], fontName=FONT_BOLD, fontSize=11, leading=14, alignment=1,
+    textColor=_BLACK,
+)
+_FORM_SECTION = ParagraphStyle(
+    "FormSection", parent=_STYLES["Normal"], fontName=FONT_BOLD, fontSize=8.6, leading=11, textColor=_BLACK,
+)
+_FORM_CELL = ParagraphStyle(
+    "FormCell", parent=_STYLES["Normal"], fontSize=9, leading=12.4, textColor=_BLACK,
+)
+_FORM_ALERT = ParagraphStyle(
+    "FormAlert", parent=_STYLES["Normal"], fontName=FONT_BOLD, fontSize=9.4, leading=12.8, textColor=_BLACK,
+)
+
+
+def identity_lines(config: TenantConfig | None, *, gstin: bool = False) -> list[str]:
+    """The clinic's registration number, and its GSTIN where the document is a bill —
+    each left out when the clinic has not set it."""
+    if config is None:
+        return []
+    lines: list[str] = []
+    if (config.registration_no or "").strip():
+        lines.append(f"Clinic Reg. No. {config.registration_no.strip()}")
+    if gstin and (config.gstin or "").strip():
+        lines.append(f"GSTIN {config.gstin.strip()}")
+    return lines
+
+
+def form_monogram(name: str, size: float = 15 * mm) -> Drawing:
+    """The clinic's initials in a black ring — the Form header's mark for a clinic
+    with no logo of its own, so the header is the same shape either way."""
+    d = Drawing(size, size)
+    d.add(Circle(size / 2, size / 2, size / 2 - 1, fillColor=colors.white,
+                 strokeColor=_BLACK, strokeWidth=1.8))
+    text = _initials(name)
+    font = size * (0.34 if len(text) > 1 else 0.42)
+    d.add(String(size / 2, size / 2 - font * 0.35, text, textAnchor="middle",
+                 fontName=FONT_BOLD, fontSize=font, fillColor=_BLACK))
+    return d
+
+
+def form_header(
+    doc: SimpleDocTemplate,
+    *,
+    clinic: str,
+    config: TenantConfig | None,
+    logo: bytes | None,
+    title: str,
+    gstin: bool = False,
+) -> list:
+    """The top of a form's first page: the clinic's logo (or initials), its name
+    in capitals and how to reach it, a heavy rule, then what this paper is,
+    centred. Lines the clinic has not filled in are left out."""
+    mark = _logo_flowable(logo, size=15 * mm) or form_monogram(clinic)
+    lines = [*_letterhead_lines(config, hours=True), *identity_lines(config, gstin=gstin)]
+    who: list = [Paragraph(esc(clinic or "Clinic").upper(), _FORM_NAME)]
+    if lines:
+        who.append(Paragraph("<br/>".join(esc(line) for line in lines), _FORM_META))
+    mark_w = 19 * mm
+    head = Table([[mark, who]], colWidths=[mark_w, doc.width - mark_w])
+    head.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("TOPPADDING", (0, 0), (-1, -1), 0), ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+    ]))
+    return [
+        head, Spacer(1, 7), HRFlowable(width="100%", thickness=2.2, color=_BLACK), Spacer(1, 8),
+        Paragraph(esc(title).upper(), _FORM_TITLE), Spacer(1, 9),
+    ]
+
+
+def info_box(doc: SimpleDocTemplate, items: list[tuple[str, object]]) -> Table:
+    """A bordered box of `Label: value` pairs in two columns. A pair whose value is
+    empty is dropped and the rest close up — a form never prints a label with
+    nothing after it."""
+    cells = [
+        Paragraph(f"<b>{esc(label)}:</b> {esc(value)}", _FORM_CELL)
+        for label, value in items
+        if value is not None and str(value).strip()
+    ]
+    if len(cells) % 2:
+        cells.append("")
+    rows = [cells[i:i + 2] for i in range(0, len(cells), 2)] or [["", ""]]
+    box = Table(rows, colWidths=[doc.width / 2] * 2)
+    box.setStyle(TableStyle([
+        ("BOX", (0, 0), (-1, -1), 1, _BLACK),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 7), ("RIGHTPADDING", (0, 0), (-1, -1), 7),
+        ("TOPPADDING", (0, 0), (-1, -1), 2.5), ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5),
+    ]))
+    return box
+
+
+def section_title(doc: SimpleDocTemplate, text: str) -> Table:
+    """A form's section heading: bold capitals over a rule. Always kept with what follows."""
+    title = Table([[Paragraph(esc(text).upper(), _FORM_SECTION)]], colWidths=[doc.width],
+                  spaceBefore=11, spaceAfter=4)
+    title.setStyle(TableStyle([
+        ("LINEBELOW", (0, 0), (-1, -1), 0.9, _BLACK),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("TOPPADDING", (0, 0), (-1, -1), 0), ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+    ]))
+    title.keepWithNext = 1
+    return title
+
+
+def allergy_box(doc: SimpleDocTemplate, allergies: str) -> Table:
+    """The one thing on a clinical form that must not be missed: a heavy black box
+    — it stands out on a photocopy, where a colour wash would not."""
+    box = Table([[Paragraph(f"ALLERGIES: {esc(allergies)}", _FORM_ALERT)]], colWidths=[doc.width])
+    box.setStyle(TableStyle([
+        ("BOX", (0, 0), (-1, -1), 1.8, _BLACK),
+        ("LEFTPADDING", (0, 0), (-1, -1), 8), ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+        ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    return box
+
+
 def paged(note: str, *, confidential: bool = False):
     """A canvas that knows how many pages there are, so the footer can say
     "Page 2 of 3" — paper gets separated, and a reader should know when a page
     is missing. `note` names the document on every page."""
+    note = glyph_safe(note)  # drawn straight on the canvas, so it skips `esc`
     fine_print = "Confidential medical information" if confidential else ""
 
     class _Paged(pdf_canvas.Canvas):
@@ -338,135 +473,6 @@ def _logo_flowable(logo: bytes | None, size: float = 18 * mm) -> Image | None:
         # it is a decoder missing a format, and then every PDF loses its logo.
         log.exception("could not draw the clinic logo; printing without it")
         return None
-
-
-def build_consultation_pdf(
-    encounter: Encounter,
-    prescription: Prescription | None,
-    patient: Patient,
-    *,
-    tenant_name: str,
-    doctor_name: str,
-    tz: str | None = None,
-    config: TenantConfig | None = None,
-    logo: bytes | None = None,
-) -> bytes:
-    """Render one consultation as a PDF and return its bytes.
-
-    `prescription` is optional: when the encounter has none, the medicines
-    section is left out entirely rather than shown empty. `config` is
-    optional for the same reason `tenant_name` alone used to be enough — a
-    caller that has not fetched it yet still gets a valid PDF, just without
-    the address/phone/hours line under the clinic name. `logo` is the
-    clinic's own mark, already read from wherever it lives (§ storage) —
-    this function only lays out bytes it is handed.
-    """
-    buf = io.BytesIO()
-    doc = document(buf, title=f"Consultation — {patient.full_name}", author=tenant_name or "Clinic")
-    story: list = letterhead(
-        doc, clinic=tenant_name, config=config, logo=logo, hours=True,
-        kind="Consultation record",
-        ref=encounter.date.strftime("%d %b %Y"),
-        facts=[f"Issued {local_now(tz).strftime('%d %b %Y, %H:%M')}"],
-        gap=4,
-    )
-    story.append(Paragraph(
-        esc(encounter.diagnosis or encounter.chief_complaint or "Consultation"), _TITLE,
-    ))
-    story.append(Spacer(1, 2))
-    story.append(Paragraph(f"Seen by {esc(doctor_name or 'the attending clinician')}", _BODY_SM))
-
-    # --- patient block ------------------------------------------------------
-    story.append(Paragraph("PATIENT", _SECTION))
-    dob_line = f"{patient.dob.strftime('%d %b %Y')} · {_age_years(patient.dob, encounter.date)} yrs"
-    patient_rows = [
-        [_field("Name", patient.full_name), _field("Record no.", patient.mrn)],
-        [_field("Date of birth", dob_line), _field("Sex", patient.sex.value.title())],
-        [_field("Blood group", patient.blood_group or "—"), _field("Weight", _weight_display(patient))],
-        [_field("Phone", patient.phone or "—"), ""],
-    ]
-    patient_table = Table(patient_rows, colWidths=[doc.width * 0.5, doc.width * 0.5])
-    patient_table.setStyle(TableStyle([
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 10),
-        ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-        ("LINEBELOW", (0, 0), (-1, -2), 0.5, _LINE),
-    ]))
-    story.append(patient_table)
-
-    if patient.allergies and patient.allergies.strip().lower() not in {"none", "none recorded", "nil"}:
-        story.append(Spacer(1, 8))
-        story.append(allergy_band(doc, f"ALLERGY ALERT — {esc(patient.allergies)}"))
-
-    # --- encounter block ------------------------------------------------------
-    story.append(Paragraph("ASSESSMENT", _SECTION))
-    assessment_rows = [
-        [_field("Chief complaint", encounter.chief_complaint or "—")],
-        [_field("Diagnosis", encounter.diagnosis or "—")],
-        [_field("Clinical notes", encounter.notes or "—")],
-    ]
-    if encounter.follow_up_days:
-        follow_up_date = encounter.date + timedelta(days=encounter.follow_up_days)
-        assessment_rows.append([
-            _field(
-                "Follow-up",
-                f"{follow_up_date.strftime('%d %b %Y')} — in {encounter.follow_up_days} days",
-            ),
-        ])
-    assessment_table = Table(assessment_rows, colWidths=[doc.width])
-    assessment_table.setStyle(TableStyle([
-        ("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-        ("TOPPADDING", (0, 0), (-1, -1), 0), ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
-    ]))
-    story.append(assessment_table)
-
-    # --- prescription block -------------------------------------------------
-    if prescription is not None and prescription.items:
-        story.append(Paragraph("PRESCRIPTION", _SECTION))
-        col_labels = ["Medicine", "Strength", "Dosage", "Frequency", "Duration", "Instructions", "Qty"]
-        rows: list[list] = [[Paragraph(h, _TH) for h in col_labels]]
-        for item in prescription.items:
-            rows.append([
-                Paragraph(item.medicine, _TD),
-                Paragraph(item.strength or "—", _TD),
-                Paragraph(item.dosage or "—", _TD),
-                Paragraph(item.frequency or "—", _TD),
-                Paragraph(item.duration or "—", _TD),
-                Paragraph(item.instructions or "—", _TD),
-                Paragraph(str(item.qty), _TD),
-            ])
-        # Generous room for the two columns that run long in practice
-        # (frequency, instructions); everything wraps, so nothing overruns.
-        col_widths = [doc.width * w for w in (0.18, 0.10, 0.12, 0.16, 0.11, 0.25, 0.08)]
-        rx_table = Table(rows, colWidths=col_widths, repeatRows=1)
-        style = [
-            ("BACKGROUND", (0, 0), (-1, 0), _HEADER_BG),
-            ("LINEBELOW", (0, 0), (-1, 0), 0.75, _LINE),
-            ("LINEBELOW", (0, 1), (-1, -1), 0.5, _LINE),
-            ("VALIGN", (0, 0), (-1, -1), "TOP"),
-            ("LEFTPADDING", (0, 0), (-1, -1), 6), ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-            ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-        ]
-        for i in range(1, len(rows)):
-            if i % 2 == 0:
-                style.append(("BACKGROUND", (0, i), (-1, i), _ROW_ALT))
-        rx_table.setStyle(TableStyle(style))
-        story.append(rx_table)
-
-    # --- footer / signature -------------------------------------------------
-    story.append(Spacer(1, 30))
-    story.append(KeepTogether([
-        HRFlowable(width="45%", thickness=0.75, color=_INK_3, hAlign="LEFT"),
-        Spacer(1, 3),
-        Paragraph(doctor_name or "Attending clinician", ParagraphStyle(
-            "SigName", parent=_BODY, fontName=FONT_BOLD,
-        )),
-        Paragraph("PRESCRIBING CLINICIAN — SIGNATURE", _LABEL),
-    ]))
-
-    note = f"{tenant_name} · Consultation {encounter.date.strftime('%d %b %Y')} · {patient.full_name}"
-    doc.build(story, canvasmaker=paged(note, confidential=True))
-    return buf.getvalue()
 
 
 # --- the patient record ---------------------------------------------------------
