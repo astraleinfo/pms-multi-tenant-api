@@ -41,13 +41,14 @@ from app.services.pdf import (
     letterhead,
     paged,
 )
+from app.services.pdf_fonts import FONT_BOLD
 
 log = logging.getLogger("pms.consent")
 
 _TITLE = ParagraphStyle(
     "ConsentTitle",
     parent=_STYLES["Normal"],
-    fontName="Helvetica-Bold",
+    fontName=FONT_BOLD,
     fontSize=17,
     leading=21,
     textColor=_INK,
@@ -55,7 +56,7 @@ _TITLE = ParagraphStyle(
 _H = ParagraphStyle(
     "ConsentHeading",
     parent=_STYLES["Normal"],
-    fontName="Helvetica-Bold",
+    fontName=FONT_BOLD,
     fontSize=10.5,
     leading=13,
     textColor=_INK,
@@ -68,7 +69,7 @@ _BULLET = ParagraphStyle("ConsentBullet", parent=_P, leftIndent=11, bulletIndent
 _LABEL = ParagraphStyle(
     "ConsentLabel",
     parent=_STYLES["Normal"],
-    fontName="Helvetica-Bold",
+    fontName=FONT_BOLD,
     fontSize=7,
     leading=9,
     textColor=_INK_2,
@@ -78,7 +79,7 @@ _SMALL = ParagraphStyle("ConsentSmall", parent=_P, fontSize=8, leading=11, textC
 _BAND = ParagraphStyle(
     "ConsentBand",
     parent=_STYLES["Normal"],
-    fontName="Helvetica-Bold",
+    fontName=FONT_BOLD,
     fontSize=8.6,
     leading=11,
     textColor=_INK,

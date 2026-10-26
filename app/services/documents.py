@@ -3,9 +3,10 @@
 The consultation record lives in `pdf.py`; these two share its palette and
 type so that everything a clinic prints looks like it came from one place.
 
-Amounts are printed with the ISO code ("INR 1,250.00") rather than a symbol:
-the built-in PDF fonts have no rupee sign, and a code reads the same on every
-printer and in every language.
+Amounts are printed with the currency's symbol ("₹1,250.00") — the embedded
+font has the rupee sign the built-in PDF fonts lacked. A currency with no
+symbol, or one the font cannot draw, falls back to its ISO code
+("CHF 1,250.00"), which reads the same on every printer.
 """
 
 from __future__ import annotations
@@ -57,6 +58,7 @@ from app.services.pdf import (
     paged,
     person,
 )
+from app.services.pdf_fonts import CURRENCY_SYMBOLS, FONT, FONT_BOLD, has_glyph
 
 _OK = colors.HexColor("#1f7a4d")
 _OK_SOFT = colors.HexColor("#e6f4ec")
@@ -69,17 +71,17 @@ _RIGHT = ParagraphStyle("Right", parent=_BODY, alignment=2)
 _TD_RIGHT = ParagraphStyle("CellRight", parent=_TD, alignment=2)
 _TH_RIGHT = ParagraphStyle("HeadRight", parent=_TH, alignment=2)
 _TOTAL = ParagraphStyle(
-    "Total", parent=_BODY, fontName="Helvetica-Bold", fontSize=12, leading=15, alignment=2
+    "Total", parent=_BODY, fontName=FONT_BOLD, fontSize=12, leading=15, alignment=2
 )
 _TOTAL_LABEL = ParagraphStyle(
-    "TotalLabel", parent=_BODY, fontName="Helvetica-Bold", fontSize=10.5, leading=15
+    "TotalLabel", parent=_BODY, fontName=FONT_BOLD, fontSize=10.5, leading=15
 )
 _KPI_VALUE = ParagraphStyle(
-    "KpiValue", parent=_STYLES["Normal"], fontName="Helvetica-Bold", fontSize=15, leading=18,
+    "KpiValue", parent=_STYLES["Normal"], fontName=FONT_BOLD, fontSize=15, leading=18,
     textColor=_INK,
 )
 _KPI_LABEL = ParagraphStyle(
-    "KpiLabel", parent=_STYLES["Normal"], fontName="Helvetica-Bold", fontSize=6.8, leading=9,
+    "KpiLabel", parent=_STYLES["Normal"], fontName=FONT_BOLD, fontSize=6.8, leading=9,
     textColor=_INK_3,
 )
 _KPI_HINT = ParagraphStyle(
@@ -96,7 +98,11 @@ _STATUS_LOOK = {
 
 
 def money(amount: float | Decimal | int | None, code: str) -> str:
-    return f"{code} {float(amount or 0):,.2f}".strip()
+    value = float(amount or 0)
+    symbol = CURRENCY_SYMBOLS.get(code, "")
+    if symbol and has_glyph(symbol):
+        return f"{'-' if value < 0 else ''}{symbol}{abs(value):,.2f}"
+    return f"{code} {value:,.2f}".strip()
 
 
 _esc = esc
@@ -131,7 +137,7 @@ def _grid(rows: list[list], widths: list[float], *, numeric_from: int | None = N
 def _stamp(label: str, ink, ground) -> Table:
     stamp = Table([[Paragraph(
         label,
-        ParagraphStyle("Stamp", parent=_BODY, fontName="Helvetica-Bold", fontSize=8.5,
+        ParagraphStyle("Stamp", parent=_BODY, fontName=FONT_BOLD, fontSize=8.5,
                        textColor=ink, alignment=1, leading=10),
     )]])
     stamp.setStyle(TableStyle([
@@ -303,6 +309,7 @@ def _bar_chart(width: float, series: list[dict]) -> Drawing:
     chart.valueAxis.valueMin = 0
     top = max(values)
     chart.valueAxis.valueMax = max(4, top + (top // 4 or 1))
+    chart.valueAxis.labels.fontName = FONT
     chart.valueAxis.labels.fontSize = 6.5
     chart.valueAxis.labels.fillColor = _INK_3
     chart.valueAxis.strokeColor = _LINE
@@ -312,6 +319,7 @@ def _bar_chart(width: float, series: list[dict]) -> Drawing:
     chart.categoryAxis.categoryNames = [
         (p.get("date", "")[5:] if i % step == 0 else "") for i, p in enumerate(series)
     ] or [""]
+    chart.categoryAxis.labels.fontName = FONT
     chart.categoryAxis.labels.fontSize = 6.5
     chart.categoryAxis.labels.fillColor = _INK_3
     chart.categoryAxis.strokeColor = _LINE
@@ -323,7 +331,8 @@ def _bar_chart(width: float, series: list[dict]) -> Drawing:
         plate_w, cx, cy = 150, chart.x + chart.width / 2, chart.y + chart.height / 2
         drawing.add(Rect(cx - plate_w / 2, cy - 8, plate_w, 18, fillColor=colors.white,
                          strokeColor=_LINE, strokeWidth=0.5, rx=3, ry=3))
-        drawing.add(String(cx, cy - 2, note, textAnchor="middle", fontSize=8, fillColor=_INK_3))
+        drawing.add(String(cx, cy - 2, note, textAnchor="middle", fontName=FONT, fontSize=8,
+                           fillColor=_INK_3))
     return drawing
 
 

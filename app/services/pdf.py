@@ -40,6 +40,7 @@ from reportlab.platypus import (
 from app.models.clinical import Encounter, Patient, Prescription
 from app.models.tenancy import TenantConfig
 from app.schemas.common import local_now, stamp
+from app.services.pdf_fonts import FONT, FONT_BOLD, glyph_safe
 
 log = logging.getLogger("pms.pdf")
 
@@ -58,17 +59,20 @@ _ROW_ALT = colors.HexColor("#f7f8fa")
 _HEADER_BG = colors.HexColor("#f0f2f6")
 
 _STYLES = getSampleStyleSheet()
+# Every other style derives from "Normal", so repointing it here is what puts the
+# whole document — including a style that never names a face — in the embedded font.
+_STYLES["Normal"].fontName = FONT
 
 _CLINIC = ParagraphStyle(
-    "ClinicName", parent=_STYLES["Normal"], fontName="Helvetica-Bold", fontSize=13.5,
+    "ClinicName", parent=_STYLES["Normal"], fontName=FONT_BOLD, fontSize=13.5,
     textColor=_INK, leading=16,
 )
 _EYEBROW = ParagraphStyle(
-    "Eyebrow", parent=_STYLES["Normal"], fontName="Helvetica-Bold", fontSize=8,
+    "Eyebrow", parent=_STYLES["Normal"], fontName=FONT_BOLD, fontSize=8,
     textColor=_ACCENT, leading=10, spaceAfter=1,
 )
 _TITLE = ParagraphStyle(
-    "ConsultationTitle", parent=_STYLES["Normal"], fontName="Helvetica-Bold", fontSize=17,
+    "ConsultationTitle", parent=_STYLES["Normal"], fontName=FONT_BOLD, fontSize=17,
     textColor=_INK, leading=20,
 )
 _DATE_RIGHT = ParagraphStyle(
@@ -80,22 +84,22 @@ _CLINIC_META = ParagraphStyle(
     spaceBefore=2,
 )
 _SECTION = ParagraphStyle(
-    "SectionHeading", parent=_STYLES["Normal"], fontName="Helvetica-Bold", fontSize=9,
+    "SectionHeading", parent=_STYLES["Normal"], fontName=FONT_BOLD, fontSize=9,
     textColor=_ACCENT, spaceBefore=14, spaceAfter=6, leading=11,
     keepWithNext=1,  # a heading is never the last line on a page
 )
 _BODY = ParagraphStyle("Body", parent=_STYLES["Normal"], fontSize=9.5, leading=13, textColor=_INK)
 _BODY_SM = ParagraphStyle("BodySmall", parent=_STYLES["Normal"], fontSize=8.5, leading=12, textColor=_INK)
 _LABEL = ParagraphStyle(
-    "Label", parent=_STYLES["Normal"], fontName="Helvetica-Bold", fontSize=6.9,
+    "Label", parent=_STYLES["Normal"], fontName=FONT_BOLD, fontSize=6.9,
     textColor=_INK_3, leading=9, spaceAfter=1,
 )
 _ALERT = ParagraphStyle(
-    "Allergies", parent=_STYLES["Normal"], fontName="Helvetica-Bold", fontSize=9.5,
+    "Allergies", parent=_STYLES["Normal"], fontName=FONT_BOLD, fontSize=9.5,
     leading=13, textColor=_ALERT_INK,
 )
 _TH = ParagraphStyle(
-    "TableHead", parent=_STYLES["Normal"], fontName="Helvetica-Bold", fontSize=7.6,
+    "TableHead", parent=_STYLES["Normal"], fontName=FONT_BOLD, fontSize=7.6,
     textColor=_INK_2, leading=10,
 )
 _TD = ParagraphStyle("TableCell", parent=_STYLES["Normal"], fontSize=8.6, leading=11.5, textColor=_INK)
@@ -156,11 +160,11 @@ def _weight_display(patient: Patient) -> str:
 PAGE_MARGINS = {"topMargin": 16 * mm, "bottomMargin": 22 * mm, "leftMargin": 18 * mm, "rightMargin": 18 * mm}
 
 _KIND = ParagraphStyle(
-    "DocKind", parent=_STYLES["Normal"], fontName="Helvetica-Bold", fontSize=7.6,
+    "DocKind", parent=_STYLES["Normal"], fontName=FONT_BOLD, fontSize=7.6,
     textColor=_ACCENT, leading=10, alignment=2,
 )
 _REF = ParagraphStyle(
-    "DocRef", parent=_STYLES["Normal"], fontName="Helvetica-Bold", fontSize=11.5,
+    "DocRef", parent=_STYLES["Normal"], fontName=FONT_BOLD, fontSize=11.5,
     textColor=_INK, leading=14, alignment=2,
 )
 _FACTS = ParagraphStyle(
@@ -169,8 +173,9 @@ _FACTS = ParagraphStyle(
 
 
 def esc(text: object) -> str:
-    """Paragraph text is a mini-markup, so anything a person typed is escaped before it goes in."""
-    plain = str(text if text is not None else "")
+    """Paragraph text is a mini-markup, so anything a person typed is escaped before it goes in.
+    A character the document font cannot draw becomes "?" rather than an empty box."""
+    plain = glyph_safe(str(text if text is not None else ""))
     return plain.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
@@ -213,7 +218,7 @@ def monogram(name: str, size: float = 15 * mm) -> Drawing:
     text = _initials(name)
     font = size * (0.36 if len(text) > 1 else 0.44)
     d.add(String(size / 2, size / 2 - font * 0.35, text, textAnchor="middle",
-                 fontName="Helvetica-Bold", fontSize=font, fillColor=_ACCENT))
+                 fontName=FONT_BOLD, fontSize=font, fillColor=_ACCENT))
     return d
 
 
@@ -308,7 +313,7 @@ def paged(note: str, *, confidential: bool = False):
             self.setStrokeColor(_LINE)
             self.setLineWidth(0.5)
             self.line(left, y + 9, right, y + 9)
-            self.setFont("Helvetica", 7.3)
+            self.setFont(FONT, 7.3)
             self.setFillColor(_INK_3)
             self.drawString(left, y, note)
             if fine_print:
@@ -454,7 +459,7 @@ def build_consultation_pdf(
         HRFlowable(width="45%", thickness=0.75, color=_INK_3, hAlign="LEFT"),
         Spacer(1, 3),
         Paragraph(doctor_name or "Attending clinician", ParagraphStyle(
-            "SigName", parent=_BODY, fontName="Helvetica-Bold",
+            "SigName", parent=_BODY, fontName=FONT_BOLD,
         )),
         Paragraph("PRESCRIBING CLINICIAN — SIGNATURE", _LABEL),
     ]))
@@ -467,7 +472,7 @@ def build_consultation_pdf(
 # --- the patient record ---------------------------------------------------------
 
 _NAME = ParagraphStyle(
-    "PatientName", parent=_STYLES["Normal"], fontName="Helvetica-Bold", fontSize=18,
+    "PatientName", parent=_STYLES["Normal"], fontName=FONT_BOLD, fontSize=18,
     textColor=_INK, leading=22,
 )
 _SUB = ParagraphStyle("PatientSub", parent=_STYLES["Normal"], fontSize=9.5, textColor=_INK_2, leading=13)
@@ -475,7 +480,7 @@ _OK_LINE = ParagraphStyle(
     "NoAllergies", parent=_STYLES["Normal"], fontSize=8.6, textColor=colors.HexColor("#1f7a4d"), leading=11,
 )
 _MUTED = ParagraphStyle("Muted", parent=_TD, textColor=_INK_3)
-_TD_BOLD = ParagraphStyle("CellBold", parent=_TD, fontName="Helvetica-Bold")
+_TD_BOLD = ParagraphStyle("CellBold", parent=_TD, fontName=FONT_BOLD)
 
 #: how many rows of each history a printed record carries before it says "and N earlier"
 _RECENT = 12
@@ -698,7 +703,7 @@ def build_patient_record_pdf(
         rows = [[Paragraph(h, _TH) for h in ("Date", "Clinician", "Complaint", "Diagnosis", "Status")]]
         for e in encounters[:_RECENT]:
             follow = (
-                f"<br/><font name='Helvetica' color='#8792a2'>Follow-up in {e.follow_up_days} days</font>"
+                f"<br/><font name='{FONT}' color='#8792a2'>Follow-up in {e.follow_up_days} days</font>"
                 if e.follow_up_days else ""
             )
             rows.append([
