@@ -141,3 +141,26 @@ async def test_the_settings_page_can_save_back_what_it_read(northgate, clean_ide
     assert saved.status_code == 200, saved.text
     assert saved.json()["brand_color"] == "#1e3a8a"  # stored lower-case
     assert saved.json()["registration_no"] == "KA/CL/2041"
+
+
+async def test_a_doctor_can_be_added_with_their_qualifications_and_registration_number(northgate):
+    import uuid
+
+    tag = uuid.uuid4().hex[:8]
+    created = await northgate.post(
+        "/v1/users",
+        json={
+            "name": f"Dr New {tag}", "email": f"new.{tag}@example.com", "role": "doctor",
+            "speciality": "Endodontics", "qualifications": "BDS, MDS", "registration_no": "KDC 1182",
+        },
+    )
+    assert created.status_code == 201, created.text
+    try:
+        body = created.json()
+        assert body["qualifications"] == "BDS, MDS"
+        assert body["registration_no"] == "KDC 1182"
+        listed = next(d for d in (await northgate.get("/v1/users/doctors")).json() if d["id"] == body["id"])
+        assert listed["qualifications"] == "BDS, MDS"
+        assert listed["registration_no"] == "KDC 1182"
+    finally:
+        await northgate.delete(f"/v1/users/{created.json()['id']}")

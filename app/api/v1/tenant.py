@@ -505,6 +505,8 @@ async def create_user(
         password_hash=hash_password(payload.password) if payload.password else None,
         initials="".join(p[0] for p in payload.name.split()[:2]).upper(),
         speciality=payload.speciality,
+        qualifications=(payload.qualifications or "").strip() or None,
+        registration_no=(payload.registration_no or "").strip() or None,
         status=AccountStatus.ACTIVE if payload.password else AccountStatus.INVITED,
         must_change_password=bool(payload.password),
     )

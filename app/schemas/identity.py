@@ -143,6 +143,8 @@ class UserCreateIn(InputModel):
     email: EmailStr
     role: str = Field(max_length=40)
     speciality: str | None = Field(default=None, max_length=120)
+    qualifications: str | None = Field(default=None, max_length=160)
+    registration_no: str | None = Field(default=None, max_length=60)
     password: str | None = Field(default=None, min_length=12, max_length=200)
 
 
