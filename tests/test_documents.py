@@ -11,7 +11,7 @@ import io
 
 import pytest
 
-from tests.conftest import sign_in
+from tests.conftest import patients_of, sign_in
 
 
 def _text(pdf: bytes) -> str:
@@ -160,3 +160,24 @@ def test_the_theme_falls_back_to_the_default_for_a_colour_it_cannot_use():
     for bad in ("not-a-colour", "", None, "#ffff00"):
         assert theme_for(SimpleNamespace(brand_color=bad)).accent.hexval() == default, bad
     assert theme_for(SimpleNamespace(brand_color="#1e3a8a")).accent.hexval() != default
+
+
+async def test_a_void_invoice_does_not_headline_a_balance_due(northgate):
+    patient = (await patients_of(northgate))[0]
+    invoice = (
+        await northgate.post(
+            "/v1/billing/invoices",
+            json={
+                "patient_id": patient["id"],
+                "line_items": [{"description": "Void me", "source": "manual", "qty": 1, "unit_price": 10}],
+                "issue": True,
+            },
+        )
+    ).json()
+    assert (await northgate.post(f"/v1/billing/invoices/{invoice['id']}/void")).status_code == 200
+
+    text = (await _invoice_text(northgate, invoice)).lower()
+
+    assert "balance due" not in text, "a void invoice owes nothing; it must not headline a balance"
+    assert "not payable" in text
+    assert "void" in text

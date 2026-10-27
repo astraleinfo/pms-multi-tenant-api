@@ -253,7 +253,10 @@ def build_invoice_pdf(
         [Paragraph("Tax", _BODY), Paragraph(money(totals["tax"], currency), _RIGHT)],
         [Paragraph("Total", _TOTAL_LABEL), Paragraph(money(totals["total"], currency), _TOTAL)],
         [Paragraph("Paid", _BODY), Paragraph(money(totals["paid"], currency), _RIGHT)],
-        [
+        # a void invoice owes nothing: the headline row says so instead of repeating what it would have been
+        [Paragraph("Void — not payable", _BALANCE_LABEL), Paragraph("—", _BALANCE_VALUE)]
+        if status == InvoiceStatus.VOID
+        else [
             Paragraph("Balance due", _BALANCE_LABEL),
             Paragraph(money(totals["balance"], currency), _BALANCE_VALUE),
         ],

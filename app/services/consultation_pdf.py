@@ -17,7 +17,7 @@ paragraphs so a long note runs onto the next page; every table cell is a
 from __future__ import annotations
 
 import io
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import timedelta
 
 from reportlab.lib.styles import ParagraphStyle
@@ -71,17 +71,59 @@ def _present(value: object) -> bool:
     return value is not None and str(value).strip() != ""
 
 
-def _vitals_line(ext: dict) -> str:
-    """Whichever vitals were recorded, in reading order — empty when none were."""
+#: The four vitals, in reading order: the encounter key, how it is printed, the label the
+#: shared field definition gives it, and the unit that definition implies.
+_VITALS = (
+    ("bp", "BP", "Blood pressure", " mmHg"),
+    ("pulse", "Pulse", "Pulse (bpm)", "/min"),
+    ("temperature", "Temp", "Temperature (°F)", " °F"),
+    ("spo2", "SpO₂", "SpO₂ (%)", "%"),
+)
+
+#: What a consultation prints in its own places — the complaint, notes, diagnosis and
+#: follow-up as sections, the vitals as one line — so they are not repeated as clinic fields.
+_PRINTED_ELSEWHERE = {"chief_complaint", "notes", "diagnosis", "follow_up_days"}
+_PRINTED_ELSEWHERE |= {key for key, *_ in _VITALS}
+
+
+def vital_labels(schema: Sequence) -> dict[str, str]:
+    """The label each vital has in this clinic's schema. A clinic can define its own field
+    under one of the vitals' keys (a temperature in °C, a blood pressure with the unit typed
+    in), and that field replaces the shared one."""
+    keys = {key for key, *_ in _VITALS}
+    return {d.field_key: d.label for d in schema if d.field_key in keys}
+
+
+def exam_fields(schema: Sequence, ext: dict) -> list[tuple[str, object]]:
+    """The clinic's own encounter fields that have a value, as `(label, value)` in schema order.
+    A list value (a multi-select) is kept; a structured payload (a dict — a tooth chart) is not,
+    because the structured exam is printed from `clinical_ext` itself."""
+    return [
+        (d.label, ext[d.field_key])
+        for d in schema
+        if d.field_key not in _PRINTED_ELSEWHERE
+        and ext.get(d.field_key) not in (None, "", [])
+        and not isinstance(ext.get(d.field_key), dict)
+    ]
+
+
+def _vitals_line(ext: dict, labels: Mapping[str, str]) -> str:
+    """Whichever vitals were recorded, in reading order — empty when none were. A vital whose
+    field the clinic defined itself prints under the clinic's own label with no unit assumed;
+    one typed with its unit already ("120/80 mmHg") is not given a second."""
     parts = []
-    if _present(ext.get("bp")):
-        parts.append(f"BP {esc(ext['bp'])} mmHg")
-    if _present(ext.get("pulse")):
-        parts.append(f"Pulse {esc(_number(ext['pulse']))}/min")
-    if _present(ext.get("temperature")):
-        parts.append(f"Temp {esc(_number(ext['temperature']))} °F")
-    if _present(ext.get("spo2")):
-        parts.append(f"SpO₂ {esc(_number(ext['spo2']))}%")
+    for key, short, default_label, unit in _VITALS:
+        value = ext.get(key)
+        if not _present(value):
+            continue
+        text = esc(_number(value))
+        own = labels.get(key)
+        if own is not None and own != default_label:
+            parts.append(f"{esc(own)} {text}")
+        elif isinstance(value, str) and any(ch.isalpha() for ch in value):
+            parts.append(f"{short} {text}")
+        else:
+            parts.append(f"{short} {text}{unit}")
     return " · ".join(parts)
 
 
@@ -178,6 +220,7 @@ def build_consultation_pdf(
     config: TenantConfig | None = None,
     logo: bytes | None = None,
     exam_fields: Sequence[tuple[str, object]] = (),
+    vital_labels: Mapping[str, str] | None = None,
 ) -> bytes:
     """Render one consultation as a PDF and return its bytes.
 
@@ -185,8 +228,9 @@ def build_consultation_pdf(
     `doctor` is the clinician the visit was recorded under — their name,
     qualifications and registration number close the page. `exam_fields` are
     the clinic's own encounter fields that have a value, already labelled and
-    in order (the way the patient record gets its `fields`); the structured
-    exam payloads and the vitals are read from `encounter.clinical_ext` here.
+    in order (see `exam_fields`); `vital_labels` is each vital's label in the clinic's
+    schema (see `vital_labels`). The structured exam payloads and the vitals
+    themselves are read from `encounter.clinical_ext` here.
     """
     buf = io.BytesIO()
     doc = document(buf, title=f"Consultation — {patient.full_name}", author=tenant_name or "Clinic")
@@ -217,7 +261,7 @@ def build_consultation_pdf(
         story += [section_title(doc, "History"), _paragraph(complaint, label="Chief complaints")]
 
     examination: list = []
-    vitals = _vitals_line(ext)
+    vitals = _vitals_line(ext, vital_labels or {})
     if vitals:
         examination.append(Paragraph(f"<b>Vitals:</b> {vitals}", _FORM_CELL))
     notes = (encounter.notes or "").strip()

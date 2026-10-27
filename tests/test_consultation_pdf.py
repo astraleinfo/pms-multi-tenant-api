@@ -292,3 +292,54 @@ async def test_a_patient_name_in_an_unsupported_script_does_not_break_the_consul
     text = await _printed(northgate, visit)
 
     assert "Verma" in text
+
+
+# --- what the consultation prints of the clinic's own fields -------------------------------
+
+
+def test_exam_fields_keep_lists_and_drop_what_is_printed_elsewhere():
+    from types import SimpleNamespace as NS
+
+    from app.services.consultation_pdf import exam_fields
+
+    schema = [
+        NS(field_key="symptoms", label="Symptoms"),
+        NS(field_key="pain_scale", label="Pain score"),
+        NS(field_key="bp", label="Blood pressure"),
+        NS(field_key="chief_complaint", label="Chief complaint"),
+        NS(field_key="empty", label="Empty"),
+        NS(field_key="chart", label="Chart"),
+    ]
+    ext = {
+        "symptoms": ["Swelling", "Fever"], "pain_scale": 6, "bp": "120/80",
+        "chief_complaint": "x", "empty": "", "chart": {"16": "caries"},
+    }
+
+    assert exam_fields(schema, ext) == [("Symptoms", ["Swelling", "Fever"]), ("Pain score", 6)]
+
+
+async def test_a_clinics_own_temperature_field_is_not_printed_as_fahrenheit(northgate):
+    """A clinic that defined its own `temperature` field (in °C, say) overrides the shared one;
+    the paper must say what the clinic's field says, never attach °F to a Celsius reading."""
+    field = await northgate.post(
+        "/v1/tenant/fields",
+        json={"entity": "encounter", "field_key": "temperature", "label": "Temperature (°C)", "type": "number"},
+    )
+    assert field.status_code == 201, field.text
+    try:
+        visit = await _consultation(northgate, encounter={"clinical_ext": {"temperature": 37.5}})
+        text = await _printed(northgate, visit)
+    finally:
+        await northgate.delete(f"/v1/tenant/fields/{field.json()['id']}")
+
+    assert "Temperature (°C) 37.5" in text
+    assert "°F" not in text
+
+
+async def test_a_blood_pressure_typed_with_its_unit_is_not_given_a_second_one(northgate):
+    visit = await _consultation(northgate, encounter={"clinical_ext": {"bp": "120/80 mmHg"}})
+
+    text = await _printed(northgate, visit)
+
+    assert "BP 120/80 mmHg" in text
+    assert "mmHg mmHg" not in text
