@@ -135,7 +135,7 @@ async def create_appointment(
     ctx: TenantContext = Depends(require_permission(Permission.APPOINTMENT_WRITE)),
 ) -> AppointmentOut:
     appointment = await scheduling_service.create_appointment(
-        ctx.session, ctx.tenant_id, payload, today=ctx.today
+        ctx.session, ctx.tenant_id, payload, today=ctx.today, now=ctx.clock
     )
     await audit.record(
         ctx.session, action="appointment.create", tenant_id=ctx.tenant_id, actor_kind=ctx.actor_kind,
@@ -179,7 +179,7 @@ async def reschedule_appointment(
     """Move an appointment, and tell the patient it moved."""
     appointment, was = await scheduling_service.reschedule_appointment(
         ctx.session, ctx.tenant_id, parse_uuid(appointment_id, what="appointment"), payload,
-        today=ctx.today,
+        today=ctx.today, now=ctx.clock,
     )
     await audit.record(
         ctx.session, action="appointment.rescheduled", tenant_id=ctx.tenant_id,

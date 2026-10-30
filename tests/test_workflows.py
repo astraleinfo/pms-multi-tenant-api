@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import date, timedelta
 
-from tests.conftest import patients_of, patients_off_the_board, sign_in
+from tests.conftest import freeze_clinic_clock, patients_of, patients_off_the_board, sign_in
 
 #: Every clinic has every module, so every dashboard carries every panel.
 ALL_PANELS = {"pharmacy", "lab", "inventory", "billing", "advanced_reports"}
@@ -849,7 +849,7 @@ async def test_list_rows_name_their_patient(northgate):
     assert invoices[0]["patient_name"]
 
 
-async def test_checking_in_a_booking_is_refused_for_someone_already_in_the_queue(northgate):
+async def test_checking_in_a_booking_is_refused_for_someone_already_in_the_queue(northgate, monkeypatch):
     doctor = await _doctor(northgate)
     patient = (
         await northgate.post(
@@ -857,7 +857,8 @@ async def test_checking_in_a_booking_is_refused_for_someone_already_in_the_queue
             json={"full_name": "Booked And Walked In", "dob": "1990-01-01", "sex": "female", "phone": "9770090099"},
         )
     ).json()
-    day = (await _today(northgate)).isoformat()
+    # a booking on today at 17:45 is only a plan if the clinic's clock is before it
+    day = (await freeze_clinic_clock(monkeypatch, northgate, "08:00")).isoformat()
     booked = await northgate.post(
         "/v1/appointments",
         json={"patient_id": patient["id"], "doctor_id": doctor["id"], "date": day, "time": "17:45",

@@ -17,7 +17,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date
 
 from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -38,7 +38,7 @@ from app.db.session import session_factory, set_tenant
 from app.models.enums import AccountStatus, FieldEntity, PlatformRole, TenantStatus
 from app.models.identity import PlatformUser, User
 from app.models.tenancy import Tenant, TenantConfig
-from app.schemas.common import local_iso, zone
+from app.schemas.common import local_iso, local_now
 from app.services import tenants as tenant_service
 from app.services.auth import Principal
 
@@ -128,7 +128,12 @@ class TenantContext:
 
     @property
     def today(self) -> date:
-        return datetime.now(zone(self.tenant.timezone)).date()
+        return local_now(self.tenant.timezone).date()
+
+    @property
+    def clock(self) -> str:
+        """The clinic's wall clock, `HH:MM` — what a start time is compared to."""
+        return local_now(self.tenant.timezone).strftime("%H:%M")
 
     @property
     def actor_id(self) -> uuid.UUID:

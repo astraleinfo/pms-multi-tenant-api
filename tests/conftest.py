@@ -11,7 +11,9 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from datetime import date, datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -167,6 +169,21 @@ async def patients_off_the_board(signed: Signed) -> list[dict]:
     queue = (await signed.get("/v1/queue", params={"date": today})).json()
     on_board = {q["patient_id"] for q in queue if q["status"] in ("waiting", "called", "in_consultation")}
     return [p for p in await patients_of(signed, limit=200) if p["id"] not in on_board]
+
+
+async def freeze_clinic_clock(monkeypatch, signed: Signed, hhmm: str) -> date:
+    """Set the clinic's clock to `hhmm` on its own today; returns that day.
+
+    The request context reads the time through one function, so replacing it
+    pins `ctx.today` and `ctx.clock` without touching the wall clock. A test that
+    books on today needs this: whether 17:45 has passed depends on when it runs.
+    """
+    tenant = (await signed.get("/v1/tenant")).json()
+    today = date.fromisoformat(tenant["today"])
+    hour, minute = map(int, hhmm.split(":"))
+    frozen = datetime(today.year, today.month, today.day, hour, minute, tzinfo=ZoneInfo(tenant["timezone"]))
+    monkeypatch.setattr("app.api.deps.local_now", lambda tz=None: frozen)
+    return today
 
 
 async def sign_in(client: AsyncClient, key: str) -> Signed:

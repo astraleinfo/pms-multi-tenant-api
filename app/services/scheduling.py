@@ -179,6 +179,34 @@ async def hold_diary(
     )
 
 
+#: How far past its start a slot can still be booked. The desk books the
+#: patient standing in front of them ("book now") at the slot that has just
+#: begun, and a start that is a few minutes old is that, not a plan for the
+#: past. Anything older is refused.
+PAST_START_GRACE_MIN = 15
+
+
+def require_start_not_past(*, day: date, time: str, today: date, now: str) -> None:
+    """A booking's start must not already be behind the clinic's clock.
+
+    `today` and `now` (`HH:MM`) are the clinic's, not the server's: a start of
+    09:00 is in the past once the clinic's clock reads 22:00, whatever hour it
+    is where the server runs. Appointments store the day and the time
+    separately, so a later day is always fine and the clock only matters on
+    today.
+
+    Called wherever a start is chosen — a new booking, a move — and never for
+    an edit that leaves the start alone, so a past appointment can still be
+    completed, annotated or marked a no-show.
+    """
+    if day < today:
+        raise ValidationFailed("Appointments cannot be booked for a past date.")
+    if day == today and _minutes(time) < _minutes(now) - PAST_START_GRACE_MIN:
+        raise ValidationFailed(
+            f"{time} has already passed today. Choose the current time or a later one."
+        )
+
+
 async def _require_bookable_day(
     session: AsyncSession,
     tenant_id: uuid.UUID,
@@ -212,11 +240,12 @@ async def _require_bookable_day(
 
 
 async def create_appointment(
-    session: AsyncSession, tenant_id: uuid.UUID, payload: AppointmentIn, *, today: date
+    session: AsyncSession, tenant_id: uuid.UUID, payload: AppointmentIn, *, today: date, now: str
 ) -> Appointment:
     patient = await _require_patient(session, tenant_id, uuid.UUID(payload.patient_id))
     doctor = await _require_doctor(session, tenant_id, uuid.UUID(payload.doctor_id))
 
+    require_start_not_past(day=payload.date, time=payload.time, today=today, now=now)
     await hold_diary(session, tenant_id, doctor.id, payload.date)
     await _require_bookable_day(
         session, tenant_id, patient_id=patient.id, day=payload.date, today=today
@@ -261,6 +290,7 @@ async def reschedule_appointment(
     payload: AppointmentRescheduleIn,
     *,
     today: date,
+    now: str,
 ) -> tuple[Appointment, dict[str, str]]:
     """Move an appointment, and say what it moved from.
 
@@ -300,6 +330,11 @@ async def reschedule_appointment(
         appointment.date, appointment.time, appointment.doctor_id, appointment.duration_min
     ):
         raise Conflict("That is the slot it is already in.")
+
+    # Only a changed start is checked: moving the clinician or the length of an
+    # appointment that is already under way must not trip over its own time.
+    if (day, time) != (appointment.date, appointment.time):
+        require_start_not_past(day=day, time=time, today=today, now=now)
 
     # `ignore_id` keeps the appointment from clashing with itself when only the
     # duration or the clinician changes.
