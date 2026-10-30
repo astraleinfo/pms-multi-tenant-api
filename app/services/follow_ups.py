@@ -10,7 +10,7 @@ disagree about whether somebody is coming.
 Booking a new slot on a call is the diary's own reschedule: the same overlap
 check, under the same lock, sending the patient the same "moved" message. The
 only thing added here is what a phone call needs and the diary does not ask —
-that the new slot is still ahead of us, and inside the clinic's day.
+that the new slot is inside the clinic's day.
 """
 
 from __future__ import annotations
@@ -240,18 +240,20 @@ def require_bookable(
     config: TenantConfig, *, today: date, now: str, day: date, time: str, duration: int
 ) -> None:
     """A slot offered over the phone has to be one the patient can come to:
-    not in the past, and inside the clinic's day. The diary does not ask this —
-    it is also where yesterday's walk-in is written up — so the check is here."""
-    if day < today:
-        raise ValidationFailed("Choose a date from today onwards.")
+    not in the past, and inside the clinic's day. The diary does not ask the
+    second — it is also where yesterday's walk-in is written up — so it is here.
+
+    "Not in the past" is the diary's own rule, grace included, so a patient who
+    is at the desk can be moved to the slot that has just begun from the call
+    list exactly as from the diary. There is no second, stricter rule for calls.
+    """
+    scheduling_service.require_start_not_past(day=day, time=time, today=today, now=now)
     start = _minutes(time)
     if start < _minutes(config.day_start) or start + duration > _minutes(config.day_end):
         raise ValidationFailed(
             f"The clinic books between {config.day_start} and {config.day_end}; "
             "that slot falls outside it."
         )
-    if day == today and start <= _minutes(now):
-        raise ValidationFailed("That time has already gone today. Choose a later slot.")
 
 
 async def record_call(

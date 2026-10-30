@@ -23,7 +23,6 @@ from app.schemas.clinical import (
     FollowUpOut,
     FollowUpPageOut,
 )
-from app.schemas.common import local_now
 from app.services import audit
 from app.services import follow_ups as follow_up_service
 from app.services.messaging import service as message_service
@@ -120,7 +119,7 @@ async def record_call(
         payload,
         config=ctx.config,
         today=ctx.today,
-        now=local_now(ctx.tz).strftime("%H:%M"),
+        now=ctx.clock,
         called_by_id=ctx.actor_id,
         called_by_label=_caller(ctx),
     )

@@ -7,7 +7,7 @@ import asyncio
 import uuid
 from datetime import date, timedelta
 
-from tests.conftest import sign_in
+from tests.conftest import freeze_clinic_clock, sign_in
 
 
 async def _today(signed) -> date:
@@ -211,6 +211,99 @@ async def test_a_slot_offered_on_the_phone_must_be_ahead_and_inside_the_day(nort
     assert (await _row(northgate, patient))["attempts"] == 0
 
 
+async def test_a_patient_here_today_can_move_to_another_time_today(northgate, monkeypatch):
+    """The front-desk case: the patient is visiting today but needs a different
+    time. One booking, moved in place — no second appointment, no old slot held."""
+    today = await freeze_clinic_clock(monkeypatch, northgate, "08:00")
+    doctor = (await _doctors(northgate))[0]
+    patient = await _patient(northgate)
+    booking = await _book(northgate, patient, doctor, today, "16:05", minutes=5)
+
+    moved = await _call(
+        northgate, booking, outcome="rescheduled", notes="Running late",
+        new_slot={"date": today.isoformat(), "time": "17:10"},
+    )
+    assert moved.status_code == 201, moved.text
+    row = moved.json()
+    assert row["appointment"]["id"] == booking["id"]
+    assert row["appointment"]["time"] == "17:10"
+    assert row["appointment"]["status"] == "confirmed"
+    assert row["status"] == "confirmed"
+    assert row["last_call"]["moved_from"] == f"{today.isoformat()} 16:05"
+    assert row["last_call"]["moved_to"] == f"{today.isoformat()} 17:10"
+
+    # still the patient's only booking that day, and the old slot is free again
+    diary = (await northgate.get("/v1/appointments", params={"date": today.isoformat()})).json()["items"]
+    assert [a["id"] for a in diary if a["patient_id"] == patient["id"]] == [booking["id"]]
+    free = await northgate.get(
+        "/v1/appointments/availability",
+        params={"doctor_id": doctor["id"], "date": today.isoformat(), "time": "16:05", "duration_min": 5},
+    )
+    assert free.json()["available"] is True
+
+
+async def test_a_same_day_move_onto_a_taken_time_is_refused_and_changes_nothing(northgate, monkeypatch):
+    today = await freeze_clinic_clock(monkeypatch, northgate, "08:00")
+    doctor = (await _doctors(northgate))[0]
+    patient = await _patient(northgate)
+    booking = await _book(northgate, patient, doctor, today, "16:10", minutes=5)
+    await _book(northgate, await _patient(northgate), doctor, today, "17:20", minutes=5)
+
+    taken = await _call(
+        northgate, booking, outcome="rescheduled", new_slot={"date": today.isoformat(), "time": "17:20"},
+    )
+    assert taken.status_code == 409, taken.text
+
+    row = await _row(northgate, patient)
+    assert row["attempts"] == 0
+    assert row["appointment"]["time"] == "16:10"
+    assert row["appointment"]["status"] == "scheduled"
+
+
+async def test_a_same_day_move_follows_the_diary_rule_for_a_time_that_has_gone(northgate, monkeypatch):
+    """One rule for the desk and the call list: a start older than the grace is
+    refused, the slot that has just begun is accepted — the same as booking it
+    from the diary."""
+    today = await freeze_clinic_clock(monkeypatch, northgate, "08:00")
+    doctor = (await _doctors(northgate))[0]
+    patient = await _patient(northgate)
+    booking = await _book(northgate, patient, doctor, today, "16:15", minutes=5)
+
+    await freeze_clinic_clock(monkeypatch, northgate, "17:00")
+    gone = await _call(
+        northgate, booking, outcome="rescheduled", new_slot={"date": today.isoformat(), "time": "16:30"},
+    )
+    assert gone.status_code == 422, gone.text
+    assert "already passed" in gone.json()["error"]["message"]
+    row = await _row(northgate, patient)
+    assert row["attempts"] == 0
+    assert row["appointment"]["time"] == "16:15"
+
+    # 16:50 is the slot that began ten minutes ago — within the grace
+    just_begun = await _call(
+        northgate, booking, outcome="rescheduled", new_slot={"date": today.isoformat(), "time": "16:50"},
+    )
+    assert just_begun.status_code == 201, just_begun.text
+    assert just_begun.json()["appointment"]["time"] == "16:50"
+
+
+async def test_a_booking_that_is_no_longer_open_cannot_be_moved_from_the_call_list(northgate, monkeypatch):
+    today = await freeze_clinic_clock(monkeypatch, northgate, "08:00")
+    doctor = (await _doctors(northgate))[0]
+    slot = {"date": today.isoformat(), "time": "17:35"}
+
+    cancelled = await _book(northgate, await _patient(northgate), doctor, today, "16:20", minutes=5)
+    assert (await northgate.patch(f"/v1/appointments/{cancelled['id']}/status", json={"status": "cancelled"})).status_code == 200
+    refused = await _call(northgate, cancelled, outcome="rescheduled", new_slot=slot)
+    assert refused.status_code == 409, refused.text
+
+    arrived = await _book(northgate, await _patient(northgate), doctor, today, "16:25", minutes=5)
+    assert (await northgate.post(f"/v1/appointments/{arrived['id']}/checkin")).status_code == 200
+    refused = await _call(northgate, arrived, outcome="rescheduled", new_slot=slot)
+    assert refused.status_code == 409, refused.text
+    assert (await northgate.get(f"/v1/appointments/{arrived['id']}")).json()["time"] == "16:25"
+
+
 async def test_the_body_has_to_fit_the_outcome(northgate):
     today = await _today(northgate)
     doctor = (await _doctors(northgate))[0]
@@ -309,6 +402,13 @@ async def test_another_clinic_cannot_see_or_ring_about_a_booking(northgate, clea
 
     assert (await clearview.get(f"/v1/follow-ups/{booking['id']}/calls")).status_code == 404
     assert (await _call(clearview, booking, outcome="confirmed")).status_code == 404
+    # nor move it
+    moved = await _call(
+        clearview, booking, outcome="rescheduled",
+        new_slot={"date": (today + timedelta(days=42)).isoformat(), "time": "14:00"},
+    )
+    assert moved.status_code == 404
+    assert (await northgate.get(f"/v1/appointments/{booking['id']}")).json()["time"] == "13:00"
     assert await _row(clearview, patient) is None
     assert (await _row(northgate, patient))["status"] == "pending"
 
