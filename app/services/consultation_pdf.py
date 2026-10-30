@@ -127,13 +127,25 @@ def _vitals_line(ext: dict, labels: Mapping[str, str]) -> str:
     return " · ".join(parts)
 
 
+# The names the tooth chart shows on screen, keyed by what is stored in `clinical_ext.tooth_chart`.
+# A state not listed here prints as stored: the column is open, and a newer build may have written one.
+_TOOTH_STATE_LABELS = {
+    "healthy": "Sound", "watch": "Watch", "caries": "Decay", "filling": "Filled", "crown": "Crowned",
+    "extract": "For extraction", "mobility": "Mobility", "fracture": "Fracture",
+}
+
+
 def _structured_lines(ext: dict) -> list[tuple[str, str]]:
     """The discipline-specific exam payloads — a tooth chart, visual acuity, a
     refraction, lesion sites, procedures — as `(label, text)` lines."""
     lines: list[tuple[str, str]] = []
     chart = ext.get("tooth_chart")
     if isinstance(chart, dict) and chart:
-        lines.append(("Tooth chart", ", ".join(f"{tooth} {state}" for tooth, state in sorted(chart.items()))))
+        named = (
+            (tooth, _TOOTH_STATE_LABELS.get(state, state) if isinstance(state, str) else state)
+            for tooth, state in sorted(chart.items())
+        )
+        lines.append(("Tooth chart", ", ".join(f"{tooth} {name}" for tooth, name in named)))
     acuity = ext.get("va")
     if isinstance(acuity, dict):
         text = " · ".join(f"{eye.upper()} {acuity[eye]}" for eye in ("od", "os") if _present(acuity.get(eye)))

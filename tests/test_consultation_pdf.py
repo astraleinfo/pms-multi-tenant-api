@@ -250,6 +250,23 @@ async def test_the_examination_prints_the_clinics_own_fields_and_the_structured_
     assert "Scaling" in text
 
 
+async def test_the_tooth_chart_prints_each_state_by_its_name_including_mobility_and_fracture(northgate):
+    visit = await _consultation(
+        northgate,
+        encounter={"clinical_ext": {"tooth_chart": {
+            "16": "caries", "26": "mobility", "36": "fracture", "46": "extract", "11": "a-state-from-the-future",
+        }}},
+    )
+
+    text = " ".join((await _printed(northgate, visit)).split())
+
+    assert "16 Decay" in text
+    assert "26 Mobility" in text
+    assert "36 Fracture" in text
+    assert "46 For extraction" in text
+    assert "11 a-state-from-the-future" in text, "a value the clinic's build has no name for prints as stored"
+
+
 async def test_nothing_optional_prints_as_an_empty_label(northgate):
     visit = await _consultation(
         northgate,

@@ -872,3 +872,38 @@ async def test_checking_in_a_booking_is_refused_for_someone_already_in_the_queue
 
     refused = await northgate.post(f"/v1/appointments/{booked.json()['id']}/checkin")
     assert refused.status_code == 409
+
+
+async def test_a_tooth_chart_keeps_mobility_and_fracture_alongside_the_older_states(northgate):
+    doctor = await _doctor(northgate)
+    patient = (
+        await northgate.post(
+            "/v1/patients",
+            json={"full_name": "Tooth Chart Patient", "dob": "1985-03-02", "sex": "male", "phone": "9770090123"},
+        )
+    ).json()
+    chart = {"11": "mobility", "21": "fracture", "16": "caries", "36": "extract", "46": "watch"}
+
+    made = await northgate.post(
+        "/v1/encounters",
+        json={
+            "patient_id": patient["id"], "doctor_id": doctor["id"], "chief_complaint": "Knock to the front teeth",
+            "clinical_ext": {"tooth_chart": chart},
+        },
+    )
+    assert made.status_code == 201, made.text
+    assert made.json()["clinical_ext"]["tooth_chart"] == chart
+
+    read_back = (await northgate.get(f"/v1/encounters/{made.json()['id']}")).json()
+    assert read_back["clinical_ext"]["tooth_chart"] == chart, "the new states survive a round trip"
+
+    # a chart that is not a map of teeth is not a tooth chart — it is dropped, not stored
+    refused = await northgate.post(
+        "/v1/encounters",
+        json={
+            "patient_id": patient["id"], "doctor_id": doctor["id"], "chief_complaint": "Malformed chart",
+            "clinical_ext": {"tooth_chart": ["mobility", "fracture"]},
+        },
+    )
+    assert refused.status_code == 201, refused.text
+    assert "tooth_chart" not in refused.json()["clinical_ext"]
