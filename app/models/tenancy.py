@@ -145,6 +145,21 @@ class TenantConfig(Base, TenantScoped, TimestampMixin):
         default=Currency.INR,
     )
 
+    #: How an invoice emailed to a patient reads, and where a reply goes. The
+    #: mail itself goes out through the platform's transport — no clinic ever
+    #: stores a mail password here. All optional: empty means the default
+    #: (`services/invoice_email.py` says what each one falls back to).
+    invoice_email_reply_to: Mapped[str] = mapped_column(
+        String(160), nullable=False, default="", server_default=""
+    )
+    invoice_email_sender_name: Mapped[str] = mapped_column(
+        String(80), nullable=False, default="", server_default=""
+    )
+    invoice_email_subject: Mapped[str] = mapped_column(
+        String(200), nullable=False, default="", server_default=""
+    )
+    invoice_email_message: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+
     #: The clinic's own mark — shown in its own rail and printed on its PDFs.
     #: Unset by default; a clinic that has not uploaded one gets no image
     #: rather than a placeholder. Same two-places-to-live split as

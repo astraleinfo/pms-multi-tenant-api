@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import Field
+from pydantic import EmailStr, Field
 
 from app.models.enums import (
     BillingDepartment,
@@ -285,6 +285,9 @@ class InvoiceOut(ApiModel):
     line_items: list[InvoiceLineItemOut]
     payments: list[PaymentOut]
     totals: InvoiceTotalsOut
+    #: the last time it was emailed to the patient, and where to — null if never
+    emailed_at: str | None = None
+    emailed_to: str | None = None
 
     @classmethod
     def of(cls, inv, tz: str, totals: dict[str, float]) -> InvoiceOut:
@@ -297,7 +300,27 @@ class InvoiceOut(ApiModel):
             line_items=[InvoiceLineItemOut.of(li) for li in inv.line_items],
             payments=[PaymentOut.of(p, tz) for p in inv.payments],
             totals=InvoiceTotalsOut(**totals),
+            emailed_at=stamp(inv.emailed_at, tz) if inv.emailed_at else None,
+            emailed_to=inv.emailed_to,
         )
+
+
+class InvoiceEmailIn(InputModel):
+    """Email an invoice to its patient. `to` left out sends it to the address
+    on their record; typed, it goes there instead (and the record is not changed)."""
+
+    to: EmailStr | None = None
+
+
+class InvoiceEmailOut(ApiModel):
+    """What became of one send. A transport that would not take the message is
+    `failed` with a sentence in `detail` — an answer, not an error, so the
+    attempt stays in the audit trail."""
+
+    status: Literal["sent", "failed"]
+    to: str
+    detail: str
+    invoice: InvoiceOut
 
 
 class InvoicePageOut(ApiModel):

@@ -17,6 +17,7 @@ from app.models.enums import (
     TenantStatus,
 )
 from app.schemas.common import ApiModel, InputModel, iso_date, local_iso, money, zone
+from app.services import invoice_email
 from app.services.colour import MIN_CONTRAST, contrast_with_white
 
 
@@ -112,6 +113,11 @@ class TenantConfigOut(ApiModel):
     payment_terms_days: int
     expiry_alert_days: int
     currency: Currency
+    #: how an invoice emailed to a patient reads — empty means the default
+    invoice_email_reply_to: str
+    invoice_email_sender_name: str
+    invoice_email_subject: str
+    invoice_email_message: str
     timezone: str
     has_logo: bool
 
@@ -127,7 +133,12 @@ class TenantConfigOut(ApiModel):
             token_prefix=c.token_prefix, urgent_first=c.urgent_first,
             invoice_prefix=c.invoice_prefix, tax_pct=money(c.tax_pct),
             payment_terms_days=c.payment_terms_days, expiry_alert_days=c.expiry_alert_days,
-            currency=c.currency, timezone=tz, has_logo=c.logo_filename is not None,
+            currency=c.currency,
+            invoice_email_reply_to=c.invoice_email_reply_to,
+            invoice_email_sender_name=c.invoice_email_sender_name,
+            invoice_email_subject=c.invoice_email_subject,
+            invoice_email_message=c.invoice_email_message,
+            timezone=tz, has_logo=c.logo_filename is not None,
         )
 
 
@@ -156,6 +167,46 @@ class TenantConfigPatch(InputModel):
     payment_terms_days: int | None = Field(default=None, ge=0, le=365)
     expiry_alert_days: int | None = Field(default=None, ge=1, le=730)
     currency: Currency | None = None
+    #: An invoice emailed to a patient: where a reply goes, who it is from, and
+    #: its wording. Each may be sent empty, which means "use the default".
+    invoice_email_reply_to: str | None = Field(default=None, max_length=160)
+    invoice_email_sender_name: str | None = Field(default=None, max_length=80)
+    invoice_email_subject: str | None = Field(default=None, max_length=200)
+    invoice_email_message: str | None = Field(default=None, max_length=2000)
+
+    @field_validator("invoice_email_reply_to")
+    @classmethod
+    def _one_address(cls, value: str | None) -> str | None:
+        if not value:
+            return value
+        try:
+            return invoice_email.normalise_address(value)
+        except ValueError as exc:
+            raise ValueError(f"The reply-to address is not a valid email address: {exc}") from None
+
+    @field_validator("invoice_email_sender_name")
+    @classmethod
+    def _a_name(cls, value: str | None) -> str | None:
+        problem = invoice_email.sender_name_problem(value) if value else None
+        if problem:
+            raise ValueError(problem)
+        return value
+
+    @field_validator("invoice_email_subject")
+    @classmethod
+    def _a_subject(cls, value: str | None) -> str | None:
+        problem = invoice_email.subject_problem(value) if value else None
+        if problem:
+            raise ValueError(problem)
+        return value
+
+    @field_validator("invoice_email_message")
+    @classmethod
+    def _a_message(cls, value: str | None) -> str | None:
+        problem = invoice_email.template_problem(value) if value else None
+        if problem:
+            raise ValueError(problem)
+        return value
 
     @field_validator("brand_color")
     @classmethod

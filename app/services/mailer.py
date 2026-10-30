@@ -25,6 +25,13 @@ a client that will not render it shows nothing at all.
 A send that fails raises. Callers decide whether that should fail the request
 (creating a clinic whose admin never gets the link is not a success) or merely
 be recorded (a self-service reset answers the same either way).
+
+One kind of message here is not to staff: an invoice, to the patient it bills.
+It is sent on a clinic's behalf, so it carries the clinic's name in its From
+line (on the platform's own address — a clinic never hands over a mail
+password), a Reply-To that reaches the clinic, and the invoice as a PDF. It
+names a patient, so it is marked `sensitive` and the console transport keeps
+its recipient and body out of the INFO log.
 """
 
 from __future__ import annotations
@@ -34,7 +41,9 @@ import logging
 import re
 import smtplib
 from dataclasses import dataclass
+from email.headerregistry import Address
 from email.message import EmailMessage
+from email.utils import parseaddr
 from html import escape
 
 from app.core import aws
@@ -48,6 +57,13 @@ class MailError(Exception):
 
 
 @dataclass(frozen=True)
+class Attachment:
+    filename: str
+    content_type: str
+    data: bytes
+
+
+@dataclass(frozen=True)
 class Email:
     to: str
     subject: str
@@ -55,10 +71,19 @@ class Email:
     html: str | None = None
     #: where a reply goes — a support request answers to the person who asked
     reply_to: str | None = None
+    #: the display name on the From line, in place of `MAIL_FROM`'s own. The
+    #: address is always the platform's: it is the one the transport may send as.
+    from_name: str | None = None
+    attachments: tuple[Attachment, ...] = ()
+    #: it names a patient — the console transport logs that it went, not what it said
+    sensitive: bool = False
 
     def as_message(self) -> EmailMessage:
         message = EmailMessage()
-        message["From"] = settings.mail_from
+        if self.from_name:
+            message["From"] = Address(display_name=self.from_name, addr_spec=platform_address())
+        else:
+            message["From"] = settings.mail_from
         message["To"] = self.to
         message["Subject"] = self.subject
         if self.reply_to:
@@ -70,7 +95,22 @@ class Email:
         message.set_content(self.text)
         if self.html:
             message.add_alternative(self.html, subtype="html")
+        for attachment in self.attachments:
+            maintype, _, subtype = attachment.content_type.partition("/")
+            message.add_attachment(
+                attachment.data, maintype=maintype, subtype=subtype, filename=attachment.filename
+            )
         return message
+
+
+def platform_address() -> str:
+    """The bare address in `MAIL_FROM` — `no-reply@…` out of `Astrale PMS <no-reply@…>`."""
+    return parseaddr(settings.mail_from)[1] or settings.mail_from
+
+
+def platform_name() -> str:
+    """The display name in `MAIL_FROM`, or the product's name if it has none."""
+    return parseaddr(settings.mail_from)[0] or "Astrale"
 
 
 def _send_smtp(email: Email) -> None:
@@ -121,6 +161,16 @@ def _send_ses(email: Email) -> None:
 
 async def send(email: Email) -> None:
     if settings.mail_provider == "console":
+        if email.sensitive:
+            # Patient mail: that it went is worth an INFO line, who it went to
+            # and what it said are not. A developer who needs the body turns
+            # the `pms.mail` logger down to DEBUG on their own machine.
+            log.info(
+                "email (console transport): %s attachment(s); recipient and body withheld",
+                len(email.attachments),
+            )
+            log.debug("  to: %s\n  subject: %s\n%s", email.to, email.subject, email.text)
+            return
         # The plain-text part, because the link is the only thing that matters
         # in development and a developer needs to be able to read it.
         log.info(
@@ -313,6 +363,7 @@ def _shell(
     reason: str = "",
     tone: str = "accent",
     to_the_desk: bool = False,
+    help_html: str | None = None,
 ) -> str:
     """The frame every message shares: the stage, then the card's details.
 
@@ -328,6 +379,9 @@ def _shell(
     `recipient` and `reason` fill the footer's "why you got this" line.
     `to_the_desk` is for mail *to* the support desk: it is not told to write to
     itself for help, and its replies do go somewhere — to the person who asked.
+    `help_html` is for mail to a clinic's patient: the platform's desk is not
+    theirs to write to, so the stock help line and "replies are not read" give
+    way to whatever the caller says (escaped by the caller; empty says nothing).
     """
     help_line = "" if to_the_desk else (
         f'<p style="margin:0 0 6px 0;">Need a hand? Write to '
@@ -337,6 +391,9 @@ def _shell(
     automatic = "" if to_the_desk else (
         " Sent automatically; replies to this address are not read."
     )
+    if help_html is not None:
+        help_line = f'<p style="margin:0 0 6px 0;">{help_html}</p>' if help_html else ""
+        automatic = ""
     why = ""
     if recipient:
         why = (
@@ -772,3 +829,86 @@ def rent_notice(
         recipient=to, reason=f"because you are a practice admin at {escape(clinic)}", tone=tone,
     )
     return Email(to=to, subject=subject, text=text, html=html)
+
+
+# --- a clinic's invoice, to its patient -------------------------------------------
+
+
+def _clinic_words(text: str) -> str:
+    """The clinic's own message as HTML: escaped, a blank line between
+    paragraphs, a single line break kept as one."""
+    blocks = [b.strip() for b in re.split(r"\n\s*\n", text) if b.strip()]
+    return "".join(_paragraph(escape(b).replace("\n", "<br>")) for b in blocks)
+
+
+def invoice_to_patient(
+    *,
+    to: str,
+    clinic: str,
+    from_name: str,
+    reply_to: str | None,
+    subject: str,
+    message: str,
+    number: str,
+    issued: str,
+    due: str,
+    total: str,
+    balance: str,
+    owing: bool,
+    pdf: bytes,
+    filename: str,
+) -> Email:
+    """One invoice, from a clinic to the patient it bills, with the PDF attached.
+
+    `subject` and `message` are the clinic's wording, already filled in
+    (`services/invoice_email.py`); everything else here is the frame around
+    it. With no `reply_to` the message says so plainly — the platform's own
+    address is not read, and a patient should not write to it and wait.
+    """
+    rows = [("Invoice", number), ("Issued", issued), ("Due", due), ("Total", total), ("Balance", balance)]
+    if reply_to:
+        reply_text = f"Questions about this invoice? Reply to this email and it will reach {clinic}."
+        reply_html = (
+            f"Questions about this invoice? Reply to this email and it will reach "
+            f"{_strong(escape(clinic))}."
+        )
+    else:
+        reply_text = (
+            f"This message was sent from an address that is not read. For questions about this "
+            f"invoice, please contact {clinic} directly."
+        )
+        reply_html = escape(reply_text)
+
+    text = "\n".join(
+        [
+            message.strip(),
+            "",
+            *(f"{label + ':':<10}{value}" for label, value in rows),
+            "",
+            "The invoice is attached as a PDF.",
+            reply_text,
+        ]
+    ) + "\n"
+
+    caption = f"Due on {escape(due)}" if owing else "Paid in full — thank you"
+    html = _shell(
+        preheader=subject,
+        clinic=escape(clinic),
+        eyebrow="Invoice",
+        heading=f"Invoice {escape(number)}",
+        figure=(balance if owing else total, caption),
+        body=(
+            _clinic_words(message)
+            + _facts(rows, title="Invoice details")
+            + _footnote(f"The invoice is attached as a PDF. {reply_html}")
+        ),
+        recipient=to,
+        reason=f"because {escape(clinic)} raised an invoice for you",
+        # how to reach the clinic is said once, in the card, not again here
+        help_html="",
+    )
+    return Email(
+        to=to, subject=subject, text=text, html=html, reply_to=reply_to, from_name=from_name,
+        attachments=(Attachment(filename=filename, content_type="application/pdf", data=pdf),),
+        sensitive=True,
+    )

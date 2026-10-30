@@ -14,8 +14,8 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Query, Uplo
 from fastapi.responses import Response
 
 from app.api.deps import TenantContext, parse_uuid, require_permission
-from app.core.errors import NotFound, ValidationFailed
-from app.core.permissions import Permission
+from app.core.errors import NotFound, PermissionDenied, ValidationFailed
+from app.core.permissions import Permission, role_has
 from app.models.enums import BillingDepartment, DispenseStatus, InvoiceStatus, LabOrderStatus
 from app.schemas.clinical import (
     DispenseIn,
@@ -39,6 +39,8 @@ from app.schemas.ops import (
     InventoryItemOut,
     InventoryItemPatch,
     InventoryTxOut,
+    InvoiceEmailIn,
+    InvoiceEmailOut,
     InvoiceIn,
     InvoiceOut,
     InvoicePageOut,
@@ -51,7 +53,7 @@ from app.schemas.ops import (
     SuggestedLinesOut,
 )
 from app.services import accounts as account_service
-from app.services import audit, import_jobs, inventory_io
+from app.services import audit, import_jobs, inventory_io, invoice_email
 from app.services import billing as billing_service
 from app.services import imports as import_service
 from app.services import inventory as inventory_service
@@ -696,6 +698,44 @@ def _filename_safe(text: str) -> str:
     """An invoice number is the clinic's own prefix plus a sequence; this keeps
     a header value to characters that cannot break out of the quotes."""
     return "".join(ch for ch in text if ch.isalnum() or ch in "-_") or "invoice"
+
+
+@billing_router.post("/invoices/{invoice_id}/send-email", response_model=InvoiceEmailOut)
+async def email_invoice(
+    invoice_id: str,
+    payload: InvoiceEmailIn,
+    ctx: TenantContext = Depends(require_permission(Permission.BILLING_WRITE)),
+) -> InvoiceEmailOut:
+    """Email the invoice to its patient, the same PDF the print button opens
+    attached, worded as the clinic set it up in Settings.
+
+    Billing work that messages a patient, so it needs both: every role can
+    bill, but only the roles that may message patients may send one. Sent
+    synchronously — the person at the desk is waiting to hear whether it went.
+    """
+    if not role_has(ctx.user.role, Permission.MESSAGE_SEND):
+        raise PermissionDenied("Your role does not allow that.")
+    invoice = await billing_service.get_invoice(
+        ctx.session, ctx.tenant_id, parse_uuid(invoice_id, what="invoice")
+    )
+    # Refused before the PDF is drawn: a void or draft bill is never sent, and
+    # neither is one with nobody to send it to.
+    to = invoice_email.check_sendable(invoice, payload.to)
+    totals = billing_service.totals_for(invoice)
+    currency = ctx.config.currency.value if ctx.config.currency else ""
+    pdf = build_invoice_pdf(
+        invoice, totals, clinic=ctx.tenant.name, config=ctx.config, currency=currency,
+        logo=await tenant_service.logo_for(ctx.session, ctx.tenant_id),
+    )
+    status_, to, detail = await invoice_email.send(
+        ctx.session, invoice=invoice, totals=totals, pdf=pdf, to=to,
+        filename=f"invoice-{_filename_safe(invoice.number)}.pdf", clinic=ctx.tenant.name,
+        config=ctx.config, currency=currency, actor_kind=ctx.actor_kind,
+        actor_id=ctx.actor_id, actor_label=ctx.principal.label,
+    )
+    return InvoiceEmailOut(
+        status=status_, to=to, detail=detail, invoice=InvoiceOut.of(invoice, ctx.tz, totals)
+    )
 
 
 @billing_router.post("/invoices/{invoice_id}/issue", response_model=InvoiceOut)

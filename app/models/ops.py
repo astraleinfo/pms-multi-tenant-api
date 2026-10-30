@@ -194,6 +194,11 @@ class Invoice(Base, TenantScoped, TimestampMixin):
     issued_at: Mapped[date_t] = mapped_column(Date, nullable=False)
     due_at: Mapped[date_t] = mapped_column(Date, nullable=False)
     voided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: The last time this invoice was emailed to the patient, and where to —
+    #: kept on the row so the screen can say "last sent". Every attempt, sent
+    #: or failed, is also an `invoice.emailed` line in the audit trail.
+    emailed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    emailed_to: Mapped[str | None] = mapped_column(String(254), nullable=True)
 
     line_items: Mapped[list[InvoiceLineItem]] = relationship(
         "InvoiceLineItem",
