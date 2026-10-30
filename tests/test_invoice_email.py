@@ -246,6 +246,53 @@ async def test_a_failed_handover_is_reported_and_recorded_but_not_marked_sent(
     assert mine and mine[0]["outcome"] == "failed"
 
 
+# --- the per-person budget -----------------------------------------------------------
+#
+# The limiter is in-process and shared, and conftest's autouse
+# `reset_rate_limiter` empties it around every test — so each test here starts
+# with a full budget and leaves none spent behind it.
+
+
+async def test_sending_past_the_budget_is_a_429_and_nothing_goes(northgate, outbox, monkeypatch):
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "invoice_email_rate_limit", "2/hour")
+    patient = await _patient(northgate, email="budget@example.com")
+    invoice = await _invoice(northgate, patient)
+
+    assert (await _send(northgate, invoice)).status_code == 200
+    assert (await _send(northgate, invoice)).status_code == 200
+    refused = await _send(northgate, invoice)
+
+    assert refused.status_code == 429
+    error = refused.json()["error"]
+    assert error["code"] == "rate_limited"
+    assert error["details"]["retry_after_seconds"] > 0
+    assert len(outbox) == 2
+
+
+async def test_one_persons_spent_budget_holds_up_nobody_else(
+    client, northgate, rowan, outbox, monkeypatch
+):
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "invoice_email_rate_limit", "1/hour")
+    patient = await _patient(northgate, email="shared.budget@example.com")
+    invoice = await _invoice(northgate, patient)
+    assert (await _send(northgate, invoice)).status_code == 200
+    assert (await _send(northgate, invoice)).status_code == 429
+
+    # a colleague in the same clinic
+    colleague = await sign_in(client, "northgate_doctor")
+    assert (await _send(colleague, invoice)).status_code == 200, "a colleague has their own budget"
+
+    # and someone in another clinic
+    theirs = await _invoice(rowan, await _patient(rowan, email="rowan.budget@example.com"))
+    assert (await _send(rowan, theirs)).status_code == 200, "another clinic has its own budget"
+
+    assert len(outbox) == 3
+
+
 # --- a clinic that has set nothing up ---------------------------------------------
 
 

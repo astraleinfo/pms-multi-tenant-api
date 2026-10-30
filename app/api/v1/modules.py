@@ -14,8 +14,10 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Query, Uplo
 from fastapi.responses import Response
 
 from app.api.deps import TenantContext, parse_uuid, require_permission
+from app.core.config import settings
 from app.core.errors import NotFound, PermissionDenied, ValidationFailed
 from app.core.permissions import Permission, role_has
+from app.core.rate_limit import Rate, limiter
 from app.models.enums import BillingDepartment, DispenseStatus, InvoiceStatus, LabOrderStatus
 from app.schemas.clinical import (
     DispenseIn,
@@ -712,9 +714,14 @@ async def email_invoice(
     Billing work that messages a patient, so it needs both: every role can
     bill, but only the roles that may message patients may send one. Sent
     synchronously — the person at the desk is waiting to hear whether it went.
+
+    Budgeted per member of staff (`INVOICE_EMAIL_RATE_LIMIT`): each one leaves
+    the platform's address carrying a patient's bill to any address typed, so
+    one session cannot send an unbounded number. Every attempt counts.
     """
     if not role_has(ctx.user.role, Permission.MESSAGE_SEND):
         raise PermissionDenied("Your role does not allow that.")
+    limiter.check(f"invoice-email:{ctx.user.id}", Rate.parse(settings.invoice_email_rate_limit))
     invoice = await billing_service.get_invoice(
         ctx.session, ctx.tenant_id, parse_uuid(invoice_id, what="invoice")
     )

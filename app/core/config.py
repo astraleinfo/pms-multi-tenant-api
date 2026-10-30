@@ -141,6 +141,13 @@ class Settings(BaseSettings):
     support_request_dedupe_minutes: int = 10
     support_request_rate_limit: str = "20/hour"
 
+    # ------------------------------------------------------- invoice email
+    # How many invoices one member of staff may email in a window. Each one
+    # names a patient and leaves from the platform's own address to whatever
+    # address was typed, so a stolen or careless session must not be able to
+    # turn the desk into a mail cannon. A busy front desk sends a handful an hour.
+    invoice_email_rate_limit: str = "30/hour"
+
     # ------------------------------------------------------ subscription rent
     # What each clinic pays the platform: one flat monthly fee covering every
     # module. The fee itself (`subscription_fee_monthly`), when it's due, how
