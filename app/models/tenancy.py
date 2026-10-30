@@ -177,8 +177,8 @@ class PlatformSettings(Base, TimestampMixin):
     id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
 
     # support desk
-    support_email: Mapped[str] = mapped_column(String(200), nullable=False, default="support@astrale.health")
-    support_phone: Mapped[str] = mapped_column(String(40), nullable=False, default="")
+    support_email: Mapped[str] = mapped_column(String(200), nullable=False, default="astraleinfo@gmail.com")
+    support_phone: Mapped[str] = mapped_column(String(40), nullable=False, default="7305961254")
     support_hours: Mapped[str] = mapped_column(String(200), nullable=False, default="")
 
     # new-tenant defaults — read once, when a clinic's TenantConfig is first

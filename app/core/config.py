@@ -135,7 +135,7 @@ class Settings(BaseSettings):
     # ---------------------------------------------------------------- support
     # Where a clinic's "enable this module" / "show me a walkthrough" request
     # is emailed. The request is stored first; this is only how the desk hears.
-    support_email: str = "support@astrale.health"
+    support_email: str = "astraleinfo@gmail.com"
     # One user asking for the same thing again inside this window gets the
     # request they already made back, not a second email.
     support_request_dedupe_minutes: int = 10

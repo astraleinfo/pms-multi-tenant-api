@@ -19,8 +19,8 @@ async def _reset_platform_settings() -> None:
     async with tenant_session(None) as session:
         row = await session.get(PlatformSettings, _PLATFORM_SETTINGS_ID)
         if row is not None:
-            row.support_email = "support@astrale.health"
-            row.support_phone = "+91 80 4718 2200"
+            row.support_email = "astraleinfo@gmail.com"
+            row.support_phone = "7305961254"
             row.support_hours = "Monday to Saturday, 9am – 7pm IST"
             row.default_day_start = "09:00"
             row.default_day_end = "17:30"
@@ -57,7 +57,8 @@ async def test_the_settings_row_exists_with_documented_defaults(console):
     response = await console.get("/v1/platform/settings")
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["support_email"] == "support@astrale.health"
+    assert body["support_email"] == "astraleinfo@gmail.com"
+    assert body["support_phone"] == "7305961254"
     assert body["default_currency"] == "INR"
     assert body["default_day_start"] == "09:00"
 
@@ -110,7 +111,7 @@ async def test_public_settings_needs_no_session(client, console):
     body = response.json()
     assert body == {
         "support_email": "help@astrale.health",
-        "support_phone": "+91 80 4718 2200",
+        "support_phone": "7305961254",
         "support_hours": "Monday to Saturday, 9am – 7pm IST",
     }
     assert "default_currency" not in body, "only the support fields are public"
@@ -212,3 +213,69 @@ async def test_a_bad_fee_is_refused(console, fee):
 async def test_the_support_desk_cannot_set_the_fee(console_support):
     response = await console_support.patch("/v1/platform/settings", json={"subscription_fee_monthly": 1})
     assert response.status_code == 403
+
+
+def _support_contact_migration():
+    """The migration module, loaded by path: `alembic/versions` is not a
+    package, and its file name starts with a digit."""
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "0029_support_contact_default.py"
+    spec = importlib.util.spec_from_file_location("support_contact_default", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+async def _run_support_contact_move(to_new: bool, email: str, phone: str) -> tuple[str, str]:
+    """Put the row in the given state, run the migration's own statements
+    (forward or back), and return what the row holds afterwards."""
+    migration = _support_contact_migration()
+    moves = (
+        migration.move_support_contact(migration.OLD_EMAIL, migration.OLD_PHONE, migration.NEW_EMAIL, migration.NEW_PHONE)
+        if to_new
+        else migration.move_support_contact(migration.NEW_EMAIL, migration.NEW_PHONE, migration.OLD_EMAIL, migration.OLD_PHONE)
+    )
+    async with tenant_session(None) as session:
+        row = await session.get(PlatformSettings, _PLATFORM_SETTINGS_ID)
+        row.support_email = email
+        row.support_phone = phone
+        await session.flush()
+        for statement in moves:
+            await session.execute(statement)
+        await session.refresh(row)
+        return row.support_email, row.support_phone
+
+
+async def test_the_old_placeholder_desk_moves_to_the_new_one():
+    assert await _run_support_contact_move(True, "support@astrale.health", "+91 80 4718 2200") == (
+        "astraleinfo@gmail.com",
+        "7305961254",
+    )
+
+
+async def test_a_desk_the_admin_already_customised_is_left_alone():
+    assert await _run_support_contact_move(True, "help@clinic.example", "+91 99 0000 0000") == (
+        "help@clinic.example",
+        "+91 99 0000 0000",
+    )
+
+
+async def test_each_support_column_is_judged_on_its_own():
+    """A customised email does not stop the untouched phone moving."""
+    assert await _run_support_contact_move(True, "help@clinic.example", "+91 80 4718 2200") == (
+        "help@clinic.example",
+        "7305961254",
+    )
+
+
+async def test_the_downgrade_restores_only_what_the_upgrade_set():
+    assert await _run_support_contact_move(False, "astraleinfo@gmail.com", "7305961254") == (
+        "support@astrale.health",
+        "+91 80 4718 2200",
+    )
+    assert await _run_support_contact_move(False, "help@clinic.example", "+91 99 0000 0000") == (
+        "help@clinic.example",
+        "+91 99 0000 0000",
+    )

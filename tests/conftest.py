@@ -51,7 +51,7 @@ os.environ.update(
         "ERROR_REPORTER": "none",
         "MAIL_PROVIDER": "console",
         # The desk address the platform settings row starts with.
-        "SUPPORT_EMAIL": "support@astrale.health",
+        "SUPPORT_EMAIL": "astraleinfo@gmail.com",
         "STORAGE_BACKEND": "database",
         "COOKIE_DOMAIN": "",
         "REFRESH_COOKIE_PATH": "/",
