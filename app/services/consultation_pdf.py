@@ -20,6 +20,7 @@ import io
 from collections.abc import Mapping, Sequence
 from datetime import timedelta
 
+from reportlab.lib.enums import TA_RIGHT
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.platypus import KeepTogether, Paragraph, Spacer, Table, TableStyle
@@ -28,6 +29,7 @@ from app.models.clinical import Encounter, Patient, Prescription
 from app.models.identity import User
 from app.models.tenancy import TenantConfig
 from app.schemas.common import local_now
+from app.services.documents import money
 from app.services.pdf import (
     _BLACK,
     _FORM_CELL,
@@ -50,7 +52,12 @@ from app.services.pdf_fonts import FONT_BOLD
 
 _TH = ParagraphStyle("RxHead", parent=_STYLES["Normal"], fontName=FONT_BOLD, fontSize=7.8, leading=10)
 _TD = ParagraphStyle("RxCell", parent=_STYLES["Normal"], fontSize=8.8, leading=11.6)
+_TD_RIGHT = ParagraphStyle("RxCellRight", parent=_TD, alignment=TA_RIGHT)
+_TD_NOTE = ParagraphStyle("RxCellNote", parent=_TD, fontSize=7.6, leading=10, textColor=_INK_2)
 _SMALL = ParagraphStyle("SignSmall", parent=_FORM_CELL, fontSize=8.2, leading=11, textColor=_INK_2)
+
+#: Under a medicine the patient buys elsewhere, in place of a price.
+_ELSEWHERE = "To be purchased separately"
 
 #: The structured exam payloads a clinical type adds to `clinical_ext`, as one line each.
 _LISTS = (("lesion_sites", "Lesion sites"), ("procedures", "Procedures"), ("treatments", "Treatments"))
@@ -176,26 +183,55 @@ def _paragraph(text: str, *, label: str = "") -> Paragraph:
     return Paragraph(f"<b>{esc(label)}:</b> {body}" if label else body, _FORM_CELL)
 
 
-def _medicines(doc, prescription: Prescription) -> Table:
-    rows: list[list] = [[Paragraph(h, _TH) for h in
-                         ("#", "Medicine", "Dosage", "Frequency", "Duration", "Instructions", "Qty")]]
+def _medicines(doc, prescription: Prescription, currency: str) -> Table:
+    """The medicines, as a grid. A line the clinic hands over and has priced shows
+    its unit price and amount, totalled underneath; a line the patient buys
+    elsewhere shows no price, only a note saying so. With no priced line at all —
+    a clinic that only prescribes — the price columns are left out and the page
+    is a plain prescription."""
+    priced = [i for i in prescription.items if i.dispense and i.unit_price is not None]
+    heads = ["#", "Medicine", "Dosage", "Frequency", "Duration", "Instructions", "Qty"]
+    widths = [0.05, 0.27, 0.12, 0.17, 0.11, 0.20, 0.08]
+    if priced:
+        heads += ["Unit price", "Amount"]
+        widths = [0.04, 0.22, 0.10, 0.13, 0.09, 0.14, 0.06, 0.11, 0.11]
+
+    rows: list[list] = [[Paragraph(h, _TH) for h in heads]]
     for n, item in enumerate(prescription.items, start=1):
-        medicine = f"<b>{esc(item.medicine)}</b>" + (f"<br/>{esc(item.strength)}" if item.strength else "")
-        rows.append([
-            Paragraph(str(n), _TD), Paragraph(medicine, _TD),
+        medicine: list = [Paragraph(
+            f"<b>{esc(item.medicine)}</b>" + (f"<br/>{esc(item.strength)}" if item.strength else ""), _TD
+        )]
+        if not item.dispense:
+            medicine.append(Paragraph(_ELSEWHERE, _TD_NOTE))
+        row = [
+            Paragraph(str(n), _TD), medicine,
             Paragraph(esc(item.dosage) or "—", _TD), Paragraph(esc(item.frequency) or "—", _TD),
             Paragraph(esc(item.duration) or "—", _TD), Paragraph(esc(item.instructions) or "—", _TD),
             Paragraph(str(item.qty), _TD),
-        ])
-    table = Table(rows, colWidths=[doc.width * w for w in (0.05, 0.27, 0.12, 0.17, 0.11, 0.20, 0.08)],
-                  repeatRows=1)
-    table.setStyle(TableStyle([
+        ]
+        if priced:
+            has_price = item.dispense and item.unit_price is not None
+            row += [
+                Paragraph(money(item.unit_price, currency) if has_price else "—", _TD_RIGHT),
+                Paragraph(money(item.qty * item.unit_price, currency) if has_price else "—", _TD_RIGHT),
+            ]
+        rows.append(row)
+
+    style = [
         ("GRID", (0, 0), (-1, -1), 0.6, _BLACK),
         ("BACKGROUND", (0, 0), (-1, 0), _GRID_HEAD),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("LEFTPADDING", (0, 0), (-1, -1), 4.5), ("RIGHTPADDING", (0, 0), (-1, -1), 4.5),
         ("TOPPADDING", (0, 0), (-1, -1), 3.5), ("BOTTOMPADDING", (0, 0), (-1, -1), 3.5),
-    ]))
+    ]
+    if priced:
+        total = sum(i.qty * i.unit_price for i in priced)
+        rows.append([Paragraph("<b>Total</b>", _TD_RIGHT), *[""] * (len(heads) - 2),
+                     Paragraph(f"<b>{money(total, currency)}</b>", _TD_RIGHT)])
+        style.append(("SPAN", (0, len(rows) - 1), (-2, len(rows) - 1)))
+
+    table = Table(rows, colWidths=[doc.width * w for w in widths], repeatRows=1)
+    table.setStyle(TableStyle(style))
     return table
 
 
@@ -292,7 +328,8 @@ def build_consultation_pdf(
         story += [section_title(doc, "Diagnosis"), Paragraph(f"<b>{esc(diagnosis)}</b>", _FORM_CELL)]
 
     if prescription is not None and prescription.items:
-        story += [section_title(doc, "Medication advised"), _medicines(doc, prescription)]
+        currency = config.currency.value if config is not None and config.currency else ""
+        story += [section_title(doc, "Medication advised"), _medicines(doc, prescription, currency)]
 
     if encounter.follow_up_days:
         review = encounter.date + timedelta(days=encounter.follow_up_days)

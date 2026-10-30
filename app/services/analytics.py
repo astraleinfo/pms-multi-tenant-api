@@ -323,8 +323,11 @@ async def _pharmacy(session: AsyncSession, tenant_id: uuid.UUID, *, since: date)
             )
         ).all()
     )
+    # A prescription the patient fills elsewhere is not waiting on anyone.
     waiting = sum(
-        count for status, count in by_status.items() if status != DispenseStatus.DISPENSED
+        count
+        for status, count in by_status.items()
+        if status not in (DispenseStatus.DISPENSED, DispenseStatus.PRESCRIBE_ONLY)
     )
     return {
         "dispensed_units": int(units),

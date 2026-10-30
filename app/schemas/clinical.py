@@ -21,7 +21,7 @@ from app.models.enums import (
     ResultFlag,
     Sex,
 )
-from app.schemas.common import ApiModel, IdStr, InputModel, clock, iso_date, stamp
+from app.schemas.common import ApiModel, IdStr, InputModel, clock, iso_date, money, stamp
 
 # --- patients ---------------------------------------------------------------
 
@@ -480,6 +480,10 @@ class PrescriptionItemOut(ApiModel):
     qty: int
     dispensed_qty: int
     status: DispenseStatus
+    #: false: prescribed only — the patient buys it elsewhere
+    dispense: bool
+    #: what one unit bills at; null on a prescribe-only line, or one nobody priced
+    unit_price: float | None
 
     @classmethod
     def of(cls, i) -> PrescriptionItemOut:
@@ -487,7 +491,8 @@ class PrescriptionItemOut(ApiModel):
             id=str(i.id), prescription_id=str(i.prescription_id),
             item_id=str(i.item_id) if i.item_id else None, medicine=i.medicine, strength=i.strength,
             dosage=i.dosage, frequency=i.frequency, duration=i.duration, instructions=i.instructions,
-            qty=i.qty, dispensed_qty=i.dispensed_qty, status=i.status,
+            qty=i.qty, dispensed_qty=i.dispensed_qty, status=i.status, dispense=i.dispense,
+            unit_price=money(i.unit_price) if i.unit_price is not None else None,
         )
 
 
@@ -541,6 +546,12 @@ class PrescriptionItemIn(InputModel):
     instructions: str | None = Field(default=None, max_length=1000)
     qty: int = Field(default=1, ge=1, le=10_000)
     item_id: IdStr | None = None
+    #: Dispensed here, or prescribed only. Left out, the clinic's
+    #: `prescribe_only_default` decides.
+    dispense: bool | None = None
+    #: Left out on a stock line, the stock line's price. Dropped on a
+    #: prescribe-only line, which has none.
+    unit_price: float | None = Field(default=None, ge=0, le=1_000_000)
 
 
 class PrescriptionIn(InputModel):

@@ -36,7 +36,7 @@ from app.models.enums import (
     PaymentMethod,
     ServiceKind,
 )
-from app.models.ops import InventoryItem, Invoice
+from app.models.ops import Invoice
 from app.schemas.ops import InvoiceIn, InvoiceLineItemIn, PaymentIn
 from app.services import billing as billing_service
 from app.services import patients as patient_service
@@ -134,13 +134,7 @@ async def _pharmacy_charges(
         if outstanding <= 0:
             continue
 
-        unit_price = 0.0
-        priced = False
-        if item.item_id:
-            stock = await session.get(InventoryItem, item.item_id)
-            if stock is not None and stock.tenant_id == tenant_id:
-                unit_price = float(stock.unit_price)
-                priced = True
+        unit_price, priced = await billing_service.prescription_line_price(session, tenant_id, item)
 
         charges.append(
             Charge(

@@ -118,6 +118,8 @@ class TenantConfigOut(ApiModel):
     invoice_email_sender_name: str
     invoice_email_subject: str
     invoice_email_message: str
+    #: new prescription lines start as "the patient buys it elsewhere"
+    prescribe_only_default: bool
     timezone: str
     has_logo: bool
 
@@ -138,6 +140,7 @@ class TenantConfigOut(ApiModel):
             invoice_email_sender_name=c.invoice_email_sender_name,
             invoice_email_subject=c.invoice_email_subject,
             invoice_email_message=c.invoice_email_message,
+            prescribe_only_default=c.prescribe_only_default,
             timezone=tz, has_logo=c.logo_filename is not None,
         )
 
@@ -173,6 +176,8 @@ class TenantConfigPatch(InputModel):
     invoice_email_sender_name: str | None = Field(default=None, max_length=80)
     invoice_email_subject: str | None = Field(default=None, max_length=200)
     invoice_email_message: str | None = Field(default=None, max_length=2000)
+    #: a clinic that prescribes but does not sell: new lines start as prescribe only
+    prescribe_only_default: bool | None = None
 
     @field_validator("invoice_email_reply_to")
     @classmethod

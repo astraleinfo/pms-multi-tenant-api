@@ -28,6 +28,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    false,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -159,6 +160,13 @@ class TenantConfig(Base, TenantScoped, TimestampMixin):
         String(200), nullable=False, default="", server_default=""
     )
     invoice_email_message: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+
+    #: A clinic that writes prescriptions but sells no medicine: each new line
+    #: starts as "prescribe only" (the patient buys it elsewhere) unless the
+    #: line itself says it is dispensed here.
+    prescribe_only_default: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
 
     #: The clinic's own mark — shown in its own rail and printed on its PDFs.
     #: Unset by default; a clinic that has not uploaded one gets no image

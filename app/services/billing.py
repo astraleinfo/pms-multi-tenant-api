@@ -15,7 +15,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import Conflict, NotFound
-from app.models.clinical import Encounter, LabOrder, Patient, Prescription
+from app.models.clinical import Encounter, LabOrder, Patient, Prescription, PrescriptionItem
 from app.models.enums import (
     DEPARTMENT_OF_SOURCE,
     INVOICE_TRANSITIONS,
@@ -429,6 +429,21 @@ async def billed_ref_lines(
     return out
 
 
+async def prescription_line_price(
+    session: AsyncSession, tenant_id: uuid.UUID, item: PrescriptionItem
+) -> tuple[float, bool]:
+    """What one unit of a dispensed prescription line bills at, and whether
+    anybody priced it: the price written on the line, else (a line from before
+    lines carried one) its stock line's, else nothing — at zero, saying so."""
+    if item.unit_price is not None:
+        return float(item.unit_price), True
+    if item.item_id:
+        stock = await session.get(InventoryItem, item.item_id)
+        if stock is not None and stock.tenant_id == tenant_id:
+            return float(stock.unit_price), True
+    return 0.0, False
+
+
 async def suggest_lines(
     session: AsyncSession, tenant_id: uuid.UUID, *, encounter_id: uuid.UUID
 ) -> dict[str, list[dict]]:
@@ -537,13 +552,7 @@ async def suggest_lines(
         ignore_invoice_ids=unpaid,
     )
     for item in dispensed_items:
-        unit_price = 0.0
-        priced = False
-        if item.item_id:
-            stock = await session.get(InventoryItem, item.item_id)
-            if stock is not None and stock.tenant_id == tenant_id:
-                unit_price = float(stock.unit_price)
-                priced = True
+        unit_price, priced = await prescription_line_price(session, tenant_id, item)
         description = f"{item.medicine} {item.strength}".strip()
 
         entries = pharmacy_billed.get(item.id, [])

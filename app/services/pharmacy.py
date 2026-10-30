@@ -29,12 +29,8 @@ def _item_status(item: PrescriptionItem) -> DispenseStatus:
     return DispenseStatus.PENDING
 
 
-def _prescription_status(items: list[PrescriptionItem]) -> DispenseStatus:
-    if items and all(i.status == DispenseStatus.DISPENSED for i in items):
-        return DispenseStatus.DISPENSED
-    if any(i.dispensed_qty > 0 for i in items):
-        return DispenseStatus.PARTIALLY_DISPENSED
-    return DispenseStatus.PENDING
+#: Nothing left for the window to hand over.
+_DONE = (DispenseStatus.DISPENSED, DispenseStatus.PRESCRIBE_ONLY)
 
 
 async def dispense(
@@ -48,6 +44,8 @@ async def dispense(
     prescription = await encounter_service.get_prescription(session, tenant_id, prescription_id)
     if prescription.status == DispenseStatus.DISPENSED:
         raise Conflict("Everything on that prescription has already been handed over.")
+    if prescription.status == DispenseStatus.PRESCRIBE_ONLY:
+        raise Conflict("Everything on that prescription is for the patient to buy elsewhere.")
 
     by_id = {item.id: item for item in prescription.items}
 
@@ -60,6 +58,11 @@ async def dispense(
         item = by_id.get(line_item_id)
         if item is None:
             raise NotFound("No such prescription item.")
+        if not item.dispense:
+            raise Conflict(
+                f"{item.medicine} is for the patient to buy elsewhere, so it is not dispensed here.",
+                details={"item_id": str(item.id)},
+            )
 
         remaining = item.qty - item.dispensed_qty
         if line.qty > remaining:
@@ -85,7 +88,7 @@ async def dispense(
         item.dispensed_qty += line.qty
         item.status = _item_status(item)
 
-    prescription.status = _prescription_status(list(prescription.items))
+    prescription.status = encounter_service.prescription_status(list(prescription.items))
     await session.flush()
     return prescription
 
@@ -97,5 +100,5 @@ async def pending_prescriptions(
     if status is not None:
         stmt = stmt.where(Prescription.status == status)
     else:
-        stmt = stmt.where(Prescription.status != DispenseStatus.DISPENSED)
+        stmt = stmt.where(Prescription.status.notin_(_DONE))
     return list((await session.execute(stmt.order_by(Prescription.issued_at.desc()))).scalars())

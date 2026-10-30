@@ -291,6 +291,44 @@ async def test_medicine_text_is_printed_literally(northgate):
     assert "<b>after</b> food" in text
 
 
+async def test_a_line_dispensed_here_prints_its_unit_price_and_amount(northgate):
+    visit = await _consultation(northgate, items=[{**_AZITHROMYCIN, "unit_price": 42.5}])
+
+    text = " ".join((await _printed(northgate, visit)).split())
+
+    assert "Unit price" in text and "Amount" in text
+    assert "₹42.50" in text
+    assert "₹127.50" in text, "3 × ₹42.50"
+    assert "To be purchased separately" not in text
+
+
+async def test_a_prescription_bought_elsewhere_prints_plainly_with_no_prices(northgate):
+    visit = await _consultation(northgate, items=[{**_AZITHROMYCIN, "dispense": False, "unit_price": 42.5}])
+
+    text = " ".join((await _printed(northgate, visit)).split())
+
+    assert "Azithromycin" in text
+    assert "To be purchased separately" in text
+    assert "Unit price" not in text and "Amount" not in text
+    assert "₹" not in text
+
+
+async def test_a_mixed_prescription_prices_only_what_the_clinic_hands_over(northgate):
+    visit = await _consultation(
+        northgate,
+        items=[
+            {**_AZITHROMYCIN, "unit_price": 20},
+            {"medicine": "Imported eye drops", "qty": 1, "dispense": False},
+        ],
+    )
+
+    text = " ".join((await _printed(northgate, visit)).split())
+
+    assert "₹60.00" in text, "3 × ₹20 for the line handed over"
+    assert "Imported eye drops" in text and "To be purchased separately" in text
+    assert "Total ₹60.00" in text, "the line bought elsewhere adds nothing"
+
+
 async def test_a_very_long_note_flows_onto_more_pages(northgate):
     import re
 

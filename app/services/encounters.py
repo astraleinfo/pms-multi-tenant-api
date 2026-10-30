@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime, timezone
+from decimal import ROUND_HALF_UP, Decimal
 
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -289,6 +290,20 @@ PRESCRIPTION_SORTS = {
 }
 
 
+def prescription_status(items: list[PrescriptionItem]) -> DispenseStatus:
+    """Where a prescription stands, judged only on the lines this clinic hands
+    over. With none of those it is prescribed only: nothing waits on the
+    pharmacy, and it never shows at the counter."""
+    dispensed_here = [i for i in items if i.dispense]
+    if not dispensed_here:
+        return DispenseStatus.PRESCRIBE_ONLY
+    if all(i.status == DispenseStatus.DISPENSED for i in dispensed_here):
+        return DispenseStatus.DISPENSED
+    if any(i.dispensed_qty > 0 for i in dispensed_here):
+        return DispenseStatus.PARTIALLY_DISPENSED
+    return DispenseStatus.PENDING
+
+
 async def list_prescriptions(
     session: AsyncSession,
     tenant_id: uuid.UUID,
@@ -384,7 +399,8 @@ async def create_prescription(
     )
     session.add(prescription)
     await session.flush()
-    await _add_items(session, tenant_id, prescription, payload.items)
+    added = await _add_items(session, tenant_id, prescription, payload.items)
+    prescription.status = prescription_status(added)
 
     await session.flush()
     await session.refresh(prescription, ["items", "patient"])
@@ -428,8 +444,8 @@ async def replace_prescription(
         await session.delete(item)
     await session.flush()
     session.expire(existing, ["items"])
-    await _add_items(session, tenant_id, existing, payload.items)
-    existing.status = DispenseStatus.PENDING
+    added = await _add_items(session, tenant_id, existing, payload.items)
+    existing.status = prescription_status(added)
 
     await session.flush()
     await session.refresh(existing, ["items", "patient"])
@@ -438,9 +454,14 @@ async def replace_prescription(
 
 async def _add_items(
     session: AsyncSession, tenant_id: uuid.UUID, prescription: Prescription, items: list[PrescriptionItemIn]
-) -> None:
+) -> list[PrescriptionItem]:
+    """Write the lines. A line that does not say whether it is dispensed here
+    follows the clinic's default; a stock line sent without a price takes the
+    stock line's; a prescribe-only line keeps no price at all."""
+    config = await tenant_service.get_config(session, tenant_id)
+    added: list[PrescriptionItem] = []
     for position, item in enumerate(items):
-        stock_item_id: uuid.UUID | None = None
+        stock: InventoryItem | None = None
         if item.item_id:
             stock = (
                 await session.execute(
@@ -452,22 +473,36 @@ async def _add_items(
             ).scalar_one_or_none()
             if stock is None:
                 raise NotFound("No such stock item.")
-            stock_item_id = stock.id
 
-        session.add(
-            PrescriptionItem(
-                tenant_id=tenant_id,
-                prescription_id=prescription.id,
-                item_id=stock_item_id,
-                position=position,
-                medicine=item.medicine,
-                strength=item.strength,
-                dosage=item.dosage,
-                frequency=item.frequency,
-                duration=item.duration,
-                instructions=item.instructions,
-                qty=item.qty,
-                dispensed_qty=0,
-                status=DispenseStatus.PENDING,
-            )
+        dispense = item.dispense if item.dispense is not None else not config.prescribe_only_default
+        unit_price: Decimal | None = None
+        if dispense:
+            if item.unit_price is not None:
+                unit_price = _money(item.unit_price)
+            elif stock is not None:
+                unit_price = stock.unit_price
+
+        row = PrescriptionItem(
+            tenant_id=tenant_id,
+            prescription_id=prescription.id,
+            item_id=stock.id if stock is not None else None,
+            position=position,
+            medicine=item.medicine,
+            strength=item.strength,
+            dosage=item.dosage,
+            frequency=item.frequency,
+            duration=item.duration,
+            instructions=item.instructions,
+            qty=item.qty,
+            dispensed_qty=0,
+            status=DispenseStatus.PENDING if dispense else DispenseStatus.PRESCRIBE_ONLY,
+            dispense=dispense,
+            unit_price=unit_price,
         )
+        session.add(row)
+        added.append(row)
+    return added
+
+
+def _money(value: float) -> Decimal:
+    return Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)

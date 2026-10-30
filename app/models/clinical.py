@@ -10,9 +10,11 @@ from __future__ import annotations
 import uuid
 from datetime import date as date_t
 from datetime import datetime
+from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     Date,
     DateTime,
@@ -21,10 +23,12 @@ from sqlalchemy import (
     Index,
     Integer,
     LargeBinary,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
     func,
+    true,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
@@ -288,6 +292,10 @@ class PrescriptionItem(Base, TenantScoped, TimestampMixin):
     __extra_table_args__ = (
         CheckConstraint("qty > 0", name="ck_rx_item_qty"),
         CheckConstraint("dispensed_qty >= 0 and dispensed_qty <= qty", name="ck_rx_item_dispensed"),
+        CheckConstraint("unit_price >= 0", name="ck_rx_item_unit_price"),
+        CheckConstraint(
+            "dispense or (unit_price is null and dispensed_qty = 0)", name="ck_rx_item_prescribe_only"
+        ),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -309,6 +317,13 @@ class PrescriptionItem(Base, TenantScoped, TimestampMixin):
     status: Mapped[DispenseStatus] = mapped_column(
         _enum(DispenseStatus, "dispense_status"), nullable=False, default=DispenseStatus.PENDING
     )
+    #: Whether this clinic hands it over. False is "prescribe only": the patient
+    #: buys it elsewhere, so it is never dispensed, never moves stock and never
+    #: becomes a charge — and has no price.
+    dispense: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=true())
+    #: What one unit bills at, as written on the prescription — defaulted from
+    #: the stock line when there is one, editable, and null when nobody priced it.
+    unit_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
 
     prescription: Mapped[Prescription] = relationship("Prescription", back_populates="items")
 

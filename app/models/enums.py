@@ -233,6 +233,9 @@ class DispenseStatus(StrEnum):
     PENDING = "pending"
     PARTIALLY_DISPENSED = "partially_dispensed"
     DISPENSED = "dispensed"
+    #: The patient buys it elsewhere: nothing for the pharmacy to hand over.
+    #: A line written that way, or a prescription with no other kind of line.
+    PRESCRIBE_ONLY = "prescribe_only"
 
 
 class LabOrderStatus(StrEnum):
