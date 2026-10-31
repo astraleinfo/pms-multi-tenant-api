@@ -352,20 +352,27 @@ def test_the_header_and_footer_name_the_product():
     assert "Practice OS" not in email.html and "Practice OS" not in email.text
 
 
-def test_an_invoice_email_keeps_its_pdf_beside_the_inline_logo():
-    mark = platform_logo.prepare_email_mark(platform_logo.default_logo())
+def test_an_invoice_email_keeps_its_pdf_beside_the_clinics_inline_logo():
+    """An invoice is a clinic's message: its inline image is the clinic's, never
+    the platform's (`tests/test_email_branding.py` covers the header itself)."""
+    from app.services import email_logo
+
+    mark = email_logo.prepare_clinic_mark(SQUARE_PNG)
     email = mailer.invoice_to_patient(
         to="patient@example.com", clinic="Northgate", from_name="Northgate via Astrale", reply_to=None,
         subject="Invoice NG-INV-1", message="Hello", number="NG-INV-1", issued="1 Oct 2026",
         due="8 Oct 2026", total="₹100.00", balance="₹100.00", owing=True, pdf=b"%PDF-1.4",
-        filename="NG-INV-1.pdf", mark=mark,
+        filename="NG-INV-1.pdf", branding=mailer.ClinicBranding(name="Northgate", mark=mark),
     )
     message = email.as_message()
     assert message.get_content_type() == "multipart/mixed"
     body, attached = message.get_payload()
     assert body.get_content_type() == "multipart/alternative"
-    assert body.get_payload()[1].get_content_type() == "multipart/related"
+    related = body.get_payload()[1]
+    assert related.get_content_type() == "multipart/related"
+    assert related.get_payload()[1]["Content-ID"] == f"<{mailer.CLINIC_MARK_CID}>"
     assert attached.get_filename() == "NG-INV-1.pdf"
+    assert f"cid:{mailer.MARK_CID}" not in email.html
 
 
 async def test_a_reset_email_sent_for_real_carries_the_uploaded_logo(console, client, monkeypatch, link_emails):

@@ -32,6 +32,12 @@ line (on the platform's own address — a clinic never hands over a mail
 password), a Reply-To that reaches the clinic, and the invoice as a PDF. It
 names a patient, so it is marked `sensitive` and the console transport keeps
 its recipient and body out of the INFO log.
+
+Whose message it is decides whose header it wears (`Branding`). What the
+platform sends to a clinic's staff is the platform's: the Astrale logo and the
+product's name. What a clinic sends to its patients is the clinic's: its own
+logo and name, and neither of the platform's — the footer still says, quietly,
+what the message was sent through.
 """
 
 from __future__ import annotations
@@ -64,21 +70,53 @@ class Attachment:
     data: bytes
 
 
-#: what the header's <img> points at, and the logo part's Content-ID
+#: what a platform message's header <img> points at, and the logo part's Content-ID
 MARK_CID = "astrale-mark"
+#: the same, for a clinic's message: the clinic's own logo
+CLINIC_MARK_CID = "clinic-logo"
 
 
 @dataclass(frozen=True)
 class EmailMark:
-    """The platform's logo, ready for a message's header: a PNG drawn at twice
-    the size it is shown (`width` × `height` CSS pixels), so it is sharp on a
-    high-density screen. Made by `services/platform_logo.py::email_mark`."""
+    """A logo ready for a message's header: a PNG drawn at twice the size it is
+    shown (`width` × `height` CSS pixels), so it is sharp on a high-density
+    screen. The platform's is made by `services/platform_logo.py::email_mark`,
+    a clinic's by `services/email_logo.py::clinic_mark`."""
 
     data: bytes
     width: int
     height: int
-    #: a lockup — the mark and the name side by side — rather than a mark alone
+    #: wider than tall by two to one or more (a lockup, a wordmark) rather than
+    #: a mark alone; it is laid out on its own line, the name under it
     wide: bool
+    #: the part's Content-ID, which the header's `cid:` URL names
+    cid: str = MARK_CID
+    filename: str = "astrale.png"
+    #: set on a light rounded tile, because the artwork may be dark and the
+    #: header is not (a clinic's logo is whatever the clinic uploaded)
+    tile: bool = False
+
+
+@dataclass(frozen=True)
+class PlatformBranding:
+    """The header of a message the platform sends — to a clinic's staff, to its
+    own support desk: the Astrale logo (or, with none to draw, the name) and
+    the product's tagline. The clinic the message is about, if any, sits on
+    the right."""
+
+    mark: EmailMark | None = None
+
+
+@dataclass(frozen=True)
+class ClinicBranding:
+    """The header of a message a clinic sends — to its patients: the clinic's
+    own logo and name, nothing of the platform's. With no logo, the name alone."""
+
+    name: str
+    mark: EmailMark | None = None
+
+
+Branding = PlatformBranding | ClinicBranding
 
 
 @dataclass(frozen=True)
@@ -95,8 +133,10 @@ class Email:
     attachments: tuple[Attachment, ...] = ()
     #: it names a patient — the console transport logs that it went, not what it said
     sensitive: bool = False
-    #: the logo the HTML's header points at (`cid:` + `MARK_CID`); `None` when
-    #: the header was drawn without one
+    #: the logo the HTML's header points at (`cid:` + the mark's own `cid`);
+    #: `None` when the header was drawn without one. It is the `mark` of the
+    #: `Branding` the HTML was built with, and only that: a clinic's message
+    #: carries the clinic's image, a platform's the platform's.
     mark: EmailMark | None = None
 
     def as_message(self) -> EmailMessage:
@@ -122,8 +162,8 @@ class Email:
                 # anywhere, so it is not blocked as a remote image and tells
                 # nobody the message was opened.
                 message.get_payload()[1].add_related(
-                    self.mark.data, maintype="image", subtype="png", cid=f"<{MARK_CID}>",
-                    disposition="inline", filename="astrale.png",
+                    self.mark.data, maintype="image", subtype="png", cid=f"<{self.mark.cid}>",
+                    disposition="inline", filename=self.mark.filename,
                 )
         for attachment in self.attachments:
             maintype, _, subtype = attachment.content_type.partition("/")
@@ -226,14 +266,14 @@ async def send(email: Email) -> None:
 #     Outlook's Word rendering engine;
 #   * nothing is fetched from anywhere: no hosted images and no webfonts. A
 #     remote file is blocked by default in most clients and leaks a read
-#     receipt to whoever hosts it. The one image, the platform's logo, travels
+#     receipt to whoever hosts it. The one image, the sender's logo, travels
 #     inside the message as an inline part (see `Email.as_message`), and a
-#     header drawn without one still reads as the wordmark.
+#     header drawn without one still reads as a name.
 #
 # The look is the application's own (`globals.css` in the web app), and the
 # idea is that a message *opens on the sign-in stage*: the dark slate pane
 # with the blue glow that every link in these messages lands on. So the top
-# of the card is that stage — the lockup, the clinic, what kind of message
+# of the card is that stage — the sender's lockup, what kind of message
 # this is, the headline, and the one thing to do, all before the fold. A
 # bill puts its amount there too, as the screen's one hero figure.
 #
@@ -256,6 +296,7 @@ _ROW_LINE = "#E9EDF5"
 _INK = "#141C2B"
 _INK_2 = "#3D475B"
 _INK_3 = "#4E596E"
+_INK_QUIET = "#5E6A80"  # still 4.9:1 on the ground
 
 _STAGE = "#151C28"
 _STAGE_LINE = "#2B3446"
@@ -301,8 +342,8 @@ def _tone(name: str) -> _Tone:
     return _TONES.get(name, _TONES["accent"])
 
 
-def _lockup(mark: EmailMark | None) -> str:
-    """The top-left of the stage: the platform's logo and what the product is.
+def _platform_lockup(mark: EmailMark | None) -> str:
+    """The top-left of a platform message's stage: the platform's logo and what the product is.
 
     A lockup — a logo that already spells the name — stands on its own with
     the tagline under it. A mark alone (a square icon) takes the place the
@@ -321,7 +362,7 @@ def _lockup(mark: EmailMark | None) -> str:
     # The alt text is styled as the wordmark, so a client that holds images
     # back still shows the name in the logo's place rather than a broken box.
     img = (
-        f'<img src="cid:{MARK_CID}" width="{mark.width}" height="{mark.height}" alt="{escape(PLATFORM_NAME)}" '
+        f'<img src="cid:{mark.cid}" width="{mark.width}" height="{mark.height}" alt="{escape(PLATFORM_NAME)}" '
         f'style="display:block;width:{mark.width}px;height:{mark.height}px;border:0;outline:none;text-decoration:none;'
         f'font-family:{_SANS};font-size:15px;font-weight:600;line-height:1;color:{_STAGE_INK};">'
     )
@@ -336,18 +377,73 @@ def _lockup(mark: EmailMark | None) -> str:
           </table>"""
 
 
+#: the light tile a clinic's logo may sit on, and the room it leaves round the artwork
+_TILE = "#FFFFFF"
+_TILE_PAD = 4
+
+
+def _clinic_lockup(brand: ClinicBranding) -> str:
+    """The top-left of a clinic message's stage: the clinic's own logo and name.
+
+    A logo that is wider than tall (it usually spells the name already) takes
+    its own line with the name under it, as the platform's lockup does with its
+    tagline; a mark alone sits beside the name. With no logo the name is the
+    whole header — no placeholder square, no initial tile. Nothing here names
+    the platform. The name wraps rather than overflowing on a narrow phone.
+    """
+    name = (
+        f'<div style="font-family:{_SANS};font-size:16px;font-weight:600;line-height:1.3;'
+        f'color:{_STAGE_INK};word-break:break-word;">{escape(brand.name)}</div>'
+    )
+    mark = brand.mark
+    if mark is None:
+        return name
+    # The alt is empty: the name is printed beside the logo, and a client that
+    # holds images back should not show it twice.
+    img = (
+        f'<img src="cid:{mark.cid}" width="{mark.width}" height="{mark.height}" alt="" '
+        f'style="display:block;width:{mark.width}px;height:{mark.height}px;border:0;outline:none;text-decoration:none;">'
+    )
+    if mark.tile:
+        img = (
+            '<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>'
+            f'<td bgcolor="{_TILE}" style="background-color:{_TILE};border-radius:9px;padding:{_TILE_PAD}px;">{img}</td>'
+            "</tr></table>"
+        )
+    if mark.wide:
+        return f'<div>{img}<div style="margin-top:10px;">{name}</div></div>'
+    return f"""<table role="presentation" cellpadding="0" cellspacing="0" border="0">
+            <tr>
+              <td valign="middle">{img}</td>
+              <td valign="middle" style="padding-left:12px;">{name}</td>
+            </tr>
+          </table>"""
+
+
+def _lockup(brand: Branding) -> str:
+    if isinstance(brand, ClinicBranding):
+        return _clinic_lockup(brand)
+    return _platform_lockup(brand.mark)
+
+
 def _stage(
     *,
-    clinic: str,
+    clinic: str = "",
     eyebrow: str,
     heading: str,
     lead: str,
     figure: tuple[str, str] | None,
     action: tuple[str, str] | None,
     tone: str,
-    mark: EmailMark | None = None,
+    brand: Branding,
 ) -> str:
     t = _tone(tone)
+    # A clinic's own message already names the clinic in its lockup; the
+    # platform's names the clinic it is about, at the right.
+    about_html = "" if isinstance(brand, ClinicBranding) else (
+        f'\n        <td align="right" valign="middle" style="padding-left:12px;font-family:{_SANS};'
+        f'font-size:13px;line-height:1.4;color:{_STAGE_DIM};">{clinic}</td>'
+    )
     lead_html = (
         f'<p style="margin:12px 0 0 0;font-family:{_SANS};font-size:16px;line-height:1.55;color:{_STAGE_DIM};">{lead}</p>'
         if lead else ""
@@ -378,13 +474,12 @@ def _stage(
 <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
   <tr><td style="padding:26px 36px 36px 36px;">
 
-    <!-- lockup, and the clinic this is about -->
+    <!-- the sender's lockup, and for the platform's mail the clinic this is about -->
     <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
       <tr>
         <td valign="middle">
-          {_lockup(mark)}
-        </td>
-        <td align="right" valign="middle" style="padding-left:12px;font-family:{_SANS};font-size:13px;line-height:1.4;color:{_STAGE_DIM};">{clinic}</td>
+          {_lockup(brand)}
+        </td>{about_html}
       </tr>
     </table>
 
@@ -406,10 +501,11 @@ def _stage(
 def _shell(
     *,
     preheader: str,
-    clinic: str,
+    brand: Branding,
     eyebrow: str,
     heading: str,
     body: str,
+    clinic: str = "",
     lead: str = "",
     figure: tuple[str, str] | None = None,
     action: tuple[str, str] | None = None,
@@ -418,9 +514,15 @@ def _shell(
     tone: str = "accent",
     to_the_desk: bool = False,
     help_html: str | None = None,
-    mark: EmailMark | None = None,
 ) -> str:
     """The frame every message shares: the stage, then the card's details.
+
+    `brand` says whose message it is and so whose header it wears: the
+    platform's logo and tagline (`PlatformBranding`), or a clinic's own logo
+    and name (`ClinicBranding`). The `Email` built from this HTML must carry
+    that brand's mark, or the header points at a part that is not there.
+    `clinic` is the clinic a *platform* message is about, shown at the right of
+    its header; a clinic's own message ignores it, the name being in the lockup.
 
     Everything that is HTML here is escaped by the caller — `clinic`,
     `eyebrow`, `heading`, `lead`, the figure's caption, the action's label
@@ -437,9 +539,6 @@ def _shell(
     `help_html` is for mail to a clinic's patient: the platform's desk is not
     theirs to write to, so the stock help line and "replies are not read" give
     way to whatever the caller says (escaped by the caller; empty says nothing).
-    `mark` is the platform's logo for the header; the `Email` built from this
-    HTML must carry the same one, or the header points at a part that is not
-    there.
     """
     help_line = "" if to_the_desk else (
         f'<p style="margin:0 0 6px 0;">Need a hand? Write to '
@@ -461,7 +560,12 @@ def _shell(
         )
     stage = _stage(
         clinic=clinic, eyebrow=eyebrow, heading=heading, lead=lead,
-        figure=figure, action=action, tone=tone, mark=mark,
+        figure=figure, action=action, tone=tone, brand=brand,
+    )
+    # The footer always says what the message was sent through. On a clinic's
+    # own message it says so quietly: the clinic is the sender there.
+    sent_through = (
+        f"font-size:12px;color:{_INK_QUIET};" if isinstance(brand, ClinicBranding) else ""
     )
     return f"""\
 <!doctype html>
@@ -496,7 +600,7 @@ def _shell(
   <tr><td style="padding:24px 28px 0 28px;font-family:{_SANS};font-size:13px;line-height:1.55;color:{_INK_3};text-align:center;">
     {why}
     {help_line}
-    <p style="margin:0;">{escape(FULL_NAME)}, for independent clinics.{automatic}</p>
+    <p style="margin:0;{sent_through}">{escape(FULL_NAME)}, for independent clinics.{automatic}</p>
   </td></tr>
 
 </table>
@@ -654,7 +758,7 @@ def invitation(
                 "to until someone sets a password, so nothing happens if you do nothing."
             )
         ),
-        mark=mark,
+        brand=PlatformBranding(mark),
     )
     return Email(to=to, subject=f"Set up your {clinic} account", text=text, html=html, mark=mark)
 
@@ -703,7 +807,7 @@ def password_reset(
                 "administrator at your practice."
             )
         ),
-        mark=mark,
+        brand=PlatformBranding(mark),
     )
     return Email(to=to, subject=f"Reset your {clinic} password", text=text, html=html, mark=mark)
 
@@ -764,7 +868,7 @@ def support_request(
         lead=f"{escape(requested_by)} at {escape(clinic)} {escape(line)}",
         action=(console_url, "Open in the console"), body=body,
         recipient=to, reason="because it is the platform's support address",
-        to_the_desk=True, mark=mark,
+        to_the_desk=True, brand=PlatformBranding(mark),
     )
     return Email(to=to, subject=subject, text=text, html=html, reply_to=reply_to, mark=mark)
 
@@ -893,7 +997,7 @@ def rent_notice(
         heading=escape(heading), figure=(amount, _RENT_CAPTION[stage].format(**safe)),
         action=(url, "View the bill") if stage != "paid" else None, body=body,
         recipient=to, reason=f"because you are a practice admin at {escape(clinic)}", tone=tone,
-        mark=mark,
+        brand=PlatformBranding(mark),
     )
     return Email(to=to, subject=subject, text=text, html=html, mark=mark)
 
@@ -924,9 +1028,13 @@ def invoice_to_patient(
     owing: bool,
     pdf: bytes,
     filename: str,
-    mark: EmailMark | None = None,
+    branding: ClinicBranding,
 ) -> Email:
     """One invoice, from a clinic to the patient it bills, with the PDF attached.
+
+    It is the clinic's message, so it wears the clinic's header (`branding`:
+    its name and, if it has one, its logo) and nothing of the platform's but
+    the quiet line in the footer.
 
     `subject` and `message` are the clinic's wording, already filled in
     (`services/invoice_email.py`); everything else here is the frame around
@@ -961,7 +1069,7 @@ def invoice_to_patient(
     caption = f"Due on {escape(due)}" if owing else "Paid in full — thank you"
     html = _shell(
         preheader=subject,
-        clinic=escape(clinic),
+        brand=branding,
         eyebrow="Invoice",
         heading=f"Invoice {escape(number)}",
         figure=(balance if owing else total, caption),
@@ -974,10 +1082,9 @@ def invoice_to_patient(
         reason=f"because {escape(clinic)} raised an invoice for you",
         # how to reach the clinic is said once, in the card, not again here
         help_html="",
-        mark=mark,
     )
     return Email(
         to=to, subject=subject, text=text, html=html, reply_to=reply_to, from_name=from_name,
         attachments=(Attachment(filename=filename, content_type="application/pdf", data=pdf),),
-        sensitive=True, mark=mark,
+        sensitive=True, mark=branding.mark,
     )

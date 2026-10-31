@@ -730,14 +730,14 @@ async def email_invoice(
     to = invoice_email.check_sendable(invoice, payload.to)
     totals = billing_service.totals_for(invoice)
     currency = ctx.config.currency.value if ctx.config.currency else ""
+    logo = await tenant_service.logo_for(ctx.session, ctx.tenant_id)
     pdf = build_invoice_pdf(
-        invoice, totals, clinic=ctx.tenant.name, config=ctx.config, currency=currency,
-        logo=await tenant_service.logo_for(ctx.session, ctx.tenant_id),
+        invoice, totals, clinic=ctx.tenant.name, config=ctx.config, currency=currency, logo=logo,
     )
     status_, to, detail = await invoice_email.send(
         ctx.session, invoice=invoice, totals=totals, pdf=pdf, to=to,
         filename=f"invoice-{_filename_safe(invoice.number)}.pdf", clinic=ctx.tenant.name,
-        config=ctx.config, currency=currency, actor_kind=ctx.actor_kind,
+        logo=logo, config=ctx.config, currency=currency, actor_kind=ctx.actor_kind,
         actor_id=ctx.actor_id, actor_label=ctx.principal.label,
     )
     return InvoiceEmailOut(

@@ -38,7 +38,7 @@ from app.core.errors import Conflict, ValidationFailed
 from app.models.enums import InvoiceStatus
 from app.models.ops import Invoice
 from app.models.tenancy import TenantConfig
-from app.services import audit, mailer, platform_logo
+from app.services import audit, email_logo, mailer
 from app.services.pdf_fonts import CURRENCY_SYMBOLS
 
 log = logging.getLogger("pms.billing")
@@ -165,6 +165,7 @@ async def send(
     pdf: bytes,
     filename: str,
     clinic: str,
+    logo: bytes | None,
     config: TenantConfig,
     currency: str,
     to: str | None,
@@ -179,6 +180,10 @@ async def send(
     asked, before drawing the PDF). A transport that will not take the message
     is not a refusal: it is recorded as `failed` and answered as such, so the
     attempt stays in the trail (raising would roll the audit row back with it).
+
+    `logo` is the clinic's logo as its PDFs print it (`tenants.logo_for`), or
+    `None`. The message is the clinic's, so its header is the clinic's — name
+    and logo — and carries nothing of the platform's.
     """
     address = check_sendable(invoice, to)
     values = {
@@ -209,7 +214,9 @@ async def send(
         owing=totals["balance"] > 0.005,
         pdf=pdf,
         filename=filename,
-        mark=await platform_logo.email_mark(session),
+        # the clinic's own header: its name, and its logo (the bytes the PDF
+        # just drew) when it has one that can be drawn
+        branding=mailer.ClinicBranding(name=clinic, mark=email_logo.clinic_mark(logo)),
     )
 
     meta = {"to": address, "number": invoice.number}

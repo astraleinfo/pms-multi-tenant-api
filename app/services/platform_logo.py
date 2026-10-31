@@ -73,7 +73,7 @@ _NOT_AN_IMAGE = "A logo has to be a PNG, JPEG or WebP image."
 
 
 @contextmanager
-def _bombs_refused():
+def bombs_refused():
     """Pillow only warns about an image above its pixel limit (and refuses one
     above twice it); here both are a refusal, never a decode."""
     from PIL import Image
@@ -221,7 +221,7 @@ async def logo_bytes(session: AsyncSession) -> bytes | None:
     return uploaded[0] if uploaded else default_logo()
 
 
-def _drawable(width: int, height: int) -> bool:
+def drawable(width: int, height: int) -> bool:
     """Whether a stored logo is one this process will decode: uploads are
     checked, but a row written some other way must not get a free pass to
     allocate an enormous bitmap — it is skipped, and the built-in logo used."""
@@ -246,8 +246,8 @@ def prepare_bill_logo(data: bytes) -> bytes | None:
     from PIL import Image
 
     try:
-        with _bombs_refused(), Image.open(io.BytesIO(data)) as image:
-            if not _drawable(*image.size):
+        with bombs_refused(), Image.open(io.BytesIO(data)) as image:
+            if not drawable(*image.size):
                 return None
             image.load()
             copy = image.convert("RGBA")
@@ -292,9 +292,9 @@ def prepare_email_mark(data: bytes) -> EmailMark | None:
     from PIL import Image
 
     try:
-        with _bombs_refused(), Image.open(io.BytesIO(data)) as image:
+        with bombs_refused(), Image.open(io.BytesIO(data)) as image:
             width, height = image.size
-            if not _drawable(width, height):
+            if not drawable(width, height):
                 return None
             image.load()
             wide = width / height >= 2
