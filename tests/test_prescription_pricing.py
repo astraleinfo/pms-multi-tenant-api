@@ -3,7 +3,9 @@
 A line is either dispensed here — it carries a unit price, comes out of stock
 when the pharmacy hands it over and is billed at the window — or prescribed
 only: the patient buys it elsewhere, so it has no price, never moves stock and
-never becomes a charge. A clinic that never sells medicine says so once, in its
+never becomes a charge. The price is never typed: a dispensed line tied to a
+stock line takes that line's price as it is when the prescription is saved, and
+a line typed by hand has none. A clinic that never sells medicine says so once, in its
 configuration, and every line it writes starts as prescribed only.
 """
 
@@ -24,13 +26,15 @@ async def clean_default(northgate):
 
 
 async def _stocked_item(signed, *, price: float = 10) -> dict:
-    """A medicine on the shelf with a price on it — its own code each time, as a
-    stock code is unique within a clinic and the database is shared."""
+    """A medicine on the shelf with a price on it — its own code and name each
+    time: a stock code is unique within a clinic, and the same name and strength
+    twice is a duplicate to the stock import, and the database is shared."""
+    tag = f"{uuid.uuid4().hex[:6]}-{next(_sku_seq)}"
     opened = await signed.post(
         "/v1/inventory/items",
         json={
-            "sku": f"RXP-{uuid.uuid4().hex[:6]}-{next(_sku_seq)}",
-            "name": "Pricing test tablets",
+            "sku": f"RXP-{tag}",
+            "name": f"Pricing test tablets {tag}",
             "strength": "250 mg",
             "unit": "tab",
             "category": "medicine",
@@ -87,16 +91,16 @@ async def _pharmacy_unbilled(signed, patient_id: str) -> list[dict]:
 # --- dispensed here -------------------------------------------------------------------
 
 
-async def test_a_dispensed_line_keeps_its_price_draws_stock_and_bills_at_it(northgate):
-    item = await _stocked_item(northgate, price=10)
+async def test_a_dispensed_line_takes_the_stock_price_draws_stock_and_bills_at_it(northgate):
+    item = await _stocked_item(northgate, price=12.5)
     visit = await _visit(northgate)
     rx = await _prescribe(
         northgate, visit,
-        {"medicine": "Pricing test tablets", "qty": 6, "item_id": item["id"], "dispense": True, "unit_price": 12.5},
+        {"medicine": "Pricing test tablets", "qty": 6, "item_id": item["id"], "dispense": True},
     )
     line = rx["items"][0]
     assert line["dispense"] is True
-    assert line["unit_price"] == 12.5, "the price written on the line, not the shelf's"
+    assert line["unit_price"] == 12.5
     assert rx["status"] == "pending"
 
     before = await _on_hand(northgate, item["id"])
@@ -116,7 +120,23 @@ async def test_a_dispensed_line_keeps_its_price_draws_stock_and_bills_at_it(nort
     assert pharmacy["unit_price"] == 12.5 and pharmacy["qty"] == 4
 
 
-async def test_a_stock_line_sent_without_a_price_takes_the_shelf_price(northgate):
+@pytest.mark.parametrize("sent", [0, 0.01, 999, -5])
+async def test_a_price_sent_by_the_client_is_ignored_and_the_stock_price_wins(northgate, sent):
+    item = await _stocked_item(northgate, price=7.25)
+    visit = await _visit(northgate)
+    rx = await _prescribe(
+        northgate, visit,
+        {"medicine": "Pricing test tablets", "qty": 2, "item_id": item["id"], "unit_price": sent},
+    )
+    assert rx["items"][0]["unit_price"] == 7.25
+
+    handed = await _dispense(northgate, rx, rx["items"][0], 2)
+    assert handed.status_code == 200, handed.text
+    [charge] = await _pharmacy_unbilled(northgate, visit["patient_id"])
+    assert charge["unit_price"] == 7.25, "billed at the stock price, not the one the client sent"
+
+
+async def test_a_stock_line_sent_without_a_price_takes_the_stock_price(northgate):
     item = await _stocked_item(northgate, price=7.25)
     rx = await _prescribe(northgate, await _visit(northgate), {"medicine": "Pricing test tablets", "item_id": item["id"]})
 
@@ -124,16 +144,36 @@ async def test_a_stock_line_sent_without_a_price_takes_the_shelf_price(northgate
     assert rx["items"][0]["unit_price"] == 7.25
 
 
-async def test_a_free_text_medicine_can_be_priced_and_dispensed(northgate):
+async def test_a_stock_price_change_before_a_re_save_is_picked_up(northgate):
+    item = await _stocked_item(northgate, price=10)
+    visit = await _visit(northgate)
+    line = {"medicine": "Pricing test tablets", "item_id": item["id"]}
+    rx = await _prescribe(northgate, visit, line)
+    assert rx["items"][0]["unit_price"] == 10
+
+    repriced = await northgate.patch(f"/v1/inventory/items/{item['id']}", json={"unit_price": 15})
+    assert repriced.status_code == 200, repriced.text
+    # Nothing saved yet: the line keeps the price it was written at.
+    stored = (await northgate.get(f"/v1/prescriptions/{rx['id']}")).json()
+    assert stored["items"][0]["unit_price"] == 10
+
+    resaved = await northgate.put(f"/v1/encounters/{visit['id']}/prescription", json={"items": [line]})
+    assert resaved.status_code == 200, resaved.text
+    assert resaved.json()["items"][0]["unit_price"] == 15
+
+
+async def test_a_medicine_typed_by_hand_has_no_price_whatever_the_client_sends(northgate):
     visit = await _visit(northgate)
     rx = await _prescribe(northgate, visit, {"medicine": "Compounded cream", "qty": 2, "unit_price": 40})
     line = rx["items"][0]
-    assert line["item_id"] is None and line["dispense"] is True and line["unit_price"] == 40
+    assert line["item_id"] is None and line["dispense"] is True
+    assert line["unit_price"] is None
 
+    # Dispensed, it is still unpriced at the counter, as before lines carried a price.
     handed = await _dispense(northgate, rx, line, 2)
     assert handed.status_code == 200, handed.text
     [charge] = await _pharmacy_unbilled(northgate, visit["patient_id"])
-    assert charge["unit_price"] == 40 and charge["qty"] == 2 and charge["priced"] is True
+    assert charge["unit_price"] == 0 and charge["priced"] is False
 
 
 async def test_a_free_text_medicine_with_no_price_stays_unpriced(northgate):
@@ -142,20 +182,11 @@ async def test_a_free_text_medicine_with_no_price_stays_unpriced(northgate):
     assert rx["items"][0]["unit_price"] is None
 
 
-@pytest.mark.parametrize("price", [-1, 1_000_001, "free"])
-async def test_a_bad_price_is_refused(northgate, price):
-    visit = await _visit(northgate)
-    refused = await northgate.post(
-        f"/v1/encounters/{visit['id']}/prescriptions", json={"items": [{"medicine": "Paracetamol", "unit_price": price}]}
-    )
-    assert refused.status_code == 422
-
-
 # --- prescribed only ----------------------------------------------------------------
 
 
 async def test_a_prescribe_only_line_has_no_price_and_is_never_dispensed_or_billed(northgate):
-    item = await _stocked_item(northgate)
+    item = await _stocked_item(northgate, price=10)
     visit = await _visit(northgate)
     rx = await _prescribe(
         northgate, visit,
@@ -163,7 +194,7 @@ async def test_a_prescribe_only_line_has_no_price_and_is_never_dispensed_or_bill
     )
     line = rx["items"][0]
     assert line["dispense"] is False
-    assert line["unit_price"] is None, "a price sent for a line the patient buys elsewhere is dropped"
+    assert line["unit_price"] is None, "prescribe-only stores no price, though its stock line has one"
     assert line["status"] == "prescribe_only"
     assert rx["status"] == "prescribe_only"
 
@@ -184,7 +215,7 @@ async def test_a_prescribe_only_line_has_no_price_and_is_never_dispensed_or_bill
 
 async def test_a_free_text_medicine_can_be_prescribed_only(northgate):
     rx = await _prescribe(
-        northgate, await _visit(northgate), {"medicine": "Imported eye drops", "dispense": False, "unit_price": 5}
+        northgate, await _visit(northgate), {"medicine": "Imported eye drops", "dispense": False}
     )
 
     assert rx["items"][0]["dispense"] is False
@@ -215,11 +246,11 @@ async def test_a_mixed_prescription_is_finished_when_its_dispensed_lines_are(nor
 
 async def test_rewriting_a_prescription_keeps_each_lines_choice(northgate):
     visit = await _visit(northgate)
-    await _prescribe(northgate, visit, {"medicine": "Paracetamol", "unit_price": 2})
+    await _prescribe(northgate, visit, {"medicine": "Paracetamol"})
 
     rewritten = await northgate.put(
         f"/v1/encounters/{visit['id']}/prescription",
-        json={"items": [{"medicine": "Paracetamol", "dispense": False, "unit_price": 2}]},
+        json={"items": [{"medicine": "Paracetamol", "dispense": False}]},
     )
     assert rewritten.status_code == 200, rewritten.text
     assert rewritten.json()["status"] == "prescribe_only"
@@ -241,7 +272,7 @@ async def test_a_prescribe_only_clinic_writes_lines_the_patient_buys_elsewhere(n
     item = await _stocked_item(northgate)
     rx = await _prescribe(
         northgate, await _visit(northgate),
-        {"medicine": "Paracetamol", "unit_price": 3},
+        {"medicine": "Paracetamol"},
         {"medicine": "Pricing test tablets", "item_id": item["id"], "dispense": True},
     )
     unsaid, overridden = rx["items"]

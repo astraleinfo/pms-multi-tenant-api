@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime, timezone
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import Decimal
 
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -456,8 +456,11 @@ async def _add_items(
     session: AsyncSession, tenant_id: uuid.UUID, prescription: Prescription, items: list[PrescriptionItemIn]
 ) -> list[PrescriptionItem]:
     """Write the lines. A line that does not say whether it is dispensed here
-    follows the clinic's default; a stock line sent without a price takes the
-    stock line's; a prescribe-only line keeps no price at all."""
+    follows the clinic's default.
+
+    The price is the server's to set, never the client's: a dispensed line tied
+    to a stock line is priced at that stock line's price as it stands now, and
+    every other line (typed by hand, or prescribed only) has none."""
     config = await tenant_service.get_config(session, tenant_id)
     added: list[PrescriptionItem] = []
     for position, item in enumerate(items):
@@ -475,12 +478,7 @@ async def _add_items(
                 raise NotFound("No such stock item.")
 
         dispense = item.dispense if item.dispense is not None else not config.prescribe_only_default
-        unit_price: Decimal | None = None
-        if dispense:
-            if item.unit_price is not None:
-                unit_price = _money(item.unit_price)
-            elif stock is not None:
-                unit_price = stock.unit_price
+        unit_price: Decimal | None = stock.unit_price if dispense and stock is not None else None
 
         row = PrescriptionItem(
             tenant_id=tenant_id,
@@ -502,7 +500,3 @@ async def _add_items(
         session.add(row)
         added.append(row)
     return added
-
-
-def _money(value: float) -> Decimal:
-    return Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)

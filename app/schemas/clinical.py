@@ -549,9 +549,11 @@ class PrescriptionItemIn(InputModel):
     #: Dispensed here, or prescribed only. Left out, the clinic's
     #: `prescribe_only_default` decides.
     dispense: bool | None = None
-    #: Left out on a stock line, the stock line's price. Dropped on a
-    #: prescribe-only line, which has none.
-    unit_price: float | None = Field(default=None, ge=0, le=1_000_000)
+    #: Accepted and ignored. The price is the server's: the stock line's price at
+    #: the moment of saving, or none. The field stays only so a browser tab left
+    #: open across an upgrade can still save, instead of failing on a key the
+    #: request models otherwise refuse.
+    unit_price: float | None = Field(default=None, deprecated=True)
 
 
 class PrescriptionIn(InputModel):

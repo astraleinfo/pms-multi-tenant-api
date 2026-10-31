@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 
+from tests.test_prescription_pricing import _stocked_item
 from tests.test_pricing_and_files import PNG_BYTES
 
 
@@ -292,7 +293,8 @@ async def test_medicine_text_is_printed_literally(northgate):
 
 
 async def test_a_line_dispensed_here_prints_its_unit_price_and_amount(northgate):
-    visit = await _consultation(northgate, items=[{**_AZITHROMYCIN, "unit_price": 42.5}])
+    shelf = await _stocked_item(northgate, price=42.5)
+    visit = await _consultation(northgate, items=[{**_AZITHROMYCIN, "item_id": shelf["id"]}])
 
     text = " ".join((await _printed(northgate, visit)).split())
 
@@ -303,7 +305,10 @@ async def test_a_line_dispensed_here_prints_its_unit_price_and_amount(northgate)
 
 
 async def test_a_prescription_bought_elsewhere_prints_plainly_with_no_prices(northgate):
-    visit = await _consultation(northgate, items=[{**_AZITHROMYCIN, "dispense": False, "unit_price": 42.5}])
+    shelf = await _stocked_item(northgate, price=42.5)
+    visit = await _consultation(
+        northgate, items=[{**_AZITHROMYCIN, "item_id": shelf["id"], "dispense": False}]
+    )
 
     text = " ".join((await _printed(northgate, visit)).split())
 
@@ -314,10 +319,11 @@ async def test_a_prescription_bought_elsewhere_prints_plainly_with_no_prices(nor
 
 
 async def test_a_mixed_prescription_prices_only_what_the_clinic_hands_over(northgate):
+    shelf = await _stocked_item(northgate, price=20)
     visit = await _consultation(
         northgate,
         items=[
-            {**_AZITHROMYCIN, "unit_price": 20},
+            {**_AZITHROMYCIN, "item_id": shelf["id"]},
             {"medicine": "Imported eye drops", "qty": 1, "dispense": False},
         ],
     )
