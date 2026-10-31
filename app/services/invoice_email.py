@@ -38,7 +38,7 @@ from app.core.errors import Conflict, ValidationFailed
 from app.models.enums import InvoiceStatus
 from app.models.ops import Invoice
 from app.models.tenancy import TenantConfig
-from app.services import audit, mailer
+from app.services import audit, mailer, platform_logo
 from app.services.pdf_fonts import CURRENCY_SYMBOLS
 
 log = logging.getLogger("pms.billing")
@@ -209,6 +209,7 @@ async def send(
         owing=totals["balance"] > 0.005,
         pdf=pdf,
         filename=filename,
+        mark=await platform_logo.email_mark(session),
     )
 
     meta = {"to": address, "number": invoice.number}

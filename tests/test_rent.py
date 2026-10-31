@@ -284,7 +284,8 @@ async def test_the_subscription_bill_is_the_platforms_branded_invoice(northgate,
         assert response.status_code == 200, response.text
         text = _text(response.content)
 
-        assert "Astrale Practice OS" in text, suffix  # the platform is the one sending the bill
+        assert "Astrale Clinic Management System" in text, suffix  # the platform is the one sending the bill
+        assert "Practice OS" not in text, suffix
         assert "SUBSCRIPTION BILL" in text, suffix
         assert number in text, suffix
         assert "Northgate" in text, suffix  # the clinic it is addressed to

@@ -53,7 +53,7 @@ from app.models.identity import User
 from app.models.rent import SubscriptionInvoice
 from app.models.tenancy import Tenant, TenantConfig
 from app.schemas.common import zone
-from app.services import mailer
+from app.services import mailer, platform_logo
 from app.services import referrals as referral_service
 from app.services.platform import Timings, get_timings
 
@@ -290,6 +290,7 @@ async def notices(
         log.warning("no one to tell about bill %s at %s", bill.number, tenant.slug)
         return []
 
+    mark = await platform_logo.email_mark(session)
     return [
         mailer.rent_notice(
             to=address,
@@ -304,6 +305,7 @@ async def notices(
             hold_on=hold_date(bill, timings),
             reference=bill.payment_reference,
             url=billing_url(tenant),
+            mark=mark,
         )
         for address, name in addresses
     ]

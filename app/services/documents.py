@@ -28,6 +28,7 @@ from reportlab.platypus import (
     TableStyle,
 )
 
+from app.core.brand import FULL_NAME
 from app.models.enums import InvoiceStatus
 from app.models.ops import Invoice
 from app.models.tenancy import TenantConfig
@@ -59,6 +60,7 @@ from app.services.pdf import (
     letterhead,
     paged,
     person,
+    platform_band_header,
     theme_for,
 )
 from app.services.pdf_fonts import CURRENCY_SYMBOLS, FONT, FONT_BOLD, has_glyph
@@ -538,19 +540,20 @@ def build_report_pdf(
 
 def build_subscription_invoice_pdf(
     bill, *, clinic: str, hold_on: date, clinic_logo: bytes | None = None,
+    platform_logo: bytes | None = None,
 ) -> bytes:
     """The monthly subscription bill, from the platform to one clinic. The band is the
-    platform's — it is the one sending the bill — and the clinic it is addressed to
-    carries its own mark in the billed-to card."""
+    platform's — it is the one sending the bill, so it carries the platform's logo
+    (`services/platform_logo.py`) — and the clinic it is addressed to carries its own
+    mark in the billed-to card."""
     buf = io.BytesIO()
-    doc = document(buf, title=f"Subscription bill {bill.number}", author="Astrale Practice OS")
+    doc = document(buf, title=f"Subscription bill {bill.number}", author=FULL_NAME)
     status = str(getattr(bill.status, "value", bill.status))
     label = {"open": "DUE", "paid": "PAID", "void": "VOID"}[status]
     theme = PLATFORM_THEME
     code = bill.currency
-    story: list = band_header(
-        doc, theme=theme, clinic="Astrale Practice OS", config=None, logo=None,
-        title="Subscription bill", reference=bill.number,
+    story: list = platform_band_header(
+        doc, logo=platform_logo, title="Subscription bill", reference=bill.number,
     )
 
     card_width = doc.width * 0.6
@@ -606,6 +609,6 @@ def build_subscription_invoice_pdf(
         )
     story.append(Paragraph(note, _FOOT))
 
-    note = f"Astrale Practice OS · Subscription bill {bill.number} · {clinic}"
+    note = f"{FULL_NAME} · Subscription bill {bill.number} · {clinic}"
     doc.build(story, canvasmaker=paged(note, band=theme.accent))
     return buf.getvalue()

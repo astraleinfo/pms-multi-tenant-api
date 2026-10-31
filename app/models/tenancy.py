@@ -244,6 +244,16 @@ class PlatformSettings(Base, TimestampMixin):
         Numeric(12, 2), nullable=False, default=Decimal("100.00")
     )
 
+    # the platform's own logo — drawn in every email's header and on the
+    # subscription bill. Unset means the built-in one (`app/assets/brand/`),
+    # never no logo. Stored exactly as a clinic's (`TenantConfig.logo_*`):
+    # `logo_data` in the row or `logo_storage_key` in S3, never both, and
+    # `logo_filename` null exactly when neither is set.
+    logo_filename: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    logo_content_type: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    logo_data: Mapped[bytes | None] = deferred(mapped_column(LargeBinary, nullable=True))
+    logo_storage_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
+
 
 class FieldDefinition(Base, TimestampMixin):
     """§3.3 — the dynamic-form schema.

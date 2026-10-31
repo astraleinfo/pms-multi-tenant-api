@@ -255,6 +255,9 @@ class PlatformSettingsOut(ApiModel):
     subscription_fee_monthly: float
     #: what one completed referral earns its referrer
     referral_credit_amount: float
+    #: an uploaded logo is in use; false means the built-in one. Read-only:
+    #: changed through `/platform/settings/logo`, never by a PATCH.
+    has_logo: bool
 
     @classmethod
     def of(cls, row) -> PlatformSettingsOut:
@@ -277,6 +280,7 @@ class PlatformSettingsOut(ApiModel):
             rent_reminder_days_before_due=row.rent_reminder_days_before_due,
             subscription_fee_monthly=money(row.subscription_fee_monthly),
             referral_credit_amount=money(row.referral_credit_amount),
+            has_logo=row.logo_filename is not None,
         )
 
 

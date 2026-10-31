@@ -25,6 +25,7 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
+from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas as pdf_canvas
 from reportlab.platypus import (
     BaseDocTemplate,
@@ -40,6 +41,7 @@ from reportlab.platypus import (
     TableStyle,
 )
 
+from app.core.brand import PLATFORM_NAME, PRODUCT_NAME
 from app.models.clinical import Patient
 from app.models.tenancy import TenantConfig
 from app.schemas.common import local_now, stamp
@@ -561,6 +563,12 @@ def band_header(
 
     mark_w = size + 4 * mm
     head = Table([[mark, who, what]], colWidths=[mark_w, doc.width * 0.58 - mark_w, doc.width * 0.42])
+    return _on_band(doc, theme, head)
+
+
+def _on_band(doc: _Document, theme: Theme, head: Table) -> list:
+    """Set a branded header on its band: the band is sized to the header, and
+    the story picks up below the strip."""
     head.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0),
@@ -570,6 +578,51 @@ def band_header(
     pad = 7 * mm
     doc.set_band(theme, _BAND_TOP + head_height + pad)
     return [head, Spacer(1, pad + 1.4 * mm + 6 * mm)]
+
+
+def _platform_logo_flowable(logo: bytes | None) -> tuple[Image, bool] | None:
+    """The platform's logo for its band, and whether it is a lockup (at least
+    twice as wide as tall, so it spells the name itself). Drawn straight on the
+    band, not on a white tile like a clinic's: the platform's logo is made for
+    a dark ground. `None` when there is none or it will not decode."""
+    if not logo:
+        return None
+    try:
+        width, height = ImageReader(io.BytesIO(logo)).getSize()
+        wide = width >= 2 * height
+        box = (55 * mm, 9 * mm) if wide else (15 * mm, 15 * mm)
+        image = Image(io.BytesIO(logo), width=box[0], height=box[1], kind="proportional")
+    except Exception:  # noqa: BLE001 - the bill still prints, with the wordmark
+        log.exception("could not draw the platform logo; printing the wordmark")
+        return None
+    image.hAlign = "LEFT"
+    return image, wide
+
+
+def platform_band_header(doc: _Document, *, logo: bytes | None, title: str, reference: str = "") -> list:
+    """The top of a document the platform itself issues (the subscription bill),
+    in the platform's colours: its logo — the one set in the console, else the
+    built-in one — with what the product is under it, and on the right what
+    this paper is. A lockup stands alone over the product line; a mark alone,
+    or no usable logo at all, sits beside the name the way a clinic's does."""
+    theme = PLATFORM_THEME
+    meta = ParagraphStyle("BandMeta", parent=_FORM_META, textColor=theme.tint, spaceBefore=2)
+    what: list = [Paragraph(esc(title).upper(), _BAND_TITLE)]
+    if reference:
+        what.append(Paragraph(esc(reference), _BAND_REF))
+
+    left = doc.width * 0.58
+    drawn = _platform_logo_flowable(logo)
+    if drawn is not None and drawn[1]:
+        who: list = [drawn[0], Spacer(1, 2.2 * mm), Paragraph(esc(PRODUCT_NAME), meta)]
+        head = Table([[who, what]], colWidths=[left, doc.width * 0.42])
+    else:
+        size = 15 * mm
+        mark = drawn[0] if drawn is not None else band_monogram(PLATFORM_NAME, theme, size)
+        who = [Paragraph(esc(PLATFORM_NAME), _BAND_NAME), Paragraph(esc(PRODUCT_NAME), meta)]
+        mark_w = size + 4 * mm
+        head = Table([[mark, who, what]], colWidths=[mark_w, left - mark_w, doc.width * 0.42])
+    return _on_band(doc, theme, head)
 
 
 def allergy_box(doc: SimpleDocTemplate, allergies: str) -> Table:

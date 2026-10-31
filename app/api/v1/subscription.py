@@ -50,7 +50,7 @@ from app.schemas.tenancy import (
     SubscriptionSummaryOut,
     TenantOut,
 )
-from app.services import audit
+from app.services import audit, platform_logo
 from app.services import platform as platform_service
 from app.services import referrals as referral_service
 from app.services import rent as rent_service
@@ -78,9 +78,13 @@ async def _subscription(
     )
 
 
-def _pdf(bill, tenant: Tenant, timings: Timings, logo: bytes | None) -> Response:
+async def _pdf(session: AsyncSession, bill, tenant: Tenant, timings: Timings) -> Response:
+    """The bill as a PDF: the platform's logo on its band, the clinic's own in
+    the billed-to card. `session` must be bound to the clinic."""
     content = build_subscription_invoice_pdf(
-        bill, clinic=tenant.name, hold_on=rent_service.hold_date(bill, timings), clinic_logo=logo,
+        bill, clinic=tenant.name, hold_on=rent_service.hold_date(bill, timings),
+        clinic_logo=await tenant_service.logo_for(session, tenant.id),
+        platform_logo=await platform_logo.logo_bytes(session),
     )
     safe = "".join(ch for ch in bill.number if ch.isalnum() or ch in "-_") or "bill"
     return Response(
@@ -111,7 +115,7 @@ async def my_bill_pdf(
 ) -> Response:
     bill = await rent_service.get_bill(ctx.session, ctx.tenant_id, parse_uuid(bill_id, what="bill"))
     timings = await platform_service.get_timings(ctx.session)
-    return _pdf(bill, ctx.tenant, timings, await tenant_service.logo_for(ctx.session, ctx.tenant_id))
+    return await _pdf(ctx.session, bill, ctx.tenant, timings)
 
 
 # --- the console ------------------------------------------------------------------------
@@ -196,7 +200,7 @@ async def tenant_bill_pdf(
     bill = await rent_service.get_bill(session, clinic.id, parse_uuid(bill_id, what="bill"))
     timings = await platform_service.get_timings(session)
     # `_clinic` has bound this session to the clinic, so its settings are visible
-    return _pdf(bill, clinic, timings, await tenant_service.logo_for(session, clinic.id))
+    return await _pdf(session, bill, clinic, timings)
 
 
 @console_router.get("/tenants/{tenant_id}/referrals", response_model=ConsoleReferralsOut)

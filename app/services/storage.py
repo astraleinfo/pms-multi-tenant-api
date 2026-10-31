@@ -77,6 +77,14 @@ def logo_object_key(*, tenant_id: uuid.UUID) -> str:
     return f"{prefix}/{path}" if prefix else path
 
 
+def platform_logo_object_key() -> str:
+    """Where the platform's own logo lives in the bucket — one fixed path,
+    outside every clinic's prefix, overwritten in place like a clinic's."""
+    prefix = settings.s3_prefix.strip("/")
+    path = "platform/logo"
+    return f"{prefix}/{path}" if prefix else path
+
+
 def _s3() -> Any:
     if not settings.s3_bucket:
         raise StorageUnavailable("File storage is not configured (S3_BUCKET is empty).")

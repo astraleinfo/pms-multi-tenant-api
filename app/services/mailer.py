@@ -47,6 +47,7 @@ from email.utils import parseaddr
 from html import escape
 
 from app.core import aws
+from app.core.brand import FULL_NAME, PLATFORM_NAME, PRODUCT_TAGLINE
 from app.core.config import settings
 
 log = logging.getLogger("pms.mail")
@@ -63,6 +64,23 @@ class Attachment:
     data: bytes
 
 
+#: what the header's <img> points at, and the logo part's Content-ID
+MARK_CID = "astrale-mark"
+
+
+@dataclass(frozen=True)
+class EmailMark:
+    """The platform's logo, ready for a message's header: a PNG drawn at twice
+    the size it is shown (`width` × `height` CSS pixels), so it is sharp on a
+    high-density screen. Made by `services/platform_logo.py::email_mark`."""
+
+    data: bytes
+    width: int
+    height: int
+    #: a lockup — the mark and the name side by side — rather than a mark alone
+    wide: bool
+
+
 @dataclass(frozen=True)
 class Email:
     to: str
@@ -77,6 +95,9 @@ class Email:
     attachments: tuple[Attachment, ...] = ()
     #: it names a patient — the console transport logs that it went, not what it said
     sensitive: bool = False
+    #: the logo the HTML's header points at (`cid:` + `MARK_CID`); `None` when
+    #: the header was drawn without one
+    mark: EmailMark | None = None
 
     def as_message(self) -> EmailMessage:
         message = EmailMessage()
@@ -95,6 +116,15 @@ class Email:
         message.set_content(self.text)
         if self.html:
             message.add_alternative(self.html, subtype="html")
+            if self.mark:
+                # The logo travels inside the message, beside the HTML that
+                # shows it (`multipart/related`): nothing is fetched from
+                # anywhere, so it is not blocked as a remote image and tells
+                # nobody the message was opened.
+                message.get_payload()[1].add_related(
+                    self.mark.data, maintype="image", subtype="png", cid=f"<{MARK_CID}>",
+                    disposition="inline", filename="astrale.png",
+                )
         for attachment in self.attachments:
             maintype, _, subtype = attachment.content_type.partition("/")
             message.add_attachment(
@@ -194,10 +224,11 @@ async def send(email: Email) -> None:
 #     web client and by most of the rest once a message is forwarded;
 #   * layout is nested tables, because flexbox and grid do not exist in
 #     Outlook's Word rendering engine;
-#   * there are no images and no webfonts. A logo or a font file would need
-#     hosting, would be blocked by default in most clients, and would leak a
-#     read receipt to whoever hosts it. The mark is a table cell with a
-#     background colour, which always renders and tells nobody anything.
+#   * nothing is fetched from anywhere: no hosted images and no webfonts. A
+#     remote file is blocked by default in most clients and leaks a read
+#     receipt to whoever hosts it. The one image, the platform's logo, travels
+#     inside the message as an inline part (see `Email.as_message`), and a
+#     header drawn without one still reads as the wordmark.
 #
 # The look is the application's own (`globals.css` in the web app), and the
 # idea is that a message *opens on the sign-in stage*: the dark slate pane
@@ -231,7 +262,6 @@ _STAGE_LINE = "#2B3446"
 _STAGE_INK = "#EEF2F9"
 _STAGE_DIM = "#9BA6BB"
 
-_ACCENT = "#2F62C8"
 _ACCENT_TEXT = "#204B9E"
 
 
@@ -271,6 +301,41 @@ def _tone(name: str) -> _Tone:
     return _TONES.get(name, _TONES["accent"])
 
 
+def _lockup(mark: EmailMark | None) -> str:
+    """The top-left of the stage: the platform's logo and what the product is.
+
+    A lockup — a logo that already spells the name — stands on its own with
+    the tagline under it. A mark alone (a square icon) takes the place the
+    old placeholder square had, beside the name. With no logo at all the
+    name and tagline are the whole lockup. The tagline never wraps: it is the
+    short form (`PRODUCT_TAGLINE`) because this slot shares a phone's width
+    with the clinic's name.
+    """
+    tagline = (
+        f'<div style="margin-top:{7 if mark and mark.wide else 5}px;font-size:10.5px;font-weight:500;line-height:1;'
+        f'letter-spacing:1.6px;text-transform:uppercase;white-space:nowrap;color:{_STAGE_DIM};">{escape(PRODUCT_TAGLINE)}</div>'
+    )
+    name = f'<div style="font-size:15px;font-weight:600;line-height:1;color:{_STAGE_INK};">{escape(PLATFORM_NAME)}</div>'
+    if mark is None:
+        return f'<div style="font-family:{_SANS};">{name}{tagline}</div>'
+    # The alt text is styled as the wordmark, so a client that holds images
+    # back still shows the name in the logo's place rather than a broken box.
+    img = (
+        f'<img src="cid:{MARK_CID}" width="{mark.width}" height="{mark.height}" alt="{escape(PLATFORM_NAME)}" '
+        f'style="display:block;width:{mark.width}px;height:{mark.height}px;border:0;outline:none;text-decoration:none;'
+        f'font-family:{_SANS};font-size:15px;font-weight:600;line-height:1;color:{_STAGE_INK};">'
+    )
+    if mark.wide:
+        return f'<div style="font-family:{_SANS};">{img}{tagline}</div>'
+    return f"""\
+<table role="presentation" cellpadding="0" cellspacing="0" border="0">
+            <tr>
+              <td width="34" valign="middle" style="width:34px;">{img}</td>
+              <td valign="middle" style="padding-left:11px;font-family:{_SANS};">{name}{tagline}</td>
+            </tr>
+          </table>"""
+
+
 def _stage(
     *,
     clinic: str,
@@ -280,6 +345,7 @@ def _stage(
     figure: tuple[str, str] | None,
     action: tuple[str, str] | None,
     tone: str,
+    mark: EmailMark | None = None,
 ) -> str:
     t = _tone(tone)
     lead_html = (
@@ -316,21 +382,9 @@ def _stage(
     <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
       <tr>
         <td valign="middle">
-          <table role="presentation" cellpadding="0" cellspacing="0" border="0">
-            <tr>
-              <td width="34" style="width:34px;">
-                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="34" style="width:34px;height:34px;background-color:{_ACCENT};border-radius:10px;">
-                  <tr><td align="center" valign="middle" style="height:34px;font-family:{_SANS};font-size:16px;font-weight:600;color:#FFFFFF;line-height:34px;">A</td></tr>
-                </table>
-              </td>
-              <td style="padding-left:11px;font-family:{_SANS};">
-                <div style="font-size:15px;font-weight:600;line-height:1;color:{_STAGE_INK};">Astrale</div>
-                <div style="margin-top:5px;font-size:10.5px;font-weight:500;line-height:1;letter-spacing:1.6px;text-transform:uppercase;color:{_STAGE_DIM};">Practice OS</div>
-              </td>
-            </tr>
-          </table>
+          {_lockup(mark)}
         </td>
-        <td align="right" valign="middle" style="font-family:{_SANS};font-size:13px;line-height:1.4;color:{_STAGE_DIM};">{clinic}</td>
+        <td align="right" valign="middle" style="padding-left:12px;font-family:{_SANS};font-size:13px;line-height:1.4;color:{_STAGE_DIM};">{clinic}</td>
       </tr>
     </table>
 
@@ -364,6 +418,7 @@ def _shell(
     tone: str = "accent",
     to_the_desk: bool = False,
     help_html: str | None = None,
+    mark: EmailMark | None = None,
 ) -> str:
     """The frame every message shares: the stage, then the card's details.
 
@@ -382,6 +437,9 @@ def _shell(
     `help_html` is for mail to a clinic's patient: the platform's desk is not
     theirs to write to, so the stock help line and "replies are not read" give
     way to whatever the caller says (escaped by the caller; empty says nothing).
+    `mark` is the platform's logo for the header; the `Email` built from this
+    HTML must carry the same one, or the header points at a part that is not
+    there.
     """
     help_line = "" if to_the_desk else (
         f'<p style="margin:0 0 6px 0;">Need a hand? Write to '
@@ -403,7 +461,7 @@ def _shell(
         )
     stage = _stage(
         clinic=clinic, eyebrow=eyebrow, heading=heading, lead=lead,
-        figure=figure, action=action, tone=tone,
+        figure=figure, action=action, tone=tone, mark=mark,
     )
     return f"""\
 <!doctype html>
@@ -438,7 +496,7 @@ def _shell(
   <tr><td style="padding:24px 28px 0 28px;font-family:{_SANS};font-size:13px;line-height:1.55;color:{_INK_3};text-align:center;">
     {why}
     {help_line}
-    <p style="margin:0;">Astrale Practice OS, patient management for independent clinics.{automatic}</p>
+    <p style="margin:0;">{escape(FULL_NAME)}, for independent clinics.{automatic}</p>
   </td></tr>
 
 </table>
@@ -547,7 +605,9 @@ def _facts(rows: list[tuple[str, str]], *, title: str = "") -> str:
 # --- the messages this application sends -------------------------------------
 
 
-def invitation(*, to: str, name: str, clinic: str, url: str, expires_in_days: int) -> Email:
+def invitation(
+    *, to: str, name: str, clinic: str, url: str, expires_in_days: int, mark: EmailMark | None = None
+) -> Email:
     days = "a day" if expires_in_days == 1 else f"{expires_in_days} days"
     safe_name = escape(name)
     safe_clinic = escape(clinic)
@@ -594,11 +654,14 @@ def invitation(*, to: str, name: str, clinic: str, url: str, expires_in_days: in
                 "to until someone sets a password, so nothing happens if you do nothing."
             )
         ),
+        mark=mark,
     )
-    return Email(to=to, subject=f"Set up your {clinic} account", text=text, html=html)
+    return Email(to=to, subject=f"Set up your {clinic} account", text=text, html=html, mark=mark)
 
 
-def password_reset(*, to: str, name: str, clinic: str, url: str, expires_in_hours: int) -> Email:
+def password_reset(
+    *, to: str, name: str, clinic: str, url: str, expires_in_hours: int, mark: EmailMark | None = None
+) -> Email:
     hours = "an hour" if expires_in_hours == 1 else f"{expires_in_hours} hours"
     safe_name = escape(name)
     safe_clinic = escape(clinic)
@@ -640,8 +703,9 @@ def password_reset(*, to: str, name: str, clinic: str, url: str, expires_in_hour
                 "administrator at your practice."
             )
         ),
+        mark=mark,
     )
-    return Email(to=to, subject=f"Reset your {clinic} password", text=text, html=html)
+    return Email(to=to, subject=f"Reset your {clinic} password", text=text, html=html, mark=mark)
 
 
 _SUPPORT_ASK = {
@@ -661,6 +725,7 @@ def support_request(
     message: str,
     console_url: str,
     reference: str,
+    mark: EmailMark | None = None,
 ) -> Email:
     """To the support desk, not to a clinic: one clinic asking for something.
 
@@ -699,9 +764,9 @@ def support_request(
         lead=f"{escape(requested_by)} at {escape(clinic)} {escape(line)}",
         action=(console_url, "Open in the console"), body=body,
         recipient=to, reason="because it is the platform's support address",
-        to_the_desk=True,
+        to_the_desk=True, mark=mark,
     )
-    return Email(to=to, subject=subject, text=text, html=html, reply_to=reply_to)
+    return Email(to=to, subject=subject, text=text, html=html, reply_to=reply_to, mark=mark)
 
 
 # --- subscription rent --------------------------------------------------------------
@@ -776,6 +841,7 @@ def rent_notice(
     hold_on,
     reference: str = "",
     url: str,
+    mark: EmailMark | None = None,
 ) -> Email:
     """To a clinic's practice admins: one bill, at one rung of the ladder."""
     tone, eyebrow, heading_t, opening_t, notice_t = _RENT_COPY[stage]
@@ -827,8 +893,9 @@ def rent_notice(
         heading=escape(heading), figure=(amount, _RENT_CAPTION[stage].format(**safe)),
         action=(url, "View the bill") if stage != "paid" else None, body=body,
         recipient=to, reason=f"because you are a practice admin at {escape(clinic)}", tone=tone,
+        mark=mark,
     )
-    return Email(to=to, subject=subject, text=text, html=html)
+    return Email(to=to, subject=subject, text=text, html=html, mark=mark)
 
 
 # --- a clinic's invoice, to its patient -------------------------------------------
@@ -857,6 +924,7 @@ def invoice_to_patient(
     owing: bool,
     pdf: bytes,
     filename: str,
+    mark: EmailMark | None = None,
 ) -> Email:
     """One invoice, from a clinic to the patient it bills, with the PDF attached.
 
@@ -906,9 +974,10 @@ def invoice_to_patient(
         reason=f"because {escape(clinic)} raised an invoice for you",
         # how to reach the clinic is said once, in the card, not again here
         help_html="",
+        mark=mark,
     )
     return Email(
         to=to, subject=subject, text=text, html=html, reply_to=reply_to, from_name=from_name,
         attachments=(Attachment(filename=filename, content_type="application/pdf", data=pdf),),
-        sensitive=True,
+        sensitive=True, mark=mark,
     )

@@ -34,7 +34,7 @@ from app.models.enums import SupportRequestKind, SupportRequestStatus
 from app.models.identity import User
 from app.models.support import SupportRequest
 from app.models.tenancy import Tenant
-from app.services import audit, mailer
+from app.services import audit, mailer, platform_logo
 from app.services import platform as platform_service
 
 log = logging.getLogger("pms.support")
@@ -161,6 +161,7 @@ async def _email_for(session: AsyncSession, row: SupportRequest) -> mailer.Email
         message=row.message,
         console_url=_console_url(row.tenant_id),
         reference=str(row.id),
+        mark=await platform_logo.email_mark(session),
     )
 
 

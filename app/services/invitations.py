@@ -45,7 +45,7 @@ from app.db.session import set_tenant
 from app.models.enums import AccountStatus, AuthTokenPurpose, LinkEmailStatus, SubjectKind
 from app.models.identity import AuthToken, User
 from app.models.tenancy import Tenant
-from app.services import audit, mailer
+from app.services import audit, mailer, platform_logo
 from app.services.platform import Timings, get_timings
 
 log = logging.getLogger("pms.invitations")
@@ -117,7 +117,13 @@ async def issue_for_user(
 
 
 async def send_link(
-    *, user: User, tenant: Tenant, purpose: AuthTokenPurpose, raw_token: str, timings: Timings
+    *,
+    user: User,
+    tenant: Tenant,
+    purpose: AuthTokenPurpose,
+    raw_token: str,
+    timings: Timings,
+    mark: mailer.EmailMark | None = None,
 ) -> None:
     """Email the link. Raises `mailer.MailError` when it does not leave."""
     url = link_for(slug=tenant.slug, purpose=purpose, raw_token=raw_token)
@@ -128,6 +134,7 @@ async def send_link(
             clinic=tenant.name,
             url=url,
             expires_in_days=max(1, timings.invite_token_ttl_seconds // 86400),
+            mark=mark,
         )
     else:
         email = mailer.password_reset(
@@ -136,6 +143,7 @@ async def send_link(
             clinic=tenant.name,
             url=url,
             expires_in_hours=max(1, timings.reset_token_ttl_seconds // 3600),
+            mark=mark,
         )
     await mailer.send(email)
 
@@ -234,9 +242,12 @@ async def deliver(
                 ip=ip,
                 user_agent=user_agent,
             )
+            mark = await platform_logo.email_mark(session)
             outcome = "sent"
             try:
-                await send_link(user=user, tenant=tenant, purpose=purpose, raw_token=raw, timings=timings)
+                await send_link(
+                    user=user, tenant=tenant, purpose=purpose, raw_token=raw, timings=timings, mark=mark
+                )
                 user.link_email_status = LinkEmailStatus.SENT
                 user.link_email_error = ""
             except mailer.MailError as exc:

@@ -526,7 +526,7 @@ Everything is under `/v1`. The full list is at `/docs`; this is the shape of it.
 | **Accounts** (§3.12) | `GET /billing/patients/{id}/account`, `GET /billing/patients/{id}/charges`, `POST /billing/patients/{id}/invoices`, `POST /billing/patients/{id}/payments` |
 | **Realtime** (§3.6) | `WS /ws/queue?access_token=…` |
 | **Analytics** (§3.14) | `GET /analytics/dashboard` |
-| **Platform** (§3.1) | `GET|POST /platform/tenants`, `PATCH /platform/tenants/{id}/status`, `GET /platform/snapshot`, `GET /platform/me`, `GET|PATCH /platform/settings` (incl. `subscription_fee_monthly`), `GET /platform/billing`, `POST /platform/billing/run` |
+| **Platform** (§3.1) | `GET|POST /platform/tenants`, `PATCH /platform/tenants/{id}/status`, `GET /platform/snapshot`, `GET /platform/me`, `GET|PATCH /platform/settings` (incl. `subscription_fee_monthly`), `GET|POST|DELETE /platform/settings/logo` (the logo in every email header and on the subscription bill; built-in until one is uploaded), `GET /platform/billing`, `POST /platform/billing/run` |
 | **Background jobs** (§3.1) 👑 | `GET /platform/jobs`, `GET /platform/jobs/tasks/{id}`, `POST|DELETE /platform/jobs/flower-session`, `GET|POST /platform/jobs/flower/{path}` |
 | **Public** | `GET /v1/public/tenant`, `GET /health`, `GET /health/db` |
 

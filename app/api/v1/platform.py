@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Query, Request, Response, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -56,7 +56,7 @@ from app.schemas.tenancy import (
     TenantPatchIn,
     TenantStatusIn,
 )
-from app.services import audit, invitations
+from app.services import audit, invitations, platform_logo
 from app.services import auth as auth_service
 from app.services import platform as platform_service
 from app.services import rent as rent_service
@@ -448,6 +448,79 @@ async def update_platform_settings_route(
         actor_id=staff.id, actor_label=staff.name, entity="platform_settings",
         entity_id=str(row.id), ip=client_ip(request), user_agent=user_agent(request),
         meta={"changes": changes},
+    )
+    return PlatformSettingsOut.of(row)
+
+
+# --- the platform's own logo -----------------------------------------------------
+#
+# Drawn in every email's header and on the subscription bill. Changing it is a
+# super admin's, like every other setting; seeing it is anyone's in the console,
+# whose own rail draws it. There is no unauthenticated read: an email carries
+# the logo inside itself and a PDF has it drawn in, so nothing outside the
+# console ever needs a URL for it.
+
+
+@router.post("/settings/logo", response_model=PlatformSettingsOut)
+async def set_platform_logo(
+    request: Request,
+    file: UploadFile = File(..., description="A PNG, JPEG or WebP image, up to 2 MB."),
+    staff: PlatformUser = Depends(current_super_admin),
+    session: AsyncSession = Depends(db_session, scope="function"),
+) -> PlatformSettingsOut:
+    """Set (or replace) the platform's logo. A second upload overwrites the
+    first; there is only ever one."""
+    data = await file.read()
+    row = await platform_logo.set_logo(
+        session,
+        filename=file.filename or "logo",
+        content_type=file.content_type or "application/octet-stream",
+        data=data,
+    )
+    await audit.record(
+        session, action="platform_settings.logo_set", actor_kind="platform",
+        actor_id=staff.id, actor_label=staff.name, entity="platform_settings",
+        entity_id=str(row.id), ip=client_ip(request), user_agent=user_agent(request),
+        meta={"filename": row.logo_filename, "bytes": len(data)},
+    )
+    return PlatformSettingsOut.of(row)
+
+
+@router.get("/settings/logo")
+async def get_platform_logo(
+    staff: PlatformUser = Depends(current_platform_user),
+    session: AsyncSession = Depends(db_session, scope="function"),
+) -> Response:
+    """The logo in use — the uploaded one, or the built-in one when there is
+    none. `X-Logo-Source` says which (`custom` or `default`)."""
+    uploaded = await platform_logo.uploaded_logo(session)
+    if uploaded is not None:
+        data, media_type, source = *uploaded, "custom"
+    else:
+        data, media_type, source = (
+            platform_logo.default_logo(), platform_logo.DEFAULT_LOGO_CONTENT_TYPE, "default"
+        )
+        if data is None:
+            raise NotFound("No logo is available.")
+    return Response(
+        content=data,
+        media_type=media_type,
+        headers={"Cache-Control": "private, max-age=300", "X-Logo-Source": source},
+    )
+
+
+@router.delete("/settings/logo", response_model=PlatformSettingsOut)
+async def delete_platform_logo(
+    request: Request,
+    staff: PlatformUser = Depends(current_super_admin),
+    session: AsyncSession = Depends(db_session, scope="function"),
+) -> PlatformSettingsOut:
+    """Back to the built-in logo."""
+    row = await platform_logo.remove_logo(session)
+    await audit.record(
+        session, action="platform_settings.logo_removed", actor_kind="platform",
+        actor_id=staff.id, actor_label=staff.name, entity="platform_settings",
+        entity_id=str(row.id), ip=client_ip(request), user_agent=user_agent(request),
     )
     return PlatformSettingsOut.of(row)
 
