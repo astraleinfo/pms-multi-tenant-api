@@ -52,6 +52,8 @@ os.environ.update(
         # to the hosts above.
         "ERROR_REPORTER": "none",
         "MAIL_PROVIDER": "console",
+        # The platform's own sender, whatever a developer's .env sends from.
+        "MAIL_FROM": "Astrale PMS <no-reply@astrale.health>",
         # The desk address the platform settings row starts with.
         "SUPPORT_EMAIL": "astraleinfo@gmail.com",
         "STORAGE_BACKEND": "database",
