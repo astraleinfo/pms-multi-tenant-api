@@ -76,7 +76,7 @@ class Settings(BaseSettings):
     # link to the log, which is what development wants; "smtp" hands it to a
     # mail server; "ses" sends it through Amazon SES with the AWS settings below.
     mail_provider: Literal["console", "smtp", "ses"] = "console"
-    mail_from: str = "Astrale PMS <no-reply@astrale.health>"
+    mail_from: str = "Astrale <no-reply@astrale.health>"
     smtp_host: str = "localhost"
     smtp_port: int = 587
     smtp_user: str = ""

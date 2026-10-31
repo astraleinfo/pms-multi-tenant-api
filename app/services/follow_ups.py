@@ -243,9 +243,9 @@ def require_bookable(
     not in the past, and inside the clinic's day. The diary does not ask the
     second — it is also where yesterday's walk-in is written up — so it is here.
 
-    "Not in the past" is the diary's own rule, grace included, so a patient who
-    is at the desk can be moved to the slot that has just begun from the call
-    list exactly as from the diary. There is no second, stricter rule for calls.
+    "Not in the past" is the diary's own rule (a start earlier than the current
+    minute is refused), so the call list and the diary agree. There is no
+    second, stricter rule for calls.
     """
     scheduling_service.require_start_not_past(day=day, time=time, today=today, now=now)
     start = _minutes(time)

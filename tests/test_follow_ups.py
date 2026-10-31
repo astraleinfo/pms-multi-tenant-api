@@ -20,7 +20,8 @@ async def _doctors(signed) -> list[dict]:
 
 async def _patient(signed, phone: str = "98450 12345") -> dict:
     """A patient of the test's own, with a name nothing else will match."""
-    name = f"Follow Up {uuid.uuid4().hex[:8]}"
+    # letters only: a digit run in the search can match another row's phone number
+    name = "Follow Up " + "".join(chr(ord("a") + int(c, 16)) for c in uuid.uuid4().hex[:8])
     response = await signed.post(
         "/v1/patients",
         json={"full_name": name, "dob": "1990-02-03", "sex": "female", "phone": phone},
@@ -261,9 +262,9 @@ async def test_a_same_day_move_onto_a_taken_time_is_refused_and_changes_nothing(
 
 
 async def test_a_same_day_move_follows_the_diary_rule_for_a_time_that_has_gone(northgate, monkeypatch):
-    """One rule for the desk and the call list: a start older than the grace is
-    refused, the slot that has just begun is accepted — the same as booking it
-    from the diary."""
+    """One rule for the desk and the call list: a start earlier than the
+    current minute is refused, the current minute is accepted — the same as
+    booking it from the diary."""
     today = await freeze_clinic_clock(monkeypatch, northgate, "08:00")
     doctor = (await _doctors(northgate))[0]
     patient = await _patient(northgate)
@@ -279,12 +280,18 @@ async def test_a_same_day_move_follows_the_diary_rule_for_a_time_that_has_gone(n
     assert row["attempts"] == 0
     assert row["appointment"]["time"] == "16:15"
 
-    # 16:50 is the slot that began ten minutes ago — within the grace
-    just_begun = await _call(
-        northgate, booking, outcome="rescheduled", new_slot={"date": today.isoformat(), "time": "16:50"},
+    # 16:55 began five minutes ago: refused, no grace
+    five_ago = await _call(
+        northgate, booking, outcome="rescheduled", new_slot={"date": today.isoformat(), "time": "16:55"},
     )
-    assert just_begun.status_code == 201, just_begun.text
-    assert just_begun.json()["appointment"]["time"] == "16:50"
+    assert five_ago.status_code == 422, five_ago.text
+
+    # 17:00 is the current minute: accepted
+    now_slot = await _call(
+        northgate, booking, outcome="rescheduled", new_slot={"date": today.isoformat(), "time": "17:00"},
+    )
+    assert now_slot.status_code == 201, now_slot.text
+    assert now_slot.json()["appointment"]["time"] == "17:00"
 
 
 async def test_a_booking_that_is_no_longer_open_cannot_be_moved_from_the_call_list(northgate, monkeypatch):

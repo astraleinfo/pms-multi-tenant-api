@@ -179,13 +179,6 @@ async def hold_diary(
     )
 
 
-#: How far past its start a slot can still be booked. The desk books the
-#: patient standing in front of them ("book now") at the slot that has just
-#: begun, and a start that is a few minutes old is that, not a plan for the
-#: past. Anything older is refused.
-PAST_START_GRACE_MIN = 15
-
-
 def require_start_not_past(*, day: date, time: str, today: date, now: str) -> None:
     """A booking's start must not already be behind the clinic's clock.
 
@@ -193,7 +186,8 @@ def require_start_not_past(*, day: date, time: str, today: date, now: str) -> No
     09:00 is in the past once the clinic's clock reads 22:00, whatever hour it
     is where the server runs. Appointments store the day and the time
     separately, so a later day is always fine and the clock only matters on
-    today.
+    today. There is no grace: a start earlier than the current minute is
+    refused, the current minute and later are accepted.
 
     Called wherever a start is chosen — a new booking, a move — and never for
     an edit that leaves the start alone, so a past appointment can still be
@@ -201,7 +195,7 @@ def require_start_not_past(*, day: date, time: str, today: date, now: str) -> No
     """
     if day < today:
         raise ValidationFailed("Appointments cannot be booked for a past date.")
-    if day == today and _minutes(time) < _minutes(now) - PAST_START_GRACE_MIN:
+    if day == today and _minutes(time) < _minutes(now):
         raise ValidationFailed(
             f"{time} has already passed today. Choose the current time or a later one."
         )

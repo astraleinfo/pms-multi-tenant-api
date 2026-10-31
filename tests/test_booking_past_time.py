@@ -13,7 +13,7 @@ from itertools import count
 import pytest
 
 from app.core.errors import ValidationFailed
-from app.services.scheduling import PAST_START_GRACE_MIN, require_start_not_past
+from app.services.scheduling import require_start_not_past
 from tests.conftest import freeze_clinic_clock
 
 _phones = count(9770091000)
@@ -62,12 +62,14 @@ def test_the_check_only_looks_at_the_clock_on_today():
         require_start_not_past(day=today, time="09:00", today=today, now="22:00")
 
 
-def test_a_start_a_few_minutes_old_is_the_slot_just_begun():
+def test_there_is_no_grace_a_start_one_minute_old_is_refused():
     today = date(2026, 10, 30)
-    edge = f"{(22 * 60 - PAST_START_GRACE_MIN) // 60:02d}:{(22 * 60 - PAST_START_GRACE_MIN) % 60:02d}"
-    require_start_not_past(day=today, time=edge, today=today, now="22:00")
+    require_start_not_past(day=today, time="17:45", today=today, now="17:44")
+    require_start_not_past(day=today, time="17:44", today=today, now="17:44")
+    with pytest.raises(ValidationFailed, match="17:30 has already passed"):
+        require_start_not_past(day=today, time="17:30", today=today, now="17:44")
     with pytest.raises(ValidationFailed):
-        require_start_not_past(day=today, time="21:44", today=today, now="22:00")
+        require_start_not_past(day=today, time="21:59", today=today, now="22:00")
 
 
 # --- over the API -------------------------------------------------------------
@@ -89,14 +91,13 @@ async def test_a_later_time_today_is_accepted(northgate, monkeypatch):
 
 
 async def test_booking_for_now_still_works(northgate, monkeypatch):
-    """The walk-in-at-the-desk case: the current time, and a start a few
-    minutes old (the slot that has just begun), are both accepted."""
+    """The current minute is bookable; the minute before it is not."""
     today = await freeze_clinic_clock(monkeypatch, northgate, "22:10")
 
     now = await _book(northgate, today, "22:10")
     assert now.status_code == 201, now.text
-    just_begun = await _book(northgate, today, "22:00")
-    assert just_begun.status_code == 201, just_begun.text
+    a_minute_ago = await _book(northgate, today, "22:09")
+    assert a_minute_ago.status_code == 422, a_minute_ago.text
     an_hour_ago = await _book(northgate, today, "21:00")
     assert an_hour_ago.status_code == 422
 
