@@ -84,7 +84,7 @@ async def _pdf(session: AsyncSession, bill, tenant: Tenant, timings: Timings) ->
     content = build_subscription_invoice_pdf(
         bill, clinic=tenant.name, hold_on=rent_service.hold_date(bill, timings),
         clinic_logo=await tenant_service.logo_for(session, tenant.id),
-        platform_logo=await platform_logo.logo_bytes(session),
+        platform_logo=await platform_logo.bill_logo(session),
     )
     safe = "".join(ch for ch in bill.number if ch.isalnum() or ch in "-_") or "bill"
     return Response(

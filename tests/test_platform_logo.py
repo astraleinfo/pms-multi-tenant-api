@@ -8,6 +8,7 @@ default, and a fake S3 bucket when a test switches the backend.
 from __future__ import annotations
 
 import io
+import json
 from datetime import date
 from types import SimpleNamespace
 
@@ -49,6 +50,7 @@ async def _no_lingering_logo(client):
     await _clear_logo()
     await storage.drain()
     platform_logo.prepare_email_mark.cache_clear()
+    platform_logo.prepare_bill_logo.cache_clear()
 
 
 async def _clear_logo() -> None:
@@ -156,6 +158,80 @@ async def test_a_logo_over_the_size_limit_is_refused(console):
     oversized = b"\x89PNG\r\n\x1a\n" + b"\x00" * MAX_LOGO_BYTES
     refused = await console.post(URL, files={"file": ("big.png", oversized, "image/png")})
     assert refused.status_code == 422
+
+
+def _bilevel_png(width: int, height: int) -> bytes:
+    """A large but cheap PNG: one bit a pixel (a 12000-pixel square is 18 MB
+    to hold here, and a few KB on the wire), so the test never allocates what
+    decoding it as a logo would."""
+    out = io.BytesIO()
+    Image.new("1", (width, height), 1).save(out, format="PNG")
+    return out.getvalue()
+
+
+@pytest.mark.parametrize("size", [(12000, 12000), (4001, 10), (10, 4001)])
+async def test_a_logo_wider_or_taller_than_the_limit_is_refused_before_it_decodes(console, size):
+    data = _bilevel_png(*size)
+    assert len(data) < 200_000, "within the byte limit — only its pixels are too many"
+
+    refused = await console.post(URL, files={"file": ("huge.png", data, "image/png")})
+    assert refused.status_code == 422, refused.text
+    message = json.dumps(refused.json(), ensure_ascii=False)
+    assert f"{platform_logo.MAX_LOGO_SIDE} × {platform_logo.MAX_LOGO_SIDE}" in message
+    assert f"{size[0]} × {size[1]}" in message
+    assert (await console.get("/v1/platform/settings")).json()["has_logo"] is False
+
+
+async def test_a_logo_exactly_at_the_limit_is_accepted(console):
+    side = platform_logo.MAX_LOGO_SIDE
+    uploaded = await console.post(URL, files={"file": ("edge.png", _bilevel_png(side, side), "image/png")})
+    assert uploaded.status_code == 200, uploaded.text
+    assert uploaded.json()["has_logo"] is True
+
+
+async def test_a_decompression_bomb_is_a_refusal_not_a_crash(console, monkeypatch):
+    """Pillow's own pixel guard, tripped by lowering it: both its warning and
+    its error must come back as a 422 with nothing stored."""
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 1_000)
+    for side in (40, 100):  # 1 600 px warns; 10 000 px (> twice the limit) raises
+        refused = await console.post(URL, files={"file": ("bomb.png", _png(side, side), "image/png")})
+        assert refused.status_code == 422, refused.text
+        assert "too large" in refused.text
+    assert (await console.get("/v1/platform/settings")).json()["has_logo"] is False
+
+
+async def test_a_stored_logo_over_the_limit_is_never_decoded_for_a_document():
+    """Written some way other than the upload route: emails and bills skip it
+    for the built-in logo rather than decode a giant bitmap."""
+    async with tenant_session(None) as session:
+        row = await session.get(PlatformSettings, PLATFORM_SETTINGS_ID)
+        row.logo_filename, row.logo_content_type = "huge.png", "image/png"
+        row.logo_data = _bilevel_png(12000, 12000)
+    assert platform_logo.prepare_email_mark(_bilevel_png(12000, 12000)) is None
+    assert platform_logo.prepare_bill_logo(_bilevel_png(12000, 12000)) is None
+    async with tenant_session(None) as session:
+        assert await platform_logo.email_mark(session) == platform_logo.prepare_email_mark(
+            platform_logo.default_logo()
+        )
+        assert await platform_logo.bill_logo(session) == platform_logo.prepare_bill_logo(
+            platform_logo.default_logo()
+        )
+
+
+def test_the_bill_prints_a_shrunk_copy_of_the_logo():
+    shrunk = platform_logo.prepare_bill_logo(platform_logo.default_logo())
+    with Image.open(io.BytesIO(shrunk)) as image:
+        assert max(image.size) == platform_logo.BILL_LOGO_SIDE
+        assert image.mode == "RGBA", "the transparency the band shows through is kept"
+    assert len(shrunk) < 60_000
+    with Image.open(io.BytesIO(platform_logo.prepare_bill_logo(SQUARE_PNG))) as small:
+        assert small.size == (120, 120), "never enlarged"
+
+    pdf = build_subscription_invoice_pdf(
+        _bill(), clinic="Northgate", hold_on=date(2026, 10, 16), platform_logo=shrunk
+    )
+    assert _images(pdf) == 1
+    assert len(pdf) < 120_000, "not the 160 KB built-in file embedded as it is"
 
 
 async def test_jpeg_and_webp_are_stored_as_what_the_bytes_say(console):

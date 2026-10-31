@@ -18,6 +18,8 @@ from __future__ import annotations
 import functools
 import io
 import logging
+import warnings
+from contextlib import contextmanager
 from pathlib import Path
 
 from sqlalchemy import select
@@ -62,15 +64,61 @@ def sniff(data: bytes) -> str | None:
     return None
 
 
-def _decodes(data: bytes) -> bool:
+#: The longest side an uploaded logo may have, in pixels. Far more than a
+#: header or a bill needs; small enough that decoding one costs megabytes,
+#: not the hundreds a 12000-pixel square would in every worker that draws it.
+MAX_LOGO_SIDE = 4000
+
+_NOT_AN_IMAGE = "A logo has to be a PNG, JPEG or WebP image."
+
+
+@contextmanager
+def _bombs_refused():
+    """Pillow only warns about an image above its pixel limit (and refuses one
+    above twice it); here both are a refusal, never a decode."""
     from PIL import Image
 
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", Image.DecompressionBombWarning)
+        yield
+
+
+def _check_image(data: bytes) -> None:
+    """Refuse bytes that are not a usable logo — read the size from the header
+    first, so an enormous image is turned away before anything decodes it,
+    then verify the file. Raises `ValidationFailed` with a reason to show."""
+    from PIL import Image
+
+    too_large = ValidationFailed(
+        f"That image is too large to use as a logo. Logos are limited to "
+        f"{MAX_LOGO_SIDE} × {MAX_LOGO_SIDE} pixels.",
+        details={"limit_px": MAX_LOGO_SIDE},
+    )
     try:
-        with Image.open(io.BytesIO(data)) as image:
+        # Opening reads only the header. Pillow's own "this is big" warning
+        # is let through here so the size can be named in the refusal below;
+        # past twice its limit it raises instead, and that is a refusal too.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", Image.DecompressionBombWarning)
+            image = Image.open(io.BytesIO(data))
+        with image:
+            width, height = image.size
+            if width > MAX_LOGO_SIDE or height > MAX_LOGO_SIDE:
+                raise ValidationFailed(
+                    f"Logos are limited to {MAX_LOGO_SIDE} × {MAX_LOGO_SIDE} pixels; "
+                    f"this one is {width} × {height}.",
+                    details={"width": width, "height": height, "limit_px": MAX_LOGO_SIDE},
+                )
+            # within our sides but over a deployment's lowered Pillow limit
+            if Image.MAX_IMAGE_PIXELS and width * height > Image.MAX_IMAGE_PIXELS:
+                raise too_large
             image.verify()
-        return True
-    except Exception:  # noqa: BLE001 - any decoder complaint means "not a usable image"
-        return False
+    except ValidationFailed:
+        raise
+    except (Image.DecompressionBombWarning, Image.DecompressionBombError) as exc:
+        raise too_large from exc
+    except Exception as exc:  # noqa: BLE001 - any decoder complaint means "not a usable image"
+        raise ValidationFailed(_NOT_AN_IMAGE) from exc
 
 
 async def _row(session: AsyncSession) -> PlatformSettings:
@@ -111,10 +159,9 @@ async def set_logo(
         )
     declared = (content_type or "").split(";")[0].strip().lower()
     kind = sniff(data)
-    if declared not in ALLOWED_LOGO_CONTENT_TYPES or kind is None or not _decodes(data):
-        raise ValidationFailed(
-            "A logo has to be a PNG, JPEG or WebP image.", details={"content_type": declared}
-        )
+    if declared not in ALLOWED_LOGO_CONTENT_TYPES or kind is None:
+        raise ValidationFailed(_NOT_AN_IMAGE, details={"content_type": declared})
+    _check_image(data)
 
     row = await _row(session)
     old_key = row.logo_storage_key
@@ -174,6 +221,58 @@ async def logo_bytes(session: AsyncSession) -> bytes | None:
     return uploaded[0] if uploaded else default_logo()
 
 
+def _drawable(width: int, height: int) -> bool:
+    """Whether a stored logo is one this process will decode: uploads are
+    checked, but a row written some other way must not get a free pass to
+    allocate an enormous bitmap — it is skipped, and the built-in logo used."""
+    if width and height and width <= MAX_LOGO_SIDE and height <= MAX_LOGO_SIDE:
+        return True
+    log.warning("the platform logo is %s × %s; not drawing it", width, height)
+    return False
+
+
+# --- for the subscription bill --------------------------------------------------------
+
+#: The longest side of the copy printed on the bill: the band draws the logo at
+#: most 55 mm wide, so this is ~240 dpi there — sharp, and a few KB rather
+#: than the 160 KB built-in file embedded as it is.
+BILL_LOGO_SIDE = 512
+
+
+@functools.lru_cache(maxsize=8)
+def prepare_bill_logo(data: bytes) -> bytes | None:
+    """A logo shrunk for the bill — a PNG no longer than `BILL_LOGO_SIDE` on
+    its long side, alpha kept, never enlarged. `None` when it will not decode."""
+    from PIL import Image
+
+    try:
+        with _bombs_refused(), Image.open(io.BytesIO(data)) as image:
+            if not _drawable(*image.size):
+                return None
+            image.load()
+            copy = image.convert("RGBA")
+            copy.thumbnail((BILL_LOGO_SIDE, BILL_LOGO_SIDE), Image.Resampling.LANCZOS)
+            out = io.BytesIO()
+            copy.save(out, format="PNG", optimize=True)
+    except Exception:  # noqa: BLE001 - the bill still prints, with the wordmark
+        log.exception("could not prepare the platform logo for the bill")
+        return None
+    return out.getvalue()
+
+
+async def bill_logo(session: AsyncSession) -> bytes | None:
+    """The logo for the subscription bill: the uploaded one, else the built-in
+    one — the built-in one too when the upload will not decode — shrunk to
+    print size. `None` only when neither can be drawn (the bill then prints
+    the wordmark)."""
+    data = await logo_bytes(session)
+    shrunk = prepare_bill_logo(data) if data else None
+    if shrunk is None and data is not None and data is not default_logo():
+        builtin = default_logo()
+        shrunk = prepare_bill_logo(builtin) if builtin else None
+    return shrunk
+
+
 # --- for an email's header ------------------------------------------------------------
 
 #: The box the header draws a logo in, in CSS pixels: a lockup (wider than
@@ -193,11 +292,11 @@ def prepare_email_mark(data: bytes) -> EmailMark | None:
     from PIL import Image
 
     try:
-        with Image.open(io.BytesIO(data)) as image:
-            image.load()
+        with _bombs_refused(), Image.open(io.BytesIO(data)) as image:
             width, height = image.size
-            if not width or not height:
+            if not _drawable(width, height):
                 return None
+            image.load()
             wide = width / height >= 2
             box_w, box_h = _WIDE_BOX if wide else _SQUARE_BOX
             scale = min(box_w / width, box_h / height)
